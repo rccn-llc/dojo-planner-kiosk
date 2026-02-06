@@ -1,0 +1,3 @@
+[submodule "shared/dojo-planner"]
+	path = shared/dojo-planner
+	url = https://github.com/aguilanegra/dojo-planner.git

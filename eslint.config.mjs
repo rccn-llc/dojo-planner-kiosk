@@ -1,18 +1,69 @@
-import { defineConfig, globalIgnores } from "eslint/config";
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTs from "eslint-config-next/typescript";
+import antfu from '@antfu/eslint-config'
+import jsxA11y from 'eslint-plugin-jsx-a11y'
+import tailwind from 'eslint-plugin-tailwindcss'
 
-const eslintConfig = defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  // Override default ignores of eslint-config-next.
-  globalIgnores([
-    // Default ignores of eslint-config-next:
-    ".next/**",
-    "out/**",
-    "build/**",
-    "next-env.d.ts",
-  ]),
-]);
+export default antfu(
+  {
+    react: true,
+    nextjs: true,
+    typescript: true,
 
-export default eslintConfig;
+    // Configuration preferences
+    lessOpinionated: true,
+    isInEditor: false,
+
+    // Code style
+    stylistic: {
+      semi: true,
+    },
+
+    // Format settings
+    formatters: {
+      css: true,
+    },
+
+    // Ignored paths
+    ignores: [
+      '.next/**',
+      'out/**',
+      'build/**',
+      'next-env.d.ts',
+      'shared/**',
+    ],
+  },
+  // --- Accessibility Rules ---
+  jsxA11y.flatConfigs.recommended,
+  // --- Tailwind CSS Rules (manual configuration for v4 compatibility) ---
+  {
+    plugins: {
+      tailwindcss: tailwind,
+    },
+    rules: {
+      'tailwindcss/classnames-order': 'warn',
+      'tailwindcss/enforces-negative-arbitrary-values': 'warn',
+      'tailwindcss/enforces-shorthand': 'warn',
+      'tailwindcss/migration-from-tailwind-2': 'warn',
+      'tailwindcss/no-arbitrary-value': 'off',
+      'tailwindcss/no-contradicting-classname': 'error',
+      'tailwindcss/no-custom-classname': 'off', // Allow custom classes for kiosk
+      'tailwindcss/no-unnecessary-arbitrary-value': 'warn',
+    },
+    settings: {
+      tailwindcss: {
+        // Disable config loading for v4 compatibility
+        config: false,
+        callees: ['clsx', 'cn', 'tw'],
+        classRegex: '^class(Name)?$',
+      },
+    },
+  },
+  {
+    rules: {
+      // Kiosk-specific rule adjustments
+      '@typescript-eslint/prefer-nullish-coalescing': 'off',
+      'react/prefer-destructuring-assignment': 'off',
+      // Temporary workarounds for strict TypeScript
+      '@typescript-eslint/no-unused-vars': 'warn',
+    },
+  },
+)
