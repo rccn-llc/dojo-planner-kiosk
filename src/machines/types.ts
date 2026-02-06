@@ -7,6 +7,10 @@ export interface CheckinContext {
   member: Member | null;
   sessionId: string;
   errors: Record<string, string>;
+  upgradeFirstName?: string;
+  upgradeLastName?: string;
+  upgradeEmail?: string;
+  upgradePhoneNumber?: string;
 }
 
 // Trial signup machine context
@@ -53,7 +57,8 @@ export interface MembershipContext {
 // Event types
 export type CheckinEvent
   = | { type: 'ENTER_PHONE'; phoneNumber: string }
-    | { type: 'INVALID_PHONE' }
+    | { type: 'TRY_AGAIN' }
+    | { type: 'RESET' } | { type: 'GO_TO_TRIAL' } | { type: 'INVALID_PHONE' }
     | { type: 'CONFIRM_CHECKIN' }
     | { type: 'CONTINUE_TO_UPGRADE' }
     | { type: 'SELECT_PROGRAM'; program: Program }

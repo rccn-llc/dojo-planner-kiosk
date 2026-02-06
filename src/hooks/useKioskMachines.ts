@@ -24,8 +24,8 @@ export function useMemberAreaMachine() {
   return useMachine(memberAreaMachine);
 }
 
-// Hook for managing session timeouts across all machines
-export function useSessionTimeout(machine: any) {
+// Function for managing session timeouts across all machines
+export function createSessionTimeout(_machine: any) {
   // TODO: Implement global session timeout management
   // This would monitor inactivity and send TIMEOUT events
   return {
