@@ -1,233 +1,263 @@
-import type { MembershipPlan } from '../shared/types';
+import type { MembershipPlan, Program } from '../shared/types';
 import type { MembershipContext, MembershipEvent } from './types';
 import { assign, createMachine } from 'xstate';
 import { KioskAuditService } from '../services/audit';
 import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../shared/utils';
 
-// Validation function
+// ── Hardcoded data ────────────────────────────────────────────────────────────
+
+const PROGRAMS: Program[] = [
+  {
+    id: 'adult-bjj',
+    name: 'Adult Brazilian Jiu Jitsu',
+    description: 'Fundamentals through advanced techniques for all levels',
+    price: 0,
+    isActive: true,
+  },
+  {
+    id: 'kids',
+    name: 'Kids Program',
+    description: 'Ages 4–12, discipline and character development through martial arts',
+    price: 0,
+    isActive: true,
+  },
+  {
+    id: 'competition',
+    name: 'Competition Team',
+    description: 'Advanced training for tournament competitors',
+    price: 0,
+    isActive: true,
+  },
+  {
+    id: 'judo',
+    name: 'Judo Fundamentals',
+    description: 'Traditional Judo throws, sweeps, and groundwork',
+    price: 0,
+    isActive: true,
+  },
+];
+
+const PLANS_BY_PROGRAM: Record<string, MembershipPlan[]> = {
+  'adult-bjj': [
+    { id: 'abjj-1mo', name: '1 Month Enrollment', description: 'Month-to-month flexibility\n• Unlimited classes\n• Open mat access\n• No contract', price: 150, interval: 'monthly', isActive: true },
+    { id: 'abjj-mth', name: 'Month-to-Month', description: 'Ongoing monthly membership\n• Unlimited classes\n• Open mat access\n• Cancel anytime', price: 170, interval: 'monthly', isActive: true },
+    { id: 'abjj-6mo', name: '6 Month Enrollment', description: '6-month commitment, save 10%\n• Unlimited classes\n• Open mat access\n• Priority enrollment', price: 810, interval: 'yearly', isActive: true },
+    { id: 'abjj-annual-fam', name: 'Annual Family', description: '12-month family plan\n• Up to 4 members\n• Unlimited classes\n• Best value', price: 1530, interval: 'yearly', isActive: true },
+  ],
+  'kids': [
+    { id: 'kids-1mo', name: '1 Month Enrollment', description: 'Month-to-month\n• 2 classes/week\n• Character development\n• No contract', price: 110, interval: 'monthly', isActive: true },
+    { id: 'kids-6mo', name: '6 Month Enrollment', description: '6-month commitment\n• 2 classes/week\n• Progress tracking\n• Belt testing included', price: 600, interval: 'yearly', isActive: true },
+    { id: 'kids-annual', name: '12 Month Enrollment', description: 'Best value\n• 2 classes/week\n• Belt testing included\n• Gi included', price: 1080, interval: 'yearly', isActive: true },
+  ],
+  'competition': [
+    { id: 'comp-1mo', name: '1 Month Enrollment', description: 'Monthly access\n• Competition training\n• Live drills\n• Film review', price: 200, interval: 'monthly', isActive: true },
+    { id: 'comp-annual', name: '12 Month Enrollment', description: '12-month commitment\n• Full competition training\n• Tournament coaching\n• Best value', price: 2000, interval: 'yearly', isActive: true },
+  ],
+  'judo': [
+    { id: 'judo-1mo', name: '1 Month Enrollment', description: 'Month-to-month\n• Unlimited classes\n• Traditional Judo\n• No contract', price: 120, interval: 'monthly', isActive: true },
+    { id: 'judo-annual', name: '12 Month Enrollment', description: '12-month commitment\n• Unlimited classes\n• Belt testing included\n• Best value', price: 1200, interval: 'yearly', isActive: true },
+  ],
+};
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
 function validateContactInfo(context: MembershipContext): Record<string, string> {
   const errors: Record<string, string> = {};
-
   if (!context.firstName?.trim()) {
     errors.firstName = 'First name is required';
   }
-
   if (!context.lastName?.trim()) {
     errors.lastName = 'Last name is required';
   }
-
   if (!context.email?.trim()) {
     errors.email = 'Email is required';
   }
   else if (!isValidEmail(context.email)) {
     errors.email = 'Please enter a valid email';
   }
-
   if (!context.phoneNumber?.trim()) {
     errors.phoneNumber = 'Phone number is required';
   }
   else if (!isValidPhoneNumber(context.phoneNumber)) {
     errors.phoneNumber = 'Please enter a valid 10-digit phone number';
   }
-
+  if (!context.address?.trim()) {
+    errors.address = 'Address is required';
+  }
+  if (!context.city?.trim()) {
+    errors.city = 'City is required';
+  }
+  if (!context.state?.trim()) {
+    errors.state = 'State is required';
+  }
+  if (!context.zip?.trim()) {
+    errors.zip = 'ZIP code is required';
+  }
   return errors;
 }
 
-// Guards
-export const membershipGuards = {
-  isContactInfoValid: ({ context }: { context: MembershipContext }) => {
-    const errors = validateContactInfo(context);
-    return Object.keys(errors).length === 0;
-  },
+// ── Empty context ─────────────────────────────────────────────────────────────
 
-  isPlanSelected: ({ context }: { context: MembershipContext }) => {
-    return !!context.selectedPlan;
-  },
+const emptyContext: MembershipContext = {
+  selectedProgram: null,
+  programs: PROGRAMS,
+  selectedPlan: null,
+  availablePlans: [],
+  firstName: '',
+  lastName: '',
+  email: '',
+  phoneNumber: '',
+  address: '',
+  addressLine2: '',
+  city: '',
+  state: '',
+  zip: '',
+  hasAgreedToCommitment: false,
+  memberLookupPhone: '',
+  memberLookupResult: null,
+  errors: {} as Record<string, string>,
+  isSubmitting: false,
+  sessionId: '',
 };
 
-// Actions
+// ── Guards ────────────────────────────────────────────────────────────────────
+
+export const membershipGuards = {
+  isContactInfoValid: ({ context }: { context: MembershipContext }) =>
+    Object.keys(validateContactInfo(context)).length === 0,
+
+  isPlanSelected: ({ context }: { context: MembershipContext }) =>
+    !!context.selectedPlan,
+
+  hasAgreedToCommitment: ({ context }: { context: MembershipContext }) =>
+    !!context.hasAgreedToCommitment,
+};
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+
 export const membershipActions = {
   auditMembershipCreation: ({ context }: { context: MembershipContext }) => {
-    if (context.selectedPlan && context.email && context.subscriptionId) {
+    if (context.selectedPlan && context.email) {
       const audit = KioskAuditService.getInstance();
       audit.logMembershipSignup(
-        {
-          id: `member_${Date.now()}`,
-          email: context.email,
-          firstName: context.firstName,
-          lastName: context.lastName,
-        },
-        {
-          planId: context.selectedPlan.id,
-          amount: context.selectedPlan.price,
-          subscriptionId: context.subscriptionId,
-        },
-        {
-          sessionId: context.sessionId,
-          phoneNumber: context.phoneNumber,
-        },
+        { id: `member_${Date.now()}`, email: context.email, firstName: context.firstName, lastName: context.lastName },
+        { planId: context.selectedPlan.id, amount: context.selectedPlan.price, subscriptionId: `sub_${Date.now()}` },
+        { sessionId: context.sessionId, phoneNumber: context.phoneNumber },
       );
     }
   },
 
   auditTimeout: ({ context }: { context: MembershipContext }) => {
-    const audit = KioskAuditService.getInstance();
-    audit.logSession('timeout', {
+    KioskAuditService.getInstance().logSession('timeout', {
       sessionId: context.sessionId,
       phoneNumber: context.phoneNumber,
     });
   },
 };
 
-// Services
-export const membershipServices = {
-  loadPlans: async () => {
-    // TODO: Load plans from API
-    return [
-      {
-        id: '1',
-        name: 'Monthly Membership',
-        description: 'Unlimited classes, monthly billing',
-        price: 149,
-        interval: 'monthly' as const,
-        trialPeriodDays: 7,
-        isActive: true,
-      },
-      {
-        id: '2',
-        name: 'Annual Membership',
-        description: 'Unlimited classes, save 20%',
-        price: 1429, // ~$119/month
-        interval: 'yearly' as const,
-        trialPeriodDays: 14,
-        isActive: true,
-      },
-    ];
-  },
+// ── Machine ───────────────────────────────────────────────────────────────────
 
-  processPayment: async ({ context }: { context: MembershipContext }) => {
-    // TODO: Process payment via Stripe
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    if (!context.selectedPlan) {
-      throw new Error('No plan selected');
-    }
-
-    return {
-      customerId: `cus_${Date.now()}`,
-      paymentMethodId: `pm_${Date.now()}`,
-    };
-  },
-
-  createMembership: async ({ context }: { context: MembershipContext }) => {
-    // TODO: Create membership and subscription via API
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    if (!context.selectedPlan || !context.customerId) {
-      throw new Error('Missing required information');
-    }
-
-    return {
-      id: `member_${Date.now()}`,
-      subscriptionId: `sub_${Date.now()}`,
-      status: 'active',
-    };
-  },
-};
-
-// Membership signup state machine
 export const membershipMachine = createMachine({
   id: 'membership',
-  types: {} as {
-    context: MembershipContext;
-    events: MembershipEvent;
-  },
+  types: {} as { context: MembershipContext; events: MembershipEvent },
 
-  context: {
-    // Contact info
-    firstName: '',
-    lastName: '',
-    email: '',
-    phoneNumber: '',
+  context: { ...emptyContext },
 
-    // Membership selection
-    selectedPlan: null,
-    availablePlans: [] as MembershipPlan[],
-
-    // Payment info
-    paymentMethodId: '',
-    customerId: '',
-    subscriptionId: '',
-
-    // Form validation and state
-    errors: {} as Record<string, string>,
-    isSubmitting: false,
-    sessionId: '',
-  },
-
-  initial: 'idle',
+  initial: 'selectingProgram',
 
   states: {
-    idle: {
-      entry: assign({
-        sessionId: () => generateSessionId(),
-        errors: {} as Record<string, string>,
-        isSubmitting: false,
-      }),
+    // ── Step 1: Program selection ─────────────────────────────────────────────
+    selectingProgram: {
+      entry: assign({ ...emptyContext, sessionId: () => generateSessionId() }),
 
       on: {
-        UPDATE_FIELD: {
-          target: 'collectingInfo',
-          actions: assign({
-          }),
+        SELECT_PROGRAM: {
+          target: 'selectingPlan',
+          actions: assign(({ event }) => ({
+            selectedProgram: event.program,
+            availablePlans: PLANS_BY_PROGRAM[event.program.id] ?? [],
+            selectedPlan: null,
+          })),
         },
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
       },
     },
 
+    // ── Step 2: Plan selection ────────────────────────────────────────────────
+    selectingPlan: {
+      on: {
+        SELECT_PLAN: {
+          actions: assign({ selectedPlan: ({ event }) => event.plan }),
+        },
+        SUBMIT_PAYMENT: {
+          target: 'reviewingCommitment',
+          guard: 'isPlanSelected',
+        },
+        BACK: 'selectingProgram',
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
+      },
+    },
+
+    // ── Step 3: Commitment / waiver ───────────────────────────────────────────
+    reviewingCommitment: {
+      entry: assign({ hasAgreedToCommitment: false }),
+
+      on: {
+        UPDATE_FIELD: {
+          actions: assign(({ event, context }) => ({
+            ...context,
+            [event.field]: event.value,
+          })),
+        },
+        SUBMIT_COMMITMENT: {
+          target: 'collectingInfo',
+          guard: 'hasAgreedToCommitment',
+        },
+        BACK: 'selectingPlan',
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
+      },
+    },
+
+    // ── Step 4: Member info form ──────────────────────────────────────────────
     collectingInfo: {
-      entry: assign({
-        availablePlans: [
-          { id: 'basic', name: 'Basic Plan', price: 99, description: 'Basic membership', interval: 'monthly' as const, isActive: true },
-          { id: 'premium', name: 'Premium Plan', price: 149, description: 'Premium membership', interval: 'monthly' as const, isActive: true },
-          { id: 'family', name: 'Family Plan', price: 199, description: 'Family membership', interval: 'monthly' as const, isActive: true },
-        ],
-      }),
+      entry: assign({ isSubmitting: false, errors: {} as Record<string, string> }),
 
       on: {
         UPDATE_FIELD: {
           actions: assign(({ event, context }) => {
             const { field, value } = event;
             const newErrors = { ...context.errors };
-            delete newErrors[field];
-            return {
-              ...context,
-              [field]: value,
-              errors: newErrors,
-            };
+            delete newErrors[field as string];
+            return { ...context, [field]: value, errors: newErrors };
           }),
         },
-
-        SUBMIT_CONTACT: {
-          target: 'validatingContact',
-          actions: assign({
-          }),
-        },
-
+        LOOKUP_MEMBER: 'lookingUpMember',
+        SUBMIT_CONTACT: 'validatingContact',
+        BACK: 'reviewingCommitment',
         TIMEOUT: 'timeout',
-        RESET: 'idle',
+        RESET: 'selectingProgram',
+      },
+    },
+
+    lookingUpMember: {
+      entry: assign({ isSubmitting: true }),
+      after: {
+        // Mock: always returns no match after 1 second
+        1000: {
+          target: 'collectingInfo',
+          actions: assign({ isSubmitting: false }),
+        },
       },
     },
 
     validatingContact: {
-      entry: assign({
-        isSubmitting: true,
-      }),
+      entry: assign({ isSubmitting: true }),
 
       always: [
-        {
-          target: 'selectingPlan',
-          guard: 'isContactInfoValid',
-        },
+        { target: 'processingPayment', guard: 'isContactInfoValid' },
         {
           target: 'collectingInfo',
           actions: assign(({ context }) => ({
@@ -238,127 +268,57 @@ export const membershipMachine = createMachine({
       ],
     },
 
-    selectingPlan: {
-      entry: assign({
-        isSubmitting: false,
-        errors: {} as Record<string, string>,
-      }),
-
-      on: {
-        SELECT_PLAN: {
-          actions: assign({
-            selectedPlan: ({ event }) => event.plan,
-          }),
-        },
-
-        SUBMIT_PAYMENT: {
-          target: 'processingPayment',
-          guard: 'isPlanSelected',
-          actions: assign({
-          }),
-        },
-
-        TIMEOUT: 'timeout',
-        RESET: 'idle',
-      },
-    },
-
+    // ── Processing ────────────────────────────────────────────────────────────
     processingPayment: {
-      entry: assign({
-      }),
-
       after: {
-        3000: {
-          target: 'creatingMembership',
-          actions: assign({
-            customerId: 'mock_customer_123',
-            paymentMethodId: 'mock_payment_123',
-          }),
-        },
+        3000: 'creatingMembership',
       },
-
       on: {
         PAYMENT_FAILED: {
           target: 'paymentFailed',
-          actions: assign({
-            errors: { general: 'Payment failed' } as Record<string, string>,
-          }),
+          actions: assign({ errors: { general: 'Payment failed. Please try again.' } as Record<string, string> }),
         },
         TIMEOUT: 'timeout',
       },
     },
 
     creatingMembership: {
-      entry: assign({
-        isSubmitting: true,
-      }),
-
+      entry: assign({ isSubmitting: true }),
       after: {
         2000: {
           target: 'success',
-          actions: assign({
-            isSubmitting: false,
-            subscriptionId: 'mock_subscription_123',
-          }),
+          actions: assign({ isSubmitting: false }),
         },
       },
-
-      on: {
-        TIMEOUT: 'timeout',
-      },
+      on: { TIMEOUT: 'timeout' },
     },
 
+    // ── Terminal states ───────────────────────────────────────────────────────
     paymentFailed: {
-      entry: assign({
-      }),
-
       on: {
         TRY_AGAIN: 'selectingPlan',
-        RESET: 'idle',
+        RESET: 'selectingProgram',
       },
     },
 
     success: {
-      entry: [
-        assign({
-        }),
-        'auditMembershipCreation',
-      ],
-
-      after: {
-        15000: 'idle', // Auto-reset after 15 seconds
-      },
-
-      on: {
-        RESET: 'idle',
-      },
+      entry: ['auditMembershipCreation'],
+      after: { 15000: 'selectingProgram' },
+      on: { RESET: 'selectingProgram' },
     },
 
     error: {
-      entry: assign({
-        isSubmitting: false,
-      }),
-
+      entry: assign({ isSubmitting: false }),
       on: {
         TRY_AGAIN: 'collectingInfo',
-        RESET: 'idle',
+        RESET: 'selectingProgram',
       },
     },
 
     timeout: {
-      entry: [
-        assign({
-        }),
-        'auditTimeout',
-      ],
-
-      after: {
-        3000: 'idle',
-      },
-
-      on: {
-        RESET: 'idle',
-      },
+      entry: ['auditTimeout'],
+      after: { 3000: 'selectingProgram' },
+      on: { RESET: 'selectingProgram' },
     },
   },
 }).provide({

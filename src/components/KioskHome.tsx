@@ -1,36 +1,21 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
 import { MembershipFlow } from './flows/MembershipFlow';
 import { TrialFlow } from './flows/TrialFlow';
 
-type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea';
+type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'store';
 
 export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
 
-  // Debug logging and global function
-  useEffect(() => {
-    console.log('Current Flow:', currentFlow);
-
-    // Add global debug function to window
-    (window as any).kioskDebug = () => {
-      console.log('KIOSK DEBUG INFO:');
-      console.log('Current Flow:', currentFlow);
-      console.log('Timestamp:', new Date().toLocaleTimeString());
-      return { currentFlow, timestamp: new Date().toISOString() };
-    };
-  }, [currentFlow]);
-
   const handleFlowComplete = () => {
-    console.log('Flow completed, returning to home');
     setCurrentFlow('home');
   };
 
   const handleFlowChange = (newFlow: FlowType) => {
-    console.log(`Flow changing: ${currentFlow} → ${newFlow}`);
     setCurrentFlow(newFlow);
   };
 
@@ -44,15 +29,31 @@ export function KioskHome() {
   }
 
   if (currentFlow === 'trial') {
-    return <TrialFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return <TrialFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} onCheckIn={() => handleFlowChange('checkin')} />;
   }
 
   if (currentFlow === 'membership') {
-    return <MembershipFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return <MembershipFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} onCheckIn={() => handleFlowChange('checkin')} />;
   }
 
   if (currentFlow === 'memberArea') {
     return <MemberAreaFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+  }
+
+  if (currentFlow === 'store') {
+    // Store flow coming soon
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-white">
+        <h2 className="mb-8 text-4xl font-bold text-black">Store</h2>
+        <p className="mb-8 text-2xl text-black">Coming soon</p>
+        <button
+          onClick={() => handleFlowChange('home')}
+          className="rounded-2xl border-2 border-black px-12 py-6 text-2xl font-bold text-black hover:bg-gray-100"
+        >
+          Back
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -69,62 +70,46 @@ export function KioskHome() {
 
       {/* Main Options */}
       <main className="flex flex-1 items-center justify-center p-8">
-        <div className="grid w-full max-w-7xl grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid w-full max-w-4xl grid-cols-3 gap-6">
 
-          {/* Member Check-in */}
-          <button
-            onClick={() => handleFlowChange('checkin')}
-            className="group flex min-h-80 cursor-pointer flex-col justify-center rounded-3xl border-2 border-black bg-white p-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
-          >
-
-            <h2 className="mb-4 text-4xl font-bold text-black">
-              Member Check-in
-            </h2>
-            <p className="text-xl text-black">
-              Already a member? Check in for your class
-            </p>
-          </button>
-
-          {/* Free Trial */}
+          {/* Col 1 Row 1: Free Trial */}
           <button
             onClick={() => handleFlowChange('trial')}
-            className="group flex min-h-80 cursor-pointer flex-col justify-center rounded-3xl border-2 border-black bg-white p-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
+            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
-
-            <h2 className="mb-4 text-4xl font-bold text-black">
-              Free Trial
-            </h2>
-            <p className="text-xl text-black">
-              New to martial arts? Sign up for a complimentary trial
-            </p>
+            <h2 className="text-4xl font-bold text-black">Free Trial</h2>
           </button>
 
-          {/* Membership Signup */}
+          {/* Col 2 Row 1: Membership */}
           <button
             onClick={() => handleFlowChange('membership')}
-            className="group flex min-h-80 cursor-pointer flex-col justify-center rounded-3xl border-2 border-black bg-white p-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
+            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
-
-            <h2 className="mb-4 text-4xl font-bold text-black">
-              Join Our Dojo
-            </h2>
-            <p className="text-xl text-black">
-              Ready to commit? Sign up for a membership today
-            </p>
+            <h2 className="text-4xl font-bold text-black">Membership</h2>
           </button>
 
-          {/* Member Area */}
+          {/* Col 3 Row 1: Check In */}
+          <button
+            onClick={() => handleFlowChange('checkin')}
+            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
+          >
+            <h2 className="text-4xl font-bold text-black">Check In</h2>
+          </button>
+
+          {/* Col 1 Row 2: Members Area */}
           <button
             onClick={() => handleFlowChange('memberArea')}
-            className="group flex min-h-80 cursor-pointer flex-col justify-center rounded-3xl border-2 border-black bg-white p-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
+            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
+            <h2 className="text-4xl font-bold text-black">Members Area</h2>
+          </button>
 
-            <h2 className="mb-4 text-4xl font-bold text-black">
-              Member Area
-            </h2>
-            <p className="text-xl text-black">
-              Access your account and member benefits
-            </p>
+          {/* Col 2 Row 2: Store */}
+          <button
+            onClick={() => handleFlowChange('store')}
+            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
+          >
+            <h2 className="text-4xl font-bold text-black">Store</h2>
           </button>
 
         </div>

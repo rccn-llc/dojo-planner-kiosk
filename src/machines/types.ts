@@ -15,15 +15,49 @@ export interface CheckinContext {
 
 // Trial signup machine context
 export interface TrialContext {
-  // Contact info
+  // Age group selection
+  ageGroup: 'adult' | 'youth' | null;
+
+  // Adult contact info
   firstName: string;
   lastName: string;
   email: string;
   phoneNumber: string;
 
+  // Adult address
+  address: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+
+  // Youth - Parent/Guardian info
+  parentFirstName: string;
+  parentLastName: string;
+  parentEmail: string;
+  parentPhone: string;
+  parentAddress: string;
+  parentAddressLine2: string;
+  parentCity: string;
+  parentState: string;
+
+  // Youth - current child being entered
+  currentChildFirstName: string;
+  currentChildLastName: string;
+  currentChildDateOfBirth: string;
+
+  // Youth - all children confirmed so far
+  children: Array<{ firstName: string; lastName: string; dateOfBirth: string }>;
+
+  // Whether we are adding a subsequent child
+  isAddingAdditionalChild: boolean;
+
   // Program selection
   selectedProgram: Program | null;
   availablePrograms: Program[];
+
+  // Waiver
+  waiverAgreed: boolean;
+  signature: string;
 
   // Form validation and state
   errors: Record<string, string>;
@@ -33,20 +67,31 @@ export interface TrialContext {
 
 // Membership signup machine context
 export interface MembershipContext {
+  // Program + plan selection
+  selectedProgram: Program | null;
+  programs: Program[];
+  selectedPlan: MembershipPlan | null;
+  availablePlans: MembershipPlan[];
+
   // Contact info
   firstName: string;
   lastName: string;
   email: string;
   phoneNumber: string;
 
-  // Membership selection
-  selectedPlan: MembershipPlan | null;
-  availablePlans: MembershipPlan[];
+  // Address
+  address: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  zip: string;
 
-  // Payment info
-  paymentMethodId: string;
-  customerId: string;
-  subscriptionId: string;
+  // Commitment screen
+  hasAgreedToCommitment: boolean;
+
+  // Member lookup
+  memberLookupPhone: string;
+  memberLookupResult: Member | null;
 
   // Form validation and state
   errors: Record<string, string>;
@@ -69,21 +114,32 @@ export type CheckinEvent
     | { type: 'SKIP_UPGRADE' }
     | { type: 'BACK' };
 export type TrialEvent
-  = | { type: 'UPDATE_FIELD'; field: string; value: string }
+  = | { type: 'SELECT_AGE_GROUP'; ageGroup: 'adult' | 'youth' }
+    | { type: 'UPDATE_FIELD'; field: string; value: string }
     | { type: 'SELECT_PROGRAM'; program: Program }
     | { type: 'SUBMIT_CONTACT' }
-    | { type: 'SUBMIT_TRIAL' }
+    | { type: 'SUBMIT_YOUTH_PARENT' }
+    | { type: 'SUBMIT_YOUTH_CHILD' }
+    | { type: 'ADD_ANOTHER_CHILD' }
+    | { type: 'FINISH_YOUTH' }
+    | { type: 'SUBMIT_WAIVER' }
+    | { type: 'AGREE_WAIVER'; agreed: boolean }
     | { type: 'TRY_AGAIN' }
+    | { type: 'BACK' }
     | { type: 'TIMEOUT' }
     | { type: 'RESET' };
 
 export type MembershipEvent
-  = | { type: 'UPDATE_FIELD'; field: string; value: string }
+  = | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
+    | { type: 'SELECT_PROGRAM'; program: Program }
     | { type: 'SELECT_PLAN'; plan: MembershipPlan }
     | { type: 'SUBMIT_CONTACT' }
     | { type: 'SUBMIT_PAYMENT' }
+    | { type: 'SUBMIT_COMMITMENT' }
+    | { type: 'LOOKUP_MEMBER' }
     | { type: 'PAYMENT_FAILED'; error?: string }
     | { type: 'TRY_AGAIN' }
+    | { type: 'BACK' }
     | { type: 'TIMEOUT' }
     | { type: 'RESET' };
 

@@ -1,12 +1,13 @@
 // Shared types for the kiosk application
-// These will eventually import from the main Dojo Planner application once path issues are resolved
+// These are kiosk-specific utilities along with some basic shared functions
+// TODO: Eventually import from main Dojo Planner application once path issues are resolved
 
-// Basic auth types
+// Basic auth types (simplified for kiosk use)
 export type ORG_ROLE = 'OWNER' | 'ADMIN' | 'STAFF' | 'MEMBER';
 
-// Basic audit types
+// Basic audit types (simplified for kiosk use)
 export type AuditableEntity = 'member' | 'system' | 'payment' | 'subscription';
-export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout';
+export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 'check-in' | 'trial-signup' | 'membership-signup';
 
 export interface AuditLog {
   id: string;
@@ -18,13 +19,13 @@ export interface AuditLog {
   timestamp: Date;
 }
 
-// Member types for kiosk operations
+// Member types for kiosk operations (kiosk-compatible interface)
 export interface Member {
   id: string;
   firstName: string;
   lastName: string;
   email: string;
-  phoneNumber: string;
+  phoneNumber: string; // Kiosk uses phoneNumber, main app uses phone
   status: 'active' | 'inactive' | 'trial' | 'suspended';
   joinedAt: Date;
   lastCheckIn?: Date;
