@@ -11,17 +11,15 @@ const config: KnipConfig = {
   ],
   // Dependencies to ignore during analysis
   ignoreDependencies: [
-    '@commitlint/types',
-    '@swc/helpers',
-    'vite',
-    // Kiosk-specific dependencies that may not be directly imported
-    '@xstate/react',
-    '@mui/material',
+    // Peer dependencies loaded at runtime by MUI — not directly imported
     '@emotion/react',
     '@emotion/styled',
+    // Used only in scripts (db-server, migrations) — not imported by source files
+    'drizzle-kit',
+    'pglite-server',
+    // Used only in vitest.browser.setup.ts which is excluded from knip analysis
+    '@vitest/browser',
   ],
-  // Binaries to ignore during analysis
-  ignoreBinaries: ['next', 'playwright', 'vitest'],
 };
 
 export default config;

@@ -33,7 +33,7 @@ function validateMemberInfo(context: MemberAreaContext): Record<string, string> 
 }
 
 // Guards
-export const memberAreaGuards = {
+const memberAreaGuards = {
   isProgramSelected: ({ context }: { context: MemberAreaContext }) => {
     return !!context.selectedProgram;
   },
@@ -49,7 +49,7 @@ export const memberAreaGuards = {
 };
 
 // Actions
-export const memberAreaActions = {
+const memberAreaActions = {
   auditUpgradeComplete: ({ context }: { context: MemberAreaContext }) => {
     if (context.selectedPlan && context.email) {
       const audit = KioskAuditService.getInstance();
@@ -79,61 +79,6 @@ export const memberAreaActions = {
       sessionId: context.sessionId,
       phoneNumber: context.phoneNumber,
     });
-  },
-};
-
-// Services
-export const memberAreaServices = {
-  loadPrograms: async () => {
-    // Mock programs data
-    return [
-      {
-        id: 'adult-bjj',
-        name: 'Adult Brazilian Jiu-Jitsu',
-        description: 'Learn the art of Brazilian Jiu-Jitsu',
-        isActive: true,
-      },
-      {
-        id: 'kids-bjj',
-        name: 'Kids Brazilian Jiu-Jitsu',
-        description: 'BJJ program designed for children',
-        isActive: true,
-      },
-      {
-        id: 'muay-thai',
-        name: 'Muay Thai',
-        description: 'Traditional Thai boxing and striking',
-        isActive: true,
-      },
-      {
-        id: 'judo',
-        name: 'Judo',
-        description: 'Olympic martial art focusing on throws',
-        isActive: true,
-      },
-    ];
-  },
-
-  loadMembershipPlans: async () => {
-    // Mock membership plans
-    return [
-      {
-        id: 'monthly',
-        name: 'Monthly Membership',
-        description: 'Unlimited classes, month-to-month',
-        price: 159,
-        interval: 'monthly' as const,
-        isActive: true,
-      },
-      {
-        id: 'annual',
-        name: 'Annual Membership',
-        description: 'Unlimited classes, save 20%',
-        price: 99, // Monthly equivalent of ~$1188/year
-        interval: 'yearly' as const,
-        isActive: true,
-      },
-    ];
   },
 };
 

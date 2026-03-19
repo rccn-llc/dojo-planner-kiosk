@@ -1,11 +1,7 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 
-// For now, use a minimal schema type until we can properly import the full schema
-// This allows the database connection to work while we work on the import structure
-type Schema = Record<string, any>;
-
-// Connection singleton for server-side use
+// Connection singleton — reused across requests within the same serverless instance
 let cachedConnection: ReturnType<typeof drizzle> | null = null;
 
 export function getDatabase() {
@@ -16,11 +12,15 @@ export function getDatabase() {
       throw new Error('DATABASE_URL environment variable is required');
     }
 
-    // Create postgres client with connection pooling
+    // max: 1 is intentional:
+    //   - Local dev: pglite-server only supports a single connection
+    //   - Production (Neon serverless): each function instance holds one connection;
+    //     Neon's connection pooler (pgBouncer) handles the pool on its side
     const client = postgres(connectionString, {
-      max: 10, // Maximum connections in pool for kiosk usage
-      idle_timeout: 20, // Close idle connections after 20s
-      connect_timeout: 10, // Connection timeout
+      max: 1,
+      idle_timeout: 20,
+      connect_timeout: 10,
+      // ssl is automatically negotiated from the connection string (sslmode=require for Neon)
     });
 
     cachedConnection = drizzle(client);
@@ -28,7 +28,3 @@ export function getDatabase() {
 
   return cachedConnection;
 }
-
-// Placeholder until we can properly import the shared schema
-export const schema = {} as Schema;
-export type Database = typeof schema;

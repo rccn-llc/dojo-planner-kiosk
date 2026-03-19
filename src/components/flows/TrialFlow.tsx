@@ -67,10 +67,10 @@ const US_STATES = [
 function StepIndicator({ current, total }: { current: number; total: number }) {
   return (
     <div className="mt-6 flex items-center justify-center gap-3">
-      {Array.from({ length: total }).map((_, i) => (
+      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
         <div
-          key={i}
-          className={`h-3 w-8 rounded-full transition-all ${i <= current ? 'bg-black' : 'bg-gray-300'}`}
+          key={stepKey}
+          className={`h-3 w-8 rounded-full transition-all ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
         />
       ))}
     </div>
@@ -142,6 +142,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       {/* Header */}
       <header className="flex items-center justify-between bg-black p-6">
         <button
+          type="button"
           onClick={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
           className="cursor-pointer text-white transition-colors hover:text-gray-300"
         >
@@ -163,6 +164,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             </p>
             <div className="grid grid-cols-2 gap-8">
               <button
+                type="button"
                 onClick={() => send({ type: 'SELECT_AGE_GROUP', ageGroup: 'adult' })}
                 className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-8 py-14 transition-all hover:scale-105 hover:bg-gray-50"
               >
@@ -170,6 +172,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 <span className="text-lg text-gray-500">Get started</span>
               </button>
               <button
+                type="button"
                 onClick={() => send({ type: 'SELECT_AGE_GROUP', ageGroup: 'youth' })}
                 className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-8 py-14 transition-all hover:scale-105 hover:bg-gray-50"
               >
@@ -314,6 +317,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             </div>
             <div className="mt-8 flex items-center justify-between">
               <button
+                type="button"
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -322,6 +326,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 Go back
               </button>
               <button
+                type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_PARENT' })}
                 disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
@@ -341,8 +346,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             {state.context.children.length > 0 && (
               <div className="mb-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
                 <p className="mb-2 text-sm font-semibold tracking-wide text-gray-500 uppercase">Children added</p>
-                {state.context.children.map((child, i) => (
-                  <p key={i} className="text-lg text-black">
+                {state.context.children.map(child => (
+                  <p key={`${child.firstName}-${child.lastName}-${child.dateOfBirth}`} className="text-lg text-black">
                     {child.firstName}
                     {' '}
                     {child.lastName}
@@ -406,6 +411,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
             <div className="mt-8 flex items-center justify-between">
               <button
+                type="button"
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -414,6 +420,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 Go back
               </button>
               <button
+                type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_CHILD' })}
                 disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
@@ -434,8 +441,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               {state.context.children.length > 0 && (
                 <div className="mb-8 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-left">
                   <p className="mb-2 text-sm font-semibold tracking-wide text-gray-500 uppercase">Children added</p>
-                  {state.context.children.map((child, i) => (
-                    <p key={i} className="text-lg text-black">
+                  {state.context.children.map(child => (
+                    <p key={`${child.firstName}-${child.lastName}-${child.dateOfBirth}`} className="text-lg text-black">
                       {child.firstName}
                       {' '}
                       {child.lastName}
@@ -450,12 +457,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
               <div className="flex justify-center gap-4">
                 <button
+                  type="button"
                   onClick={() => send({ type: 'FINISH_YOUTH' })}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
                 >
                   No, Continue
                 </button>
                 <button
+                  type="button"
                   onClick={() => send({ type: 'ADD_ANOTHER_CHILD' })}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-black px-8 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
@@ -617,6 +626,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
             <div className="mt-8 flex items-center justify-between">
               <button
+                type="button"
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -625,6 +635,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 Go back
               </button>
               <button
+                type="button"
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
                 disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
@@ -715,6 +726,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
             <div className="mt-6 flex items-center justify-between">
               <button
+                type="button"
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -723,6 +735,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 Go back
               </button>
               <button
+                type="button"
                 onClick={() => send({ type: 'SUBMIT_WAIVER' })}
                 disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
@@ -764,12 +777,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               </p>
               <div className="flex justify-center gap-4">
                 <button
+                  type="button"
                   onClick={onComplete}
                   className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
                 >
                   Done
                 </button>
                 <button
+                  type="button"
                   onClick={() => onCheckIn?.()}
                   className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
@@ -790,12 +805,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               </p>
               <div className="space-y-4">
                 <button
+                  type="button"
                   onClick={() => send({ type: 'TRY_AGAIN' })}
                   className="w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
                 >
                   Try Again
                 </button>
                 <button
+                  type="button"
                   onClick={onBack}
                   className="w-full cursor-pointer rounded-2xl border-2 border-gray-300 bg-white px-8 py-4 text-lg text-gray-600 transition-colors hover:bg-gray-100"
                 >

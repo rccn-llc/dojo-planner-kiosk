@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
 import { MembershipFlow } from './flows/MembershipFlow';
+import { StoreFlow } from './flows/StoreFlow';
 import { TrialFlow } from './flows/TrialFlow';
 
 type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'store';
@@ -41,18 +42,11 @@ export function KioskHome() {
   }
 
   if (currentFlow === 'store') {
-    // Store flow coming soon
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-white">
-        <h2 className="mb-8 text-4xl font-bold text-black">Store</h2>
-        <p className="mb-8 text-2xl text-black">Coming soon</p>
-        <button
-          onClick={() => handleFlowChange('home')}
-          className="rounded-2xl border-2 border-black px-12 py-6 text-2xl font-bold text-black hover:bg-gray-100"
-        >
-          Back
-        </button>
-      </div>
+      <StoreFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+      />
     );
   }
 
@@ -74,6 +68,7 @@ export function KioskHome() {
 
           {/* Col 1 Row 1: Free Trial */}
           <button
+            type="button"
             onClick={() => handleFlowChange('trial')}
             className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
@@ -82,6 +77,7 @@ export function KioskHome() {
 
           {/* Col 2 Row 1: Membership */}
           <button
+            type="button"
             onClick={() => handleFlowChange('membership')}
             className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
@@ -90,6 +86,7 @@ export function KioskHome() {
 
           {/* Col 3 Row 1: Check In */}
           <button
+            type="button"
             onClick={() => handleFlowChange('checkin')}
             className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
@@ -98,6 +95,7 @@ export function KioskHome() {
 
           {/* Col 1 Row 2: Members Area */}
           <button
+            type="button"
             onClick={() => handleFlowChange('memberArea')}
             className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >
@@ -106,6 +104,7 @@ export function KioskHome() {
 
           {/* Col 2 Row 2: Store */}
           <button
+            type="button"
             onClick={() => handleFlowChange('store')}
             className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-12 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100"
           >

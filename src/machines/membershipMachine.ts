@@ -122,7 +122,7 @@ const emptyContext: MembershipContext = {
 
 // ── Guards ────────────────────────────────────────────────────────────────────
 
-export const membershipGuards = {
+const membershipGuards = {
   isContactInfoValid: ({ context }: { context: MembershipContext }) =>
     Object.keys(validateContactInfo(context)).length === 0,
 
@@ -135,7 +135,7 @@ export const membershipGuards = {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 
-export const membershipActions = {
+const membershipActions = {
   auditMembershipCreation: ({ context }: { context: MembershipContext }) => {
     if (context.selectedPlan && context.email) {
       const audit = KioskAuditService.getInstance();

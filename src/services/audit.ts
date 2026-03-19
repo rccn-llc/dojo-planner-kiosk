@@ -4,10 +4,10 @@
  */
 
 // Basic audit types for now - we'll improve these later
-export type AuditableEntity = 'member' | 'system' | 'payment' | 'subscription';
-export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout';
+type AuditableEntity = 'member' | 'system' | 'payment' | 'subscription';
+type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout';
 
-export interface KioskAuditContext {
+interface KioskAuditContext {
   kioskId?: string;
   sessionId: string;
   userAgent?: string;
@@ -56,7 +56,7 @@ export class KioskAuditService {
 
       // For development, just log to console
       // TODO: Send to API route for proper database logging
-      console.log('Kiosk Audit:', JSON.stringify(auditEntry, null, 2));
+      console.warn('Kiosk Audit:', JSON.stringify(auditEntry, null, 2));
 
       // In production, this would be:
       // await fetch('/api/audit', {
