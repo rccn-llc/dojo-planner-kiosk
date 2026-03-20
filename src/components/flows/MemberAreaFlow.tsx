@@ -27,6 +27,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
       {/* Header */}
       <header className="flex items-center justify-between bg-black p-8">
         <button
+          type="button"
           onClick={onBack}
           className="cursor-pointer text-white transition-colors hover:text-gray-300"
         >
@@ -99,6 +100,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
               <div className="mb-6 flex items-center justify-between">
                 <h2 className="text-4xl font-bold text-black">John Smith</h2>
                 <button
+                  type="button"
                   onClick={onBack}
                   className="cursor-pointer rounded-lg bg-red-600 px-8 py-3 text-lg font-bold text-white transition-colors hover:bg-red-700"
                 >
@@ -108,10 +110,10 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
 
               {/* Tabs */}
               <div className="mb-8 flex border-b-2 border-gray-200">
-                <button className="cursor-pointer border-b-4 border-black px-6 py-3 text-lg font-bold text-black">
+                <button type="button" className="cursor-pointer border-b-4 border-black px-6 py-3 text-lg font-bold text-black">
                   Account
                 </button>
-                <button className="cursor-pointer px-6 py-3 text-lg font-medium text-gray-500 hover:text-black">
+                <button type="button" className="cursor-pointer px-6 py-3 text-lg font-medium text-gray-500 hover:text-black">
                   Billing
                 </button>
               </div>
@@ -144,13 +146,13 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                     </div>
 
                     <div className="flex gap-3">
-                      <button className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
                         View Waiver
                       </button>
-                      <button className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
                         Hold
                       </button>
-                      <button className="flex-1 cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700">
                         Cancel
                       </button>
                     </div>
@@ -179,13 +181,13 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                     </div>
 
                     <div className="flex gap-3">
-                      <button className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
                         View Waiver
                       </button>
-                      <button className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg border-2 border-gray-300 bg-white px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-gray-50">
                         Hold
                       </button>
-                      <button className="flex-1 cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700">
+                      <button type="button" className="flex-1 cursor-pointer rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700">
                         Cancel
                       </button>
                     </div>

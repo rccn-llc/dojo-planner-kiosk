@@ -1,7 +1,7 @@
-import react from '@vitejs/plugin-react'
-import { loadEnv } from 'vite'
-import tsconfigPaths from 'vite-tsconfig-paths'
-import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react';
+import { loadEnv } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react(), tsconfigPaths()],
@@ -33,4 +33,4 @@ export default defineConfig({
       NODE_ENV: 'test',
     },
   },
-})
+});

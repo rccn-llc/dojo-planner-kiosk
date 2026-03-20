@@ -2,6 +2,7 @@ import { useMachine } from '@xstate/react';
 import { checkinMachine } from '../machines/checkinMachine';
 import { memberAreaMachine } from '../machines/memberAreaMachine';
 import { membershipMachine } from '../machines/membershipMachine';
+import { storeMachine } from '../machines/storeMachine';
 import { trialMachine } from '../machines/trialMachine';
 
 // Hook for member check-in machine
@@ -24,16 +25,7 @@ export function useMemberAreaMachine() {
   return useMachine(memberAreaMachine);
 }
 
-// Function for managing session timeouts across all machines
-export function createSessionTimeout(_machine: any) {
-  // TODO: Implement global session timeout management
-  // This would monitor inactivity and send TIMEOUT events
-  return {
-    resetTimeout: () => {
-      // Reset inactivity timer
-    },
-    clearTimeout: () => {
-      // Clear timeout when user leaves
-    },
-  };
+// Hook for store / checkout machine
+export function useStoreMachine() {
+  return useMachine(storeMachine);
 }

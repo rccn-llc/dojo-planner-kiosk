@@ -23,7 +23,7 @@ beforeAll(() => {
   });
 
   // Mock IntersectionObserver for components that might use it
-  global.IntersectionObserver = class IntersectionObserver {
+  globalThis.IntersectionObserver = class IntersectionObserver {
     constructor() {}
     disconnect() {}
     observe() {}
@@ -31,7 +31,7 @@ beforeAll(() => {
   } as any;
 
   // Mock ResizeObserver for responsive components
-  global.ResizeObserver = class ResizeObserver {
+  globalThis.ResizeObserver = class ResizeObserver {
     constructor() {}
     disconnect() {}
     observe() {}

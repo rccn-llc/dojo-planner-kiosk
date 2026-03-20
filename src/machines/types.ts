@@ -166,3 +166,87 @@ export type MemberAreaEvent
     | { type: 'INVALID_INFO' }
     | { type: 'BACK' }
     | { type: 'RESET' };
+
+// ── Store types ───────────────────────────────────────────────────────────────
+
+export interface StoreProduct {
+  id: string;
+  name: string;
+  description: string;
+  images: string[]; // URLs, primary first
+  variants?: Array<{ id: string; name: string; price: number }>;
+  basePrice: number;
+  priceRange?: { min: number; max: number };
+}
+
+export interface CartItem {
+  productId: string;
+  productName: string;
+  variantId?: string;
+  variantName?: string;
+  price: number;
+  quantity: number;
+}
+
+export interface StoreContext {
+  products: StoreProduct[];
+  isLoadingProducts: boolean;
+  selectedProduct: StoreProduct | null;
+  selectedVariantId: string;
+  selectedQuantity: number;
+  cartItems: CartItem[];
+  discountCode: string;
+  discountAmount: number;
+  adminFeeRate: number; // 0.0475 (4.75%)
+  // Checkout buyer details
+  memberSearchPhone: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phoneNumber: string;
+  country: string;
+  address: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  zip: string;
+  hasSalesAgreement: boolean;
+  // Payment method
+  paymentMethod: 'card' | 'ach';
+  // Card fields (populated after TokenEx tokenization)
+  cardholderName: string;
+  cardToken: string;
+  cardFirstSix: string;
+  cardLastFour: string;
+  cardExpiry: string;
+  // ACH fields
+  achAccountHolder: string;
+  achRoutingNumber: string;
+  achAccountNumber: string;
+  achAccountType: 'Checking' | 'Savings';
+  errors: Record<string, string>;
+  isSubmitting: boolean;
+  sessionId: string;
+}
+
+export type StoreEvent
+  = | { type: 'LOAD_PRODUCTS_SUCCESS'; products: StoreProduct[] }
+    | { type: 'LOAD_PRODUCTS_FAILURE' }
+    | { type: 'VIEW_PRODUCT'; product: StoreProduct }
+    | { type: 'BACK_TO_BROWSE' }
+    | { type: 'SELECT_VARIANT'; variantId: string }
+    | { type: 'UPDATE_QUANTITY'; quantity: number }
+    | { type: 'ADD_TO_CART' }
+    | { type: 'VIEW_CART' }
+    | { type: 'REMOVE_ITEM'; productId: string; variantId?: string }
+    | { type: 'APPLY_DISCOUNT' }
+    | { type: 'PROCEED_TO_CHECKOUT' }
+    | { type: 'BACK_TO_CART' }
+    | { type: 'LOOKUP_MEMBER' }
+    | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
+    | { type: 'PLACE_ORDER' }
+    | { type: 'PAYMENT_SUCCESS' }
+    | { type: 'PAYMENT_FAILED'; error?: string }
+    | { type: 'TRY_AGAIN' }
+    | { type: 'RESET' }
+    | { type: 'TIMEOUT' };

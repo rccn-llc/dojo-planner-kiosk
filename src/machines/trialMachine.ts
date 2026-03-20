@@ -107,7 +107,7 @@ function validateWaiver(context: TrialContext): Record<string, string> {
 }
 
 // Guards
-export const trialGuards = {
+const trialGuards = {
   isContactInfoValid: ({ context }: { context: TrialContext }) =>
     Object.keys(validateContactInfo(context)).length === 0,
 
@@ -128,7 +128,7 @@ export const trialGuards = {
 };
 
 // Actions
-export const trialActions = {
+const trialActions = {
   auditTrialCreation: ({ context }: { context: TrialContext }) => {
     if (context.email) {
       const audit = KioskAuditService.getInstance();

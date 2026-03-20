@@ -63,10 +63,10 @@ const US_STATES = [
 function StepIndicator({ current, total }: { current: number; total: number }) {
   return (
     <div className="mt-8 flex justify-center gap-2">
-      {Array.from({ length: total }).map((_, i) => (
+      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
         <div
-          key={i}
-          className={`h-2 w-8 rounded-full transition-colors ${i <= current ? 'bg-black' : 'bg-gray-300'}`}
+          key={stepKey}
+          className={`h-2 w-8 rounded-full transition-colors ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
         />
       ))}
     </div>
@@ -174,7 +174,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
       <header className="flex items-center justify-between bg-black p-8">
-        <button onClick={onBack} className="cursor-pointer text-white transition-colors hover:text-gray-300">
+        <button type="button" onClick={onBack} className="cursor-pointer text-white transition-colors hover:text-gray-300">
           <ArrowBackIcon sx={{ fontSize: 48 }} />
         </button>
         <h1 className="flex-1 text-center text-5xl font-bold text-white">{headerTitle()}</h1>
@@ -191,6 +191,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             <div className="grid grid-cols-2 gap-6">
               {state.context.programs.map(program => (
                 <button
+                  type="button"
                   key={program.id}
                   onClick={() => send({ type: 'SELECT_PROGRAM', program })}
                   className="cursor-pointer rounded-3xl border-2 border-black bg-white p-10 text-left transition-all hover:scale-105 hover:bg-gray-50"
@@ -211,6 +212,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             <div className="mb-4 grid grid-cols-2 gap-6">
               {visiblePlans.map(plan => (
                 <button
+                  type="button"
                   key={plan.id}
                   onClick={() => send({ type: 'SELECT_PLAN', plan })}
                   className={`cursor-pointer rounded-3xl border-2 p-8 text-left transition-all hover:scale-105 ${
@@ -222,7 +224,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                   <h3 className="mb-1 text-2xl font-bold text-black">{plan.name}</h3>
                   <p className="mb-4 text-3xl font-bold text-black">{formatPlanPrice(plan)}</p>
                   {plan.description.split('\n').map((line, i) => (
-                    <p key={i} className={`${i === 0 ? 'mb-2 text-base text-gray-500' : 'text-base text-gray-600'}`}>{line}</p>
+                    <p key={line || `line-${i}`} className={`${i === 0 ? 'mb-2 text-base text-gray-500' : 'text-base text-gray-600'}`}>{line}</p>
                   ))}
                 </button>
               ))}
@@ -232,6 +234,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             {totalPlanPages > 1 && (
               <div className="mb-4 flex items-center justify-center gap-6">
                 <button
+                  type="button"
                   onClick={() => setPlanPage(p => Math.max(0, p - 1))}
                   disabled={planPage === 0}
                   className="cursor-pointer rounded-xl border-2 border-black px-6 py-3 text-lg font-bold disabled:opacity-30"
@@ -246,6 +249,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                   {totalPlanPages}
                 </span>
                 <button
+                  type="button"
                   onClick={() => setPlanPage(p => Math.min(totalPlanPages - 1, p + 1))}
                   disabled={planPage === totalPlanPages - 1}
                   className="cursor-pointer rounded-xl border-2 border-black px-6 py-3 text-lg font-bold disabled:opacity-30"
@@ -257,6 +261,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
             <div className="flex items-center justify-between">
               <button
+                type="button"
+
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -265,6 +271,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 Go back
               </button>
               <button
+                type="button"
+
                 onClick={() => send({ type: 'SUBMIT_PAYMENT' })}
                 disabled={!state.context.selectedPlan}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
@@ -317,6 +325,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
             <div className="mt-6 flex items-center justify-between">
               <button
+                type="button"
+
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -325,6 +335,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 Go back
               </button>
               <button
+                type="button"
+
                 onClick={() => send({ type: 'SUBMIT_COMMITMENT' })}
                 disabled={!state.context.hasAgreedToCommitment}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
@@ -357,6 +369,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                       className="flex-1 rounded-xl border-2 border-gray-300 p-4 text-xl focus:border-black focus:outline-none"
                     />
                     <button
+                      type="button"
+
                       onClick={() => send({ type: 'LOOKUP_MEMBER' })}
                       disabled={state.matches('lookingUpMember') || !(state.context.memberLookupPhone?.replace(/\D/g, '').length >= 10)}
                       className="cursor-pointer rounded-xl border-2 border-black bg-black px-6 py-4 text-base font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
@@ -553,6 +567,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
             <div className="mt-8 flex items-center justify-between">
               <button
+                type="button"
+
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -561,6 +577,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 Go back
               </button>
               <button
+                type="button"
+
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
                 disabled={state.context.isSubmitting || state.matches('lookingUpMember')}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
@@ -608,6 +626,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             )}
             <div className="flex justify-center gap-4">
               <button
+                type="button"
+
                 onClick={onComplete}
                 className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
               >
@@ -615,6 +635,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               </button>
               {onCheckIn && (
                 <button
+                  type="button"
+
                   onClick={onCheckIn}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-black px-8 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
@@ -636,12 +658,16 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               </p>
               <div className="flex gap-4">
                 <button
+                  type="button"
+
                   onClick={() => send({ type: 'TRY_AGAIN' })}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
                 >
                   Try Again
                 </button>
                 <button
+                  type="button"
+
                   onClick={onBack}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-gray-300 bg-white px-8 py-5 text-xl font-bold text-gray-600 transition-colors hover:bg-gray-50"
                 >
@@ -662,12 +688,16 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               </p>
               <div className="flex gap-4">
                 <button
+                  type="button"
+
                   onClick={() => send({ type: 'TRY_AGAIN' })}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
                 >
                   Try Again
                 </button>
                 <button
+                  type="button"
+
                   onClick={onBack}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-gray-300 bg-white px-8 py-5 text-xl font-bold text-gray-600 transition-colors hover:bg-gray-50"
                 >
