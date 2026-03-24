@@ -3,6 +3,7 @@ import type { KnipConfig } from 'knip';
 const config: KnipConfig = {
   // Files to exclude from Knip analysis
   ignore: [
+    'shared/**', // Git submodule (dojo-planner) — has its own knip config
     'src/shared/**', // Shared code with main app
     'vitest.browser.setup.ts', // Knip false positive with vitest setupFiles
     'vitest.config.mts', // Knip false positive with vitest setupFiles
