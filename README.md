@@ -1,3 +1,5 @@
+[![CI](https://github.com/rccn-llc/dojo-planner-kiosk/actions/workflows/CI.yml/badge.svg)](https://github.com/rccn-llc/dojo-planner-kiosk/actions/workflows/CI.yml)
+
 # Dojo Kiosk
 
 A touch-optimized companion application to Dojo Planner for martial arts dojo self-service operations. Handles member check-ins, free trials, membership signups, and member account access on public kiosk terminals.
