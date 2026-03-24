@@ -232,7 +232,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
         const result = await res.json() as { success: boolean; status: string; declineReason?: string; error?: string };
 
-        if (result.success && result.status === 'approved') {
+        if (result.success || result.status === 'approved' || result.status === 'processing') {
           send({ type: 'PAYMENT_SUCCESS' });
         }
         else {

@@ -20,8 +20,11 @@ const nextConfig = {
     deviceSizes: [768, 1024, 1280, 1920], // Common kiosk screen sizes
   },
 
-  // Empty turbopack config to silence warning
-  turbopack: {},
+  turbopack: {
+    resolveAlias: {
+      '@dojo-planner/iqpro-client': './node_modules/@dojo-planner/iqpro-client/dist/index.js',
+    },
+  },
 
   // Security headers for public kiosk terminals
   async headers() {

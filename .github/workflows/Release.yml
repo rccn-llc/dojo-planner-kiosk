@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    name: Create a new release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write # to be able to publish a GitHub release
+      issues: write # to be able to comment on released issues
+      pull-requests: write # to be able to comment on released pull requests
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          # Use PAT to allow pushing to protected branches
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Set up Node.js environment
+        uses: ./.github/actions/setup-project
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
+        # Attestation check is non-blocking due to upstream PURL signing bugs in some packages
+        run: npm audit signatures || true
+
+      - name: Release
+        run: npx semantic-release
+        env:
+          # Use PAT to bypass branch protection for semantic-release
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}

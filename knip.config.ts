@@ -17,8 +17,15 @@ const config: KnipConfig = {
     // Used only in scripts (db-server, migrations) — not imported by source files
     'drizzle-kit',
     'pglite-server',
-    // Used only in vitest.browser.setup.ts which is excluded from knip analysis
-    '@vitest/browser',
+    // Used via npx in CI release workflow — not imported by source files
+    '@semantic-release/npm',
+    'conventional-changelog-conventionalcommits',
+  ],
+  // Binaries invoked via npx in CI workflows — not installed as project deps
+  ignoreBinaries: [
+    'dotenv',
+    'production',
+    'checkly',
   ],
 };
 
