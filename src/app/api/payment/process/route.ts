@@ -123,9 +123,9 @@ export async function POST(request: Request) {
 
     // Get the customer's billing address ID so the ACH processor can resolve the name
     const customerDetail = await client.customers.get(customerId);
-    const addresses = (customerDetail as unknown as Record<string, unknown[]>).addresses ?? [];
-    const billingAddress = addresses.find((a: unknown) => (a as Record<string, boolean>).isBilling);
-    const customerBillingAddressId = (billingAddress as Record<string, string> | undefined)?.customerAddressId;
+    const addresses = (customerDetail.addresses ?? []) as Array<Record<string, unknown>>;
+    const billingAddress = addresses.find(a => a.isBilling);
+    const customerBillingAddressId = billingAddress?.customerAddressId as string | undefined;
 
     // ── Step 2: Register payment method ──────────────────────────────────────
     let paymentMethodId: string;
@@ -144,10 +144,9 @@ export async function POST(request: Request) {
           maskedCard,
         },
         isDefault: true,
-      } as unknown as Parameters<typeof client.customers.createPaymentMethod>[1]);
+      });
 
-      const raw = pm as unknown as Record<string, unknown>;
-      paymentMethodId = (raw.customerPaymentMethodId as string | undefined) ?? pm.paymentMethodId ?? pm.customerPaymentId ?? '';
+      paymentMethodId = pm.customerPaymentMethodId ?? pm.paymentMethodId ?? pm.customerPaymentId ?? '';
     }
     else {
       // ACH: tokenize server-side via Vault API, then register payment method
@@ -172,11 +171,10 @@ export async function POST(request: Request) {
           accountHolderAuth: { dlState: null, dlNumber: null },
         },
         isDefault: true,
-      } as unknown as Parameters<typeof client.customers.createPaymentMethod>[1]);
+      });
 
       console.warn('[payment/process] ACH createPaymentMethod result:', JSON.stringify(pm));
-      const rawAch = pm as unknown as Record<string, unknown>;
-      paymentMethodId = (rawAch.customerPaymentMethodId as string | undefined) ?? pm.paymentMethodId ?? pm.customerPaymentId ?? '';
+      paymentMethodId = pm.customerPaymentMethodId ?? pm.paymentMethodId ?? pm.customerPaymentId ?? '';
       console.warn('[payment/process] ACH paymentMethodId:', paymentMethodId);
       achTxData = { achToken, accountType, routingNumber: body.achRoutingNumber! };
     }

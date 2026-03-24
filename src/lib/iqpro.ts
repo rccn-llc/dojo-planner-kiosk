@@ -3,9 +3,30 @@
  * Mirrors src/libs/IQPro.ts from dojo-planner.
  */
 
-import { IQProClient as IQProClientClass } from '@dojo-planner/iqpro-client';
+// Module name as a variable so that bundlers (turbopack / webpack) do NOT
+// statically resolve the optional @dojo-planner/iqpro-client package.
+const IQPRO_MODULE = '@dojo-planner/iqpro-client';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+// Minimal shape of the IQPro client used by this service.
+// The actual client is loaded dynamically to avoid bundler errors
+// when the optional @dojo-planner/iqpro-client package is absent.
+interface IQProClientShape {
+  customers: {
+    create: (params: Record<string, unknown>) => Promise<{ customerId: string }>;
+    get: (customerId: string) => Promise<Record<string, unknown>>;
+    createPaymentMethod: (customerId: string, params: Record<string, unknown>) => Promise<{
+      paymentMethodId?: string;
+      customerPaymentMethodId?: string;
+      customerPaymentId?: string;
+    }>;
+  };
+  transactions: {
+    create: (params: Record<string, unknown>) => Promise<{ id: string; status?: string; processorResponseMessage?: string }>;
+  };
+  post: <T = Record<string, unknown>>(path: string, body?: unknown) => Promise<T>;
+}
 
 export interface TokenizationIframeConfig {
   origin: string;
@@ -132,23 +153,25 @@ export async function getTokenizationConfig(clientOrigin: string): Promise<Token
 
 // ── IQPro client ──────────────────────────────────────────────────────────────
 
-let iqproClient: IQProClientClass | null = null;
+let iqproClient: IQProClientShape | null = null;
 
-export async function getIQProClient(): Promise<IQProClientClass | null> {
+export async function getIQProClient(): Promise<IQProClientShape | null> {
   if (!isIQProConfigured()) {
     return null;
   }
 
   if (!iqproClient) {
-    const client = new IQProClientClass({
+    const mod = await import(/* webpackIgnore: true */ IQPRO_MODULE);
+    const IQProClient = mod.IQProClient;
+    const client = new IQProClient({
       clientId: process.env.IQPRO_CLIENT_ID!,
       clientSecret: process.env.IQPRO_CLIENT_SECRET!,
       scope: process.env.IQPRO_SCOPE!,
       oauthUrl: process.env.IQPRO_OAUTH_URL!,
       baseUrl: process.env.IQPRO_BASE_URL!,
     });
-    client.setGatewayContext(process.env.IQPRO_GATEWAY_ID!);
-    iqproClient = client;
+    (client as { setGatewayContext: (id: string) => void }).setGatewayContext(process.env.IQPRO_GATEWAY_ID!);
+    iqproClient = client as IQProClientShape;
   }
 
   return iqproClient;

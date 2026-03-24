@@ -2,7 +2,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // External packages for server components
-  serverExternalPackages: ['@libsql/client', 'drizzle-orm', 'postgres', '@dojo-planner/iqpro-client'],
+  serverExternalPackages: ['@libsql/client', 'drizzle-orm', 'postgres'],
 
   // Include any future migrations in the Vercel serverless bundle
   outputFileTracingIncludes: {
@@ -20,11 +20,7 @@ const nextConfig = {
     deviceSizes: [768, 1024, 1280, 1920], // Common kiosk screen sizes
   },
 
-  turbopack: {
-    resolveAlias: {
-      '@dojo-planner/iqpro-client': './node_modules/@dojo-planner/iqpro-client/dist/index.js',
-    },
-  },
+  turbopack: {},
 
   // Security headers for public kiosk terminals
   async headers() {
