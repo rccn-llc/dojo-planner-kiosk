@@ -1,5 +1,5 @@
 // XState machine types for kiosk user flows
-import type { Member, MembershipPlan, Program } from '../shared/types';
+import type { Member, MembershipPlan, Program } from '../lib/types';
 
 // Member check-in machine context
 export interface CheckinContext {

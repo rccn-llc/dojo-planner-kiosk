@@ -1,7 +1,7 @@
 import type { MemberAreaContext, MemberAreaEvent } from './types';
 import { assign, createMachine } from 'xstate';
+import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
-import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../shared/utils';
 
 // Helper functions (defined before machine creation)
 function validateMemberInfo(context: MemberAreaContext): Record<string, string> {

@@ -3,7 +3,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useState } from 'react';
 import { useMemberAreaMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 interface MemberAreaFlowProps {
   onComplete: () => void;

@@ -1,7 +1,7 @@
 import type { CartItem, StoreContext, StoreEvent } from './types';
 import { assign, createMachine } from 'xstate';
+import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
-import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../shared/utils';
 
 // ── Validation ────────────────────────────────────────────────────────────────
 

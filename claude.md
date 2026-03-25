@@ -8,7 +8,7 @@
 
 **Font:** Inter (via `next/font/google`), matching the dojo-planner app.
 
-**Shared code:** dojo-planner is linked as a git submodule at `shared/dojo-planner/`.
+**Shared code:** Kiosk-specific types and utilities live in `src/lib/types.ts` and `src/lib/utils.ts`. No submodule or external dependency on dojo-planner at runtime.
 
 ## Kiosk User Flows
 

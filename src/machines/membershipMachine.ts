@@ -1,8 +1,8 @@
-import type { MembershipPlan, Program } from '../shared/types';
+import type { MembershipPlan, Program } from '../lib/types';
 import type { MembershipContext, MembershipEvent } from './types';
 import { assign, createMachine } from 'xstate';
+import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
-import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../shared/utils';
 
 // ── Hardcoded data ────────────────────────────────────────────────────────────
 

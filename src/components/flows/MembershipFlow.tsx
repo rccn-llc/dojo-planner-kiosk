@@ -1,11 +1,11 @@
 'use client';
 
-import type { MembershipPlan } from '../../shared/types';
+import type { MembershipPlan } from '../../lib/types';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 const US_STATES = [
   'AL',
