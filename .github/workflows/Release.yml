@@ -23,13 +23,19 @@ jobs:
       issues: write # to be able to comment on released issues
       pull-requests: write # to be able to comment on released pull requests
 
+    # Only run when CI succeeded
+    if: github.event.workflow_run.conclusion == 'success'
+
+    env:
+      # Falls back to the default GITHUB_TOKEN when RELEASE_PAT is not configured
+      RELEASE_TOKEN: ${{ secrets.RELEASE_PAT }}
+
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           submodules: recursive
-          # Use PAT to allow pushing to protected branches
-          token: ${{ secrets.RELEASE_PAT }}
+          token: ${{ env.RELEASE_TOKEN || github.token }}
 
       - name: Set up Node.js environment
         uses: ./.github/actions/setup-project
@@ -43,5 +49,4 @@ jobs:
       - name: Release
         run: npx semantic-release
         env:
-          # Use PAT to bypass branch protection for semantic-release
-          GITHUB_TOKEN: ${{ secrets.RELEASE_PAT }}
+          GITHUB_TOKEN: ${{ env.RELEASE_TOKEN || github.token }}
