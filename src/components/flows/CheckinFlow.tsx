@@ -3,7 +3,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useState } from 'react';
 import { useCheckinMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 interface CheckinFlowProps {
   onComplete: () => void;
@@ -35,7 +35,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="flex items-center justify-between bg-black p-8">
+      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
         <button
           type="button"
           onClick={onBack}
@@ -43,7 +43,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
         >
           <ArrowBackIcon sx={{ fontSize: 48 }} />
         </button>
-        <h1 className="flex-1 text-center text-5xl font-bold text-white">
+        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">
           Member Check-in
         </h1>
         <div className="w-12" />
@@ -52,14 +52,14 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
       </header>
 
       {/* Main Content */}
-      <main className="flex flex-1 items-center justify-center p-8">
+      <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
         <div className="w-full max-w-2xl">
 
           {/* Phone Input State */}
           {state.matches('idle') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Enter Your Phone Number
               </h2>
               <p className="mb-8 text-xl text-black">
@@ -72,14 +72,14 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
                   value={phoneInput}
                   onChange={e => handlePhoneChange(e.target.value)}
                   placeholder="(555) 123-4567"
-                  className="w-full rounded-2xl border-2 border-gray-300 bg-white p-6 text-center text-3xl text-black placeholder:text-gray-500 focus:border-blue-500 focus:ring-4 focus:ring-blue-500 focus:outline-none"
+                  className="w-full rounded-2xl border-2 border-gray-300 bg-white p-4 text-center text-xl text-black placeholder:text-gray-500 focus:border-blue-500 focus:ring-4 focus:ring-blue-500 focus:outline-none sm:p-5 sm:text-2xl md:p-6 md:text-3xl"
                 />
 
                 <button
                   type="button"
                   onClick={handlePhoneSubmit}
                   disabled={sanitizePhoneInput(phoneInput).length !== 10}
-                  className="min-h-20 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-6 text-2xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
+                  className="min-h-14 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-4 text-lg font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200 sm:min-h-16 sm:py-5 sm:text-xl md:min-h-20 md:py-6 md:text-2xl"
                 >
                   Check In
                 </button>
@@ -89,9 +89,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Loading State */}
           {state.matches('validatingPhone') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Looking up your information...
               </h2>
             </div>
@@ -99,9 +99,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Member Found State */}
           {state.matches('memberFound') && state.context.member && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Welcome back,
                 {' '}
                 {state.context.member.firstName}
@@ -114,7 +114,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'CONFIRM_CHECKIN' })}
-                className="min-h-20 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-6 text-2xl font-bold text-black transition-colors hover:bg-gray-100"
+                className="min-h-14 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-4 text-lg font-bold text-black transition-colors hover:bg-gray-100 sm:min-h-16 sm:py-5 sm:text-xl md:min-h-20 md:py-6 md:text-2xl"
               >
                 Confirm Check-in
               </button>
@@ -123,9 +123,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Processing Check-in State */}
           {state.matches('processingCheckin') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Processing your check-in...
               </h2>
             </div>
@@ -133,7 +133,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Success State */}
           {state.matches('checkinComplete') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
               <div className="mb-8">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
@@ -141,7 +141,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
                     ✓
                   </div>
                 </div>
-                <h2 className="mb-6 text-4xl font-bold text-black">
+                <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                   You're checked in!
                 </h2>
                 <p className="mb-4 text-xl text-black">
@@ -157,9 +157,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Member Info Collection State */}
           {state.matches('collectingUpgradeInfo') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-center text-4xl font-bold text-black">
+              <h2 className="mb-6 text-center text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Complete Your Membership
               </h2>
               <p className="mb-8 text-center text-xl text-black">
@@ -205,7 +205,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
                 <button
                   type="button"
                   onClick={() => send({ type: 'SUBMIT_UPGRADE' })}
-                  className="min-h-20 w-full rounded-2xl border-2 border-black bg-white px-8 py-6 text-2xl font-bold text-black transition-colors hover:bg-gray-100"
+                  className="min-h-14 w-full rounded-2xl border-2 border-black bg-white px-8 py-4 text-lg font-bold text-black transition-colors hover:bg-gray-100 sm:min-h-16 sm:py-5 sm:text-xl md:min-h-20 md:py-6 md:text-2xl"
                 >
                   Complete Membership Upgrade
                 </button>
@@ -223,9 +223,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Processing Upgrade State */}
           {state.matches('processingUpgrade') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Processing Your Upgrade...
               </h2>
             </div>
@@ -233,7 +233,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Upgrade Complete State */}
           {state.matches('upgradeComplete') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
               <div className="mb-8">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
@@ -241,7 +241,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
                     ✓
                   </div>
                 </div>
-                <h2 className="mb-6 text-4xl font-bold text-black">
+                <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                   Membership Upgraded!
                 </h2>
                 <p className="mb-4 text-xl text-black">
@@ -260,9 +260,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Error State */}
           {state.matches('error') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Member Not Found
               </h2>
               <p className="mb-8 text-xl text-red-600">
@@ -273,7 +273,7 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
                 <button
                   type="button"
                   onClick={() => send({ type: 'TRY_AGAIN' })}
-                  className="min-h-20 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-6 text-2xl font-bold text-black transition-colors hover:bg-gray-100"
+                  className="min-h-14 w-full cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-4 text-lg font-bold text-black transition-colors hover:bg-gray-100 sm:min-h-16 sm:py-5 sm:text-xl md:min-h-20 md:py-6 md:text-2xl"
                 >
                   Try Again
                 </button>
@@ -291,9 +291,9 @@ export function CheckinFlow({ onComplete, onBack }: CheckinFlowProps) {
 
           {/* Timeout State */}
           {state.matches('timeout') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12 text-center">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
 
-              <h2 className="mb-6 text-4xl font-bold text-black">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Session Timeout
               </h2>
               <p className="mb-8 text-xl text-orange-600">

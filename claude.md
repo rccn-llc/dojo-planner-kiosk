@@ -2,330 +2,105 @@
 
 ## Project Overview
 
-**Dojo Kiosk** is a touch-optimized companion application to Dojo Planner for martial arts dojo self-service operations - handling member check-ins, free trials, membership signups, and store purchases on public kiosk terminals.
+**Dojo Kiosk** is a touch-optimized companion application to Dojo Planner for martial arts dojo self-service operations — handling member check-ins, free trials, membership signups, and store purchases on public kiosk terminals.
 
-**Stack:** Next.js 16 (App Router) + React 19 + TypeScript + Tailwind CSS + XState + Drizzle ORM + PostgreSQL + Clerk Auth + Stripe
+**Stack:** Next.js 16 (App Router) + React 19 + TypeScript + Tailwind CSS v4 + XState 5 + Drizzle ORM + PostgreSQL + MUI Icons
+
+**Font:** Inter (via `next/font/google`), matching the dojo-planner app.
+
+**Shared code:** Kiosk-specific types and utilities live in `src/lib/types.ts` and `src/lib/utils.ts`. No submodule or external dependency on dojo-planner at runtime.
 
 ## Kiosk User Flows
 
-### Primary Flows
-- **Free Trial (Adult/Youth)** - Age-appropriate waiver flows with legal compliance
-- **Member Check-In (Phone Number)** - Phone-based lookup with family member support
-- **Membership Signup (No Trial)** - Direct membership enrollment with payment
-- **Member Self-Service** - Account info, billing, invoices, receipts
+Each flow is a standalone component in `src/components/flows/` backed by an XState machine in `src/machines/`:
 
-### Secondary Flows
-- **Store Purchases** - Catalog items marked for kiosk display
-- **Event Registration** - Seminar and workshop signups
+| Flow | Component | Machine | Description |
+|------|-----------|---------|-------------|
+| Free Trial | `TrialFlow.tsx` | `trialMachine.ts` | Adult/youth branching, parent info, waiver, signature |
+| Check-In | `CheckinFlow.tsx` | `checkinMachine.ts` | Phone lookup, confirm, upgrade path |
+| Membership | `MembershipFlow.tsx` | `membershipMachine.ts` | Program → plan → commitment → contact info |
+| Members Area | `MemberAreaFlow.tsx` | `memberAreaMachine.ts` | Phone+password login, account/billing dashboard |
+| Store | `StoreFlow.tsx` | `storeMachine.ts` | Browse → product detail → cart → checkout → payment |
 
-## State Management (XState)
+The home screen (`KioskHome.tsx`) orchestrates flow selection and displays the Clerk organization name fetched from `/api/organization`.
 
-**Framework:** XState with @xstate/react for complex kiosk flows
+## API Endpoints (Implemented)
 
-**Key Machines:**
-- `kioskMachine.ts` - Main session management with idle timeout
-- `checkInMachine.ts` - Member check-in flow
-- `trialMachine.ts` - Free trial signup (adult/youth branching)
-- `membershipMachine.ts` - Direct membership signup
-- `storeMachine.ts` - Catalog purchase flow
-
-**Security States:**
-```typescript
-const kioskMachine = createMachine({
-  id: 'kiosk',
-  initial: 'idle',
-  context: {
-    idleTimer: 60000, // 60 seconds
-    sessionTimer: 300000, // 5 minutes max
-  },
-  states: {
-    idle: {
-      on: {
-        START_CHECK_IN: 'phoneEntry',
-        START_TRIAL: 'ageSelection',
-        START_MEMBERSHIP: 'membershipFlow',
-        IDLE_TIMEOUT: 'autoReset'
-      }
-    },
-    // ... other states
-  }
-});
+```
+GET  /api/catalog              - Fetch kiosk-visible catalog items (filtered by ORGANIZATION_ID)
+GET  /api/organization         - Fetch Clerk org name via Backend API
+GET  /api/payment/tokenization-config - IQPro TokenEx iframe config for card entry
+POST /api/payment/process      - Process store order (create customer → payment method → charge)
 ```
 
-## Shared Libraries Strategy
+## Payment Processing (IQPro)
 
-### Option 1: Direct File Copying
-Copy essential files from main Dojo Planner app:
+Payments are processed via direct IQPro REST API calls — **no SDK dependency** at runtime. The `@dojo-planner/iqpro-client` package is listed in dependencies but its `dist/` is not built; all payment logic uses `iqproPost`/`iqproGet` helpers in `src/lib/iqpro.ts` that make authenticated calls using OAuth client credentials.
 
-**Core Services** (copy to `src/shared/services/`):
-```
-/dojo-planner/src/services/MembersService.ts
-/dojo-planner/src/services/ClassesService.ts
-/dojo-planner/src/services/CatalogService.ts
-/dojo-planner/src/services/BillingService.ts
-/dojo-planner/src/services/AuditService.ts
-```
+**Flow:** OAuth token → create customer → register payment method (card token or ACH token) → process transaction.
 
-**Database & Types** (copy to `src/shared/`):
-```
-/dojo-planner/src/models/Schema.ts
-/dojo-planner/src/libs/DB.ts
-/dojo-planner/src/libs/Stripe.ts
-/dojo-planner/src/types/Auth.ts
-/dojo-planner/src/types/Audit.ts
-```
+**Card payments:** TokenEx iframe tokenizes card data client-side. The token is captured before leaving the checkout screen and passed to the server.
 
-**Utilities** (copy to `src/shared/libs/`):
-```
-/dojo-planner/src/libs/Env.ts
-/dojo-planner/src/libs/Logger.ts
-/dojo-planner/src/libs/RateLimit.ts
-```
+**ACH payments:** Account number tokenized server-side via IQPro Vault API, then registered as a payment method.
 
-### Option 2: Git Submodule (Recommended)
-```bash
-# In kiosk project root
-git submodule add ../dojo-planner shared/dojo-planner
-```
+**Key files:**
+- `src/lib/iqpro.ts` — OAuth token management, tokenization config, ACH tokenization, API helpers
+- `src/app/api/payment/process/route.ts` — Full payment processing endpoint
+- `src/hooks/useTokenExIframe.ts` — Client-side TokenEx iframe management
 
-**Benefits:**
-- Automatic sync with main app changes
-- Maintains single source of truth
-- Version control for shared code
+## Store Flow Details
 
-**Usage:**
-```typescript
-import { auditLogger } from '@/shared/dojo-planner/src/libs/Logger';
-// Import from submodule
-import { MembersService } from '@/shared/dojo-planner/src/services/MembersService';
-```
+- **Single-variant products** auto-select the variant and show it as text (no dropdown)
+- **Multi-variant products** show a dropdown selector
+- **Cart** has a centered "Continue Shopping" button (bag icon) above the cart grid
+- **Checkout** validates all buyer fields (name, email, phone, address, city, state, zip) AND payment fields before enabling "Place order"
+- **Order success** shows a 60-second countdown with a circular progress ring before auto-returning home
 
-### Option 3: Monorepo with Shared Packages
-Move both projects to a monorepo structure:
-```
-dojo-workspace/
-├── apps/
-│   ├── planner/     # Main admin app
-│   └── kiosk/       # Kiosk app
-├── packages/
-│   ├── shared/      # Shared utilities
-│   ├── database/    # Schema and migrations
-│   └── ui/          # Shared components
-```
+## Responsive Design
 
-## API Endpoints for Kiosk
+All components use mobile-first responsive Tailwind classes following dojo-planner patterns:
+- `sm:` (640px) — tablet adjustments
+- `md:` (768px) — desktop kiosk
+- `lg:` (1024px) — wide layouts (checkout/cart grids switch from stacked to 5-col)
 
-### Member Operations
-```typescript
-// Member lookup and authentication
-POST /api/members/lookup-by-phone
-GET  /api/members/{id}
-GET  /api/members/{id}/family
-POST /api/members/{id}/check-in
-GET  /api/members/{id}/billing-history
-
-// Member registration
-POST /api/members/create
-POST /api/members/{id}/trial-signup
-```
-
-### Class Operations
-```typescript
-// Class schedules and check-ins
-GET  /api/classes/schedule?date={date}
-GET  /api/classes/{id}/instances
-POST /api/classes/{instanceId}/check-in
-GET  /api/classes/{instanceId}/capacity
-```
-
-### Catalog Operations
-```typescript
-// Kiosk store functionality
-GET  /api/catalog/kiosk-items
-GET  /api/catalog/items/{id}
-POST /api/catalog/purchase
-GET  /api/catalog/categories?kiosk=true
-```
-
-### Billing Operations
-```typescript
-// Stripe integration
-POST / api / billing / create - checkout - session;
-POST / api / billing / membership - signup;
-GET / api / billing / plans;
-POST / api / webhook / stripe;
-```
-
-### Event Operations
-```typescript
-// Event registration
-GET / api / events / upcoming;
-POST / api / events / { id } / register;
-GET / api / events / { id } / sessions;
-```
-
-## Database Schema (Shared)
-
-**Key Tables for Kiosk:**
-- `member` - Member records with optional `clerkUserId`
-- `catalog_item` - Products with `showOnKiosk` flag
-- `class_schedule_instance` - Class sessions for check-in
-- `attendance` - Check-in/out tracking
-- `membership_plan` - Pricing tiers
-- `transaction` - Payment records
-- `audit_log` - SOC2 compliance logging
-
-## Security & Compliance
-
-### Rate Limiting (Public Terminal)
-```typescript
-const kioskRateLimit = new Ratelimit({
-  redis,
-  limiter: Ratelimit.slidingWindow(20, '1m'), // 20 requests per minute
-  analytics: true,
-  prefix: 'kiosk',
-});
-```
-
-### Audit Logging (SOC2)
-```typescript
-// All kiosk actions must be audited
-import { audit, AUDIT_ACTION, AUDIT_ENTITY_TYPE } from '@/shared/services/AuditService';
-
-await audit(context, AUDIT_ACTION.MEMBER_CHECK_IN, AUDIT_ENTITY_TYPE.MEMBER, {
-  entityId: memberId,
-  source: 'kiosk',
-  kioskId: process.env.KIOSK_ID,
-  metadata: { method: 'phone_lookup' }
-});
-```
-
-### Session Security
-```typescript
-// Auto-logout for public terminals
-const KIOSK_IDLE_TIMEOUT = 60000; // 1 minute
-const KIOSK_SESSION_TIMEOUT = 300000; // 5 minutes max
-
-// Clear all session data on timeout
-const resetKioskSession = () => {
-  // Clear local storage
-  localStorage.clear();
-  // Reset state machines
-  kioskService.send('RESET');
-  // Navigate to home
-  router.push('/');
-};
-```
-
-## Touch-Optimized UI Components
-
-### Base Components
-```typescript
-// Large touch targets for kiosk use
-const KioskButton = ({ children, size = "lg", ...props }) => (
-  <Button
-    className={cn(
-      "min-h-16 text-xl font-semibold touch-manipulation",
-      "hover:scale-105 active:scale-95 transition-transform",
-      size === "xl" && "min-h-20 text-2xl"
-    )}
-    {...props}
-  >
-    {children}
-  </Button>
-);
-
-const PhoneKeypad = ({ onDigit, onDelete, onSubmit }) => (
-  <div className="grid grid-cols-3 gap-4 max-w-sm mx-auto">
-    {[1,2,3,4,5,6,7,8,9,'*',0,'#'].map(digit => (
-      <KioskButton
-        key={digit}
-        onClick={() => onDigit(digit)}
-        className="aspect-square"
-      >
-        {digit}
-      </KioskButton>
-    ))}
-  </div>
-);
-```
-
-### Error Handling
-```typescript
-// Clear error states for public terminals
-const KioskErrorBoundary = ({ children }) => (
-  <ErrorBoundary
-    fallback={
-      <div className="text-center py-8">
-        <AlertTriangle className="mx-auto h-16 w-16 text-red-500 mb-4" />
-        <h2 className="text-2xl font-bold mb-4">Something went wrong</h2>
-        <KioskButton onClick={() => window.location.reload()}>
-          Start Over
-        </KioskButton>
-      </div>
-    }
-  >
-    {children}
-  </ErrorBoundary>
-);
-```
+Grids collapse from multi-column to single-column on small viewports. Headers, cards, buttons, and text all scale down.
 
 ## Environment Variables
 
 ```bash
-# Shared with main Dojo Planner app
+# Database
 DATABASE_URL=postgresql://...
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
-CLERK_SECRET_KEY=...
-STRIPE_SECRET_KEY=...
-STRIPE_WEBHOOK_SECRET=...
 
-# Kiosk-specific
-NEXT_PUBLIC_KIOSK_ID=kiosk-001
-NEXT_PUBLIC_KIOSK_LOCATION="Main Lobby"
-NEXT_PUBLIC_IDLE_TIMEOUT=60000
-NEXT_PUBLIC_SESSION_TIMEOUT=300000
+# Organization (required — identifies which org's data to show)
+ORGANIZATION_ID=org_...
+NEXT_PUBLIC_ORGANIZATION_ID=org_...
 
-# Rate limiting (optional)
-UPSTASH_REDIS_REST_URL=...
-UPSTASH_REDIS_REST_TOKEN=...
+# Clerk (for org name display on home screen)
+CLERK_SECRET_KEY=sk_...
 
-# Monitoring
-NEXT_PUBLIC_SENTRY_DSN=...
-NEXT_PUBLIC_BETTER_STACK_SOURCE_TOKEN=...
+# IQPro Payment Processing (all required for payments to work)
+IQPRO_CLIENT_ID=...
+IQPRO_CLIENT_SECRET=...
+IQPRO_SCOPE=...
+IQPRO_OAUTH_URL=...
+IQPRO_BASE_URL=...          # e.g. https://sandbox.api.basyspro.com/iqsaas/v1
+IQPRO_GATEWAY_ID=...
+
+# Email (for receipt sending)
+RESEND_API_KEY=...
 ```
 
-## Deployment Considerations
+## State Management (XState 5)
 
-### Kiosk Mode Browser
-```typescript
-// Disable browser features for kiosk mode
-const kioskModeConfig = {
-  kiosk: true,
-  fullscreen: true,
-  navigationDisabled: true,
-  contextMenu: false,
-  devTools: false,
-  zoom: false,
-  printing: false,
-  downloads: false
-};
-```
+Each flow uses `@xstate/react` hooks via `src/hooks/useKioskMachines.ts`. Machines define:
+- States for each step of the flow
+- Guards for validation (e.g., `isCheckoutValid`)
+- `assign` actions for form field updates
+- Timeout states for session security
 
-### Hardware Requirements
-- Touch screen (minimum 15" recommended)
-- Network connectivity (wired preferred for stability)
-- Webcam for QR codes (optional future feature)
-- Receipt printer integration (future enhancement)
+## Key Architecture Decisions
 
-### Offline Capability (Future)
-```typescript
-// Cache member data for offline check-ins
-const offlineCache = {
-  members: [], // Essential member data
-  classes: [], // Today's class schedule
-  actions: [] // Queue offline actions
-};
-```
-
-This architecture provides a secure, compliant, and user-friendly kiosk experience while leveraging the existing Dojo Planner infrastructure and maintaining consistency across both applications.
+- **No Clerk auth for kiosk users** — the kiosk is a public terminal. Clerk is only used server-side to fetch org metadata.
+- **No IQPro SDK at runtime** — all payment API calls are made directly via fetch with OAuth tokens, avoiding the missing `dist/` build issue.
+- **Favicon** matches dojo-planner (SVG + PNG variants + apple-touch-icon in `public/`).
+- **Touch-optimized** — large buttons (min-h-14+), rounded corners (rounded-2xl/3xl), scale transitions on hover.

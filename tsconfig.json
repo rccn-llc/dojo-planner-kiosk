@@ -47,10 +47,6 @@
     "**/*.mts"
   ],
   "exclude": [
-    "node_modules",
-    "shared/**/*",
-    "**/shared/**/*",
-    "shared/dojo-planner/**",
-    "**/shared/dojo-planner/**"
+    "node_modules"
   ]
 }

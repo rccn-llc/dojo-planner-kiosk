@@ -3,7 +3,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 interface TrialFlowProps {
   onComplete: () => void;
@@ -140,7 +140,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="flex items-center justify-between bg-black p-6">
+      <header className="flex items-center justify-between bg-black p-4 sm:p-6">
         <button
           type="button"
           onClick={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
@@ -148,13 +148,13 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         >
           <ArrowBackIcon sx={{ fontSize: 40 }} />
         </button>
-        <h1 className="flex-1 text-center text-4xl font-bold text-white">
+        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-4xl">
           {headerTitle()}
         </h1>
         <div className="w-10" />
       </header>
 
-      <main className="flex flex-1 items-center justify-center p-8">
+      <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
 
         {/* ── Step 1: Age Selection ── */}
         {state.matches('selectingAge') && (
@@ -162,21 +162,21 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             <p className="mb-10 text-2xl text-gray-600">
               Is this trial for an adult or youth under 18?
             </p>
-            <div className="grid grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-8">
               <button
                 type="button"
                 onClick={() => send({ type: 'SELECT_AGE_GROUP', ageGroup: 'adult' })}
-                className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-8 py-14 transition-all hover:scale-105 hover:bg-gray-50"
+                className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-6 py-8 transition-all hover:scale-105 hover:bg-gray-50 sm:px-8 sm:py-14"
               >
-                <span className="text-3xl font-bold text-black">Adult (18+)</span>
+                <span className="text-xl font-bold text-black sm:text-2xl md:text-3xl">Adult (18+)</span>
                 <span className="text-lg text-gray-500">Get started</span>
               </button>
               <button
                 type="button"
                 onClick={() => send({ type: 'SELECT_AGE_GROUP', ageGroup: 'youth' })}
-                className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-8 py-14 transition-all hover:scale-105 hover:bg-gray-50"
+                className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-black bg-white px-6 py-8 transition-all hover:scale-105 hover:bg-gray-50 sm:px-8 sm:py-14"
               >
-                <span className="text-3xl font-bold text-black">Youth (Under 18)</span>
+                <span className="text-xl font-bold text-black sm:text-2xl md:text-3xl">Youth (Under 18)</span>
                 <span className="text-lg text-gray-500">Get started</span>
               </button>
             </div>
@@ -187,7 +187,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingYouthParentInfo') || state.matches('validatingYouthParent')) && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Please fill in your information</p>
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
 
               <div>
                 <label className={labelClass} htmlFor="parentFirstName">
@@ -360,7 +360,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
               <div>
                 <label className={labelClass} htmlFor="currentChildFirstName">
                   First Name
@@ -435,7 +435,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {/* ── Youth Step 5: Add Another Child? ── */}
         {state.matches('askingAddAnotherChild') && (
           <div className="w-full max-w-2xl text-center">
-            <div className="rounded-3xl border-2 border-black bg-white p-12">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 sm:p-8 md:p-12">
               <p className="mb-4 text-xl text-gray-600">Would you like to add another child?</p>
 
               {state.context.children.length > 0 && (
@@ -479,7 +479,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingInfo') || state.matches('validatingContact')) && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Please fill in your information</p>
-            <div className="grid grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
 
               <div>
                 <label className={labelClass} htmlFor="firstName">
@@ -750,11 +750,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {/* ── Creating Trial ── */}
         {state.matches('creatingTrial') && (
           <div className="w-full max-w-2xl text-center">
-            <div className="rounded-3xl border-2 border-black bg-white p-16">
+            <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
               <div className="mb-6 flex justify-center">
                 <div className="h-16 w-16 animate-spin rounded-full border-4 border-black border-t-transparent" />
               </div>
-              <h2 className="text-3xl font-bold text-black">Setting up your free trial…</h2>
+              <h2 className="text-xl font-bold text-black sm:text-2xl md:text-3xl">Setting up your free trial…</h2>
               <p className="mt-4 text-xl text-gray-500">This will just take a moment.</p>
             </div>
           </div>
@@ -763,9 +763,9 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {/* ── Success ── */}
         {state.matches('success') && (
           <div className="w-full max-w-2xl text-center">
-            <div className="rounded-3xl border-2 border-black bg-white p-16">
+            <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
               <CheckCircleOutlineIcon sx={{ fontSize: 80, color: '#16a34a' }} className="mb-6" />
-              <h2 className="mb-4 text-4xl font-bold text-black">Welcome to the Dojo!</h2>
+              <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Welcome to the Dojo!</h2>
               <p className="mb-2 text-xl text-gray-600">
                 Your free trial has been set up,
                 {' '}
@@ -798,8 +798,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {/* ── Error ── */}
         {state.matches('error') && (
           <div className="w-full max-w-2xl text-center">
-            <div className="rounded-3xl border-2 border-black bg-white p-16">
-              <h2 className="mb-6 text-4xl font-bold text-black">Something went wrong</h2>
+            <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
+              <h2 className="mb-6 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Something went wrong</h2>
               <p className="mb-8 text-xl text-red-600">
                 {Object.values(state.context.errors).join(' ') || 'Please try again or ask a staff member for help.'}
               </p>
@@ -826,8 +826,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {/* ── Timeout ── */}
         {state.matches('timeout') && (
           <div className="w-full max-w-2xl text-center">
-            <div className="rounded-3xl border-2 border-black bg-white p-16">
-              <h2 className="mb-4 text-4xl font-bold text-black">Session Timeout</h2>
+            <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
+              <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Session Timeout</h2>
               <p className="text-xl text-orange-600">Returning to home screen for security…</p>
             </div>
           </div>

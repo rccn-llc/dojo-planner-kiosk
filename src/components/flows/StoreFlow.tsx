@@ -6,12 +6,13 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import LocalMallOutlinedIcon from '@mui/icons-material/LocalMallOutlined';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
 
 const US_STATES = [
   'AL',
@@ -377,7 +378,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="flex items-center justify-between bg-black p-8">
+      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
         <button
           type="button"
           onClick={handleBack}
@@ -386,7 +387,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           <ArrowBackIcon sx={{ fontSize: 48 }} />
         </button>
 
-        <h1 className="flex-1 text-center text-5xl font-bold text-white">
+        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">
           {headerTitle()}
         </h1>
 
@@ -395,7 +396,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'VIEW_CART' })}
-                className="flex items-center gap-2 rounded-full border-2 border-white px-5 py-2 text-lg font-bold text-white transition-colors hover:bg-white hover:text-black"
+                className="flex items-center gap-2 rounded-full border-2 border-white px-3 py-1.5 text-sm font-bold text-white transition-colors hover:bg-white hover:text-black sm:px-5 sm:py-2 sm:text-lg"
               >
                 <ShoppingCartIcon sx={{ fontSize: 24 }} />
                 Cart
@@ -407,12 +408,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               </button>
             )
           : (
-              <div className="w-24" />
+              <div className="w-12 sm:w-16 md:w-24" />
             )}
       </header>
 
       {/* Main content */}
-      <main className={`flex flex-1 items-start justify-center p-8 ${mainBg}`}>
+      <main className={`flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8 ${mainBg}`}>
 
         {/* ── Browse ─────────────────────────────────────────────────────────── */}
         {state.matches('browsing') && (
@@ -420,7 +421,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
             {state.context.isLoadingProducts
               ? (
                   // Loading skeleton
-                  <div className="grid grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
                     {[1, 2, 3].map(n => (
                       <div key={n} className="animate-pulse rounded-3xl bg-white p-6 shadow-md">
                         <div className="mb-4 aspect-square w-full rounded-2xl bg-gray-300" />
@@ -438,7 +439,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     </div>
                   )
                 : (
-                    <div className="grid grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
                       {state.context.products.map((product: StoreProduct) => (
                         <button
                           type="button"
@@ -468,9 +469,9 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         {/* ── Product detail ──────────────────────────────────────────────────── */}
         {state.matches('viewingProduct') && state.context.selectedProduct && (
           <div className="w-full max-w-5xl">
-            <div className="grid grid-cols-5 gap-8">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-5 md:gap-8">
               {/* Image */}
-              <div className="col-span-3">
+              <div className="md:col-span-3">
                 <div className="relative aspect-square w-full overflow-hidden rounded-3xl bg-gray-100">
                   <ProductImage
                     src={state.context.selectedProduct.images[0]}
@@ -480,13 +481,25 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               </div>
 
               {/* Details */}
-              <div className="col-span-2 flex flex-col gap-6">
+              <div className="flex flex-col gap-6 md:col-span-2">
                 <h2 className="text-3xl font-bold text-black">
                   {state.context.selectedProduct.name}
                 </h2>
 
                 {/* Variant selector */}
-                {state.context.selectedProduct.variants && state.context.selectedProduct.variants.length > 0 && (
+                {state.context.selectedProduct.variants && state.context.selectedProduct.variants.length === 1 && (
+                  <div>
+                    <p className={labelClass}>Option</p>
+                    <p className="text-xl text-black">
+                      {state.context.selectedProduct.variants[0]!.name}
+                      {' '}
+                      —
+                      {' '}
+                      {formatCurrency(state.context.selectedProduct.variants[0]!.price)}
+                    </p>
+                  </div>
+                )}
+                {state.context.selectedProduct.variants && state.context.selectedProduct.variants.length > 1 && (
                   <div>
                     <label className={labelClass} htmlFor="variantSelect">Select Option</label>
                     <div className="relative">
@@ -577,9 +590,21 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         {/* ── Cart ───────────────────────────────────────────────────────────── */}
         {(state.matches('viewingCart') || state.matches('applyingDiscount')) && (
           <div className="w-full max-w-5xl">
-            <div className="grid grid-cols-5 gap-8">
+            {/* Back to catalog */}
+            {cartLength > 0 && (
+              <button
+                type="button"
+                onClick={() => send({ type: 'BACK_TO_BROWSE' })}
+                className="mx-auto mb-6 flex min-h-14 cursor-pointer items-center gap-2 rounded-2xl border-2 border-gray-300 bg-white px-6 py-3 text-lg font-semibold text-black transition-colors hover:border-black hover:bg-gray-50"
+              >
+                <LocalMallOutlinedIcon sx={{ fontSize: 24 }} />
+                Continue Shopping
+              </button>
+            )}
+
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
               {/* Items list */}
-              <div className="col-span-3 rounded-3xl border-2 border-gray-200 bg-white p-6">
+              <div className="rounded-3xl border-2 border-gray-200 bg-white p-6 lg:col-span-3">
                 <h2 className="mb-6 text-2xl font-bold text-black">Confirm cart details</h2>
 
                 {cartLength === 0
@@ -638,7 +663,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               </div>
 
               {/* Pricing summary */}
-              <div className="col-span-2">
+              <div className="lg:col-span-2">
                 <div className="sticky top-4 space-y-4 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
                   {/* Discount code */}
                   <div className="flex gap-2">
@@ -719,9 +744,9 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           || state.matches('validatingCheckout')
         ) && (
           <div className="w-full max-w-6xl">
-            <div className="grid grid-cols-5 gap-8">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
               {/* Left: buyer form */}
-              <div className="col-span-3 space-y-6">
+              <div className="space-y-6 lg:col-span-3">
                 {/* Member search */}
                 <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5">
                   <p className="mb-3 text-base font-semibold tracking-wide text-gray-500 uppercase">
@@ -751,7 +776,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
                 {/* Buyer details */}
                 <p className="text-xl font-semibold text-black">Buyer Details</p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className={labelClass} htmlFor="firstName">
                       First name
@@ -822,7 +847,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   </div>
 
                   {/* Country */}
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <label className={labelClass} htmlFor="country">Country</label>
                     <div className="relative">
                       <select
@@ -840,7 +865,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   </div>
 
                   {/* Address */}
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <label className={labelClass} htmlFor="address">
                       Address line 1
                       <span className="text-red-500">*</span>
@@ -857,7 +882,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       <p className="mt-1 text-base text-red-600">{state.context.errors.address}</p>
                     )}
                   </div>
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <label className={labelClass} htmlFor="addressLine2">Address line 2</label>
                     <input
                       id="addressLine2"
@@ -945,7 +970,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               </div>
 
               {/* Right: payment + order summary */}
-              <div className="col-span-2">
+              <div className="lg:col-span-2">
                 <div className="sticky top-4 space-y-5 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
                   {/* Payment method tabs */}
                   <div>
@@ -1028,7 +1053,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                                 )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div>
                           <label className={labelClass} htmlFor="cardExpiry">Expiry (MM/YY)</label>
                           <input
@@ -1166,11 +1191,23 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
                   {/* Place order */}
                   {(() => {
-                    const isCardReady = state.context.paymentMethod === 'card'
-                      ? (!tokenizationConfig || (iframeLoaded && iframeValid && iframeCvvValid)) && !!state.context.cardholderName && !!state.context.cardExpiry
-                      : !!state.context.achAccountHolder
-                        && state.context.achRoutingNumber.length === 9
-                        && !!state.context.achAccountNumber;
+                    const ctx = state.context;
+                    const isBuyerReady = !!ctx.firstName?.trim()
+                      && !!ctx.lastName?.trim()
+                      && !!ctx.email?.trim()
+                      && isValidEmail(ctx.email)
+                      && !!ctx.phoneNumber?.trim()
+                      && isValidPhoneNumber(ctx.phoneNumber)
+                      && !!ctx.address?.trim()
+                      && !!ctx.city?.trim()
+                      && !!ctx.state?.trim()
+                      && !!ctx.zip?.trim();
+
+                    const isPaymentReady = ctx.paymentMethod === 'card'
+                      ? (!tokenizationConfig || (iframeLoaded && iframeValid && iframeCvvValid)) && !!ctx.cardholderName && !!ctx.cardExpiry
+                      : !!ctx.achAccountHolder
+                        && ctx.achRoutingNumber.length === 9
+                        && !!ctx.achAccountNumber;
 
                     const handlePlaceOrder = async () => {
                       // For card payments with an active iframe, tokenize NOW while
@@ -1205,7 +1242,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                         type="button"
                         onClick={handlePlaceOrder}
                         disabled={
-                          !isCardReady
+                          !isBuyerReady
+                          || !isPaymentReady
                           || state.context.isSubmitting
                           || isTokenizing
                           || state.matches('lookingUpMember')
@@ -1243,7 +1281,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
             {/* Success header */}
             <div className="mb-8 text-center">
               <CheckCircleOutlineIcon sx={{ fontSize: 96 }} className="mb-4 text-black" />
-              <h2 className="mb-2 text-4xl font-bold text-black">Order Placed!</h2>
+              <h2 className="mb-2 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Order Placed!</h2>
               <p className="text-xl text-gray-600">
                 {state.context.firstName
                   ? `Thank you, ${state.context.firstName}! Your order has been placed successfully.`
@@ -1365,8 +1403,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         {/* ── Order failed ────────────────────────────────────────────────────── */}
         {state.matches('orderFailed') && (
           <div className="w-full max-w-2xl py-8 text-center">
-            <div className="rounded-3xl border-2 border-red-200 bg-white p-12">
-              <h2 className="mb-4 text-4xl font-bold text-black">Payment Failed</h2>
+            <div className="rounded-3xl border-2 border-red-200 bg-white p-6 sm:p-8 md:p-12">
+              <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Payment Failed</h2>
               <p className="mb-8 text-xl text-red-600">
                 {state.context.errors?.general || 'There was an issue processing your payment.'}
               </p>

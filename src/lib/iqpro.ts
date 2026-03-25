@@ -3,30 +3,7 @@
  * Mirrors src/libs/IQPro.ts from dojo-planner.
  */
 
-// Module name as a variable so that bundlers (turbopack / webpack) do NOT
-// statically resolve the optional @dojo-planner/iqpro-client package.
-const IQPRO_MODULE = '@dojo-planner/iqpro-client';
-
 // ── Types ─────────────────────────────────────────────────────────────────────
-
-// Minimal shape of the IQPro client used by this service.
-// The actual client is loaded dynamically to avoid bundler errors
-// when the optional @dojo-planner/iqpro-client package is absent.
-interface IQProClientShape {
-  customers: {
-    create: (params: Record<string, unknown>) => Promise<{ customerId: string }>;
-    get: (customerId: string) => Promise<Record<string, unknown>>;
-    createPaymentMethod: (customerId: string, params: Record<string, unknown>) => Promise<{
-      paymentMethodId?: string;
-      customerPaymentMethodId?: string;
-      customerPaymentId?: string;
-    }>;
-  };
-  transactions: {
-    create: (params: Record<string, unknown>) => Promise<{ id: string; status?: string; processorResponseMessage?: string }>;
-  };
-  post: <T = Record<string, unknown>>(path: string, body?: unknown) => Promise<T>;
-}
 
 export interface TokenizationIframeConfig {
   origin: string;
@@ -151,30 +128,53 @@ export async function getTokenizationConfig(clientOrigin: string): Promise<Token
   };
 }
 
-// ── IQPro client ──────────────────────────────────────────────────────────────
+// ── Direct API helpers (no SDK needed) ────────────────────────────────────────
 
-let iqproClient: IQProClientShape | null = null;
+/**
+ * Make an authenticated POST request to the IQPro gateway API.
+ */
+export async function iqproPost<T = Record<string, unknown>>(
+  path: string,
+  body: unknown,
+): Promise<T> {
+  const token = await getOAuthToken();
+  const baseUrl = process.env.IQPRO_BASE_URL!;
 
-export async function getIQProClient(): Promise<IQProClientShape | null> {
-  if (!isIQProConfigured()) {
-    return null;
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`IQPro API ${path} failed: ${res.status} ${errorBody}`);
   }
 
-  if (!iqproClient) {
-    const mod = await import(/* webpackIgnore: true */ IQPRO_MODULE);
-    const IQProClient = mod.IQProClient;
-    const client = new IQProClient({
-      clientId: process.env.IQPRO_CLIENT_ID!,
-      clientSecret: process.env.IQPRO_CLIENT_SECRET!,
-      scope: process.env.IQPRO_SCOPE!,
-      oauthUrl: process.env.IQPRO_OAUTH_URL!,
-      baseUrl: process.env.IQPRO_BASE_URL!,
-    });
-    (client as { setGatewayContext: (id: string) => void }).setGatewayContext(process.env.IQPRO_GATEWAY_ID!);
-    iqproClient = client as IQProClientShape;
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Make an authenticated GET request to the IQPro gateway API.
+ */
+export async function iqproGet<T = Record<string, unknown>>(
+  path: string,
+): Promise<T> {
+  const token = await getOAuthToken();
+  const baseUrl = process.env.IQPRO_BASE_URL!;
+
+  const res = await fetch(`${baseUrl}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    throw new Error(`IQPro API GET ${path} failed: ${res.status}`);
   }
 
-  return iqproClient;
+  return res.json() as Promise<T>;
 }
 
 // ── ACH tokenization ──────────────────────────────────────────────────────────

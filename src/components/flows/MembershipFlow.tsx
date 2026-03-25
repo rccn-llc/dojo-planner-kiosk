@@ -1,11 +1,11 @@
 'use client';
 
-import type { MembershipPlan } from '../../shared/types';
+import type { MembershipPlan } from '../../lib/types';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 const US_STATES = [
   'AL',
@@ -173,30 +173,30 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="flex items-center justify-between bg-black p-8">
+      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
         <button type="button" onClick={onBack} className="cursor-pointer text-white transition-colors hover:text-gray-300">
           <ArrowBackIcon sx={{ fontSize: 48 }} />
         </button>
-        <h1 className="flex-1 text-center text-5xl font-bold text-white">{headerTitle()}</h1>
+        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">{headerTitle()}</h1>
         <div className="w-12" />
       </header>
 
       {/* Main content */}
-      <main className="flex flex-1 items-start justify-center p-8">
+      <main className="flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8">
 
         {/* ── Step 1: Program selection ───────────────────────────────────────── */}
         {state.matches('selectingProgram') && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Choose the program you'd like to join</p>
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
               {state.context.programs.map(program => (
                 <button
                   type="button"
                   key={program.id}
                   onClick={() => send({ type: 'SELECT_PROGRAM', program })}
-                  className="cursor-pointer rounded-3xl border-2 border-black bg-white p-10 text-left transition-all hover:scale-105 hover:bg-gray-50"
+                  className="cursor-pointer rounded-3xl border-2 border-black bg-white p-6 text-left transition-all hover:scale-105 hover:bg-gray-50 sm:p-8 md:p-10"
                 >
-                  <h2 className="text-3xl font-bold text-black">{program.name}</h2>
+                  <h2 className="text-xl font-bold text-black sm:text-2xl md:text-3xl">{program.name}</h2>
                   <p className="mt-3 text-lg text-gray-500">{program.description}</p>
                 </button>
               ))}
@@ -209,7 +209,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
           <div className="w-full max-w-4xl">
             <p className="mb-6 text-center text-xl text-gray-500">Choose a plan that's right for you</p>
 
-            <div className="mb-4 grid grid-cols-2 gap-6">
+            <div className="mb-4 grid grid-cols-1 gap-6 sm:grid-cols-2">
               {visiblePlans.map(plan => (
                 <button
                   type="button"
@@ -351,10 +351,10 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {/* ── Step 4: Member info + order summary ─────────────────────────────── */}
         {(state.matches('collectingInfo') || state.matches('validatingContact') || state.matches('lookingUpMember')) && (
           <div className="w-full max-w-6xl">
-            <div className="grid grid-cols-5 gap-8">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
 
               {/* Left: form */}
-              <div className="col-span-3">
+              <div className="lg:col-span-3">
                 {/* Member lookup */}
                 <div className="mb-8 rounded-2xl border border-gray-200 bg-gray-50 p-5">
                   <p className="mb-3 text-base font-semibold tracking-wide text-gray-500 uppercase">
@@ -382,7 +382,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
                 {/* Member info form */}
                 <p className="mb-4 text-lg font-semibold text-black">Member Information</p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className={labelClass} htmlFor="firstName">
                       First Name
@@ -520,7 +520,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               {/* end left col */}
 
               {/* Right: order summary */}
-              <div className="col-span-2">
+              <div className="lg:col-span-2">
                 {state.context.selectedPlan && (
                   <div className="sticky top-4 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
                     <p className="mb-4 text-base font-semibold tracking-wide text-gray-500 uppercase">Order Summary</p>
@@ -605,7 +605,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {state.matches('success') && (
           <div className="w-full max-w-2xl py-8 text-center">
             <CheckCircleOutlineIcon sx={{ fontSize: 96 }} className="mb-6 text-black" />
-            <h2 className="mb-4 text-4xl font-bold text-black">Enrollment Successful!</h2>
+            <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Enrollment Successful!</h2>
             <p className="mb-2 text-xl text-gray-600">
               Welcome,
               {' '}
@@ -651,8 +651,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {/* ── Payment failed ──────────────────────────────────────────────────── */}
         {state.matches('paymentFailed') && (
           <div className="w-full max-w-2xl py-8 text-center">
-            <div className="rounded-3xl border-2 border-red-200 bg-white p-12">
-              <h2 className="mb-4 text-4xl font-bold text-black">Payment Failed</h2>
+            <div className="rounded-3xl border-2 border-red-200 bg-white p-6 sm:p-8 md:p-12">
+              <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Payment Failed</h2>
               <p className="mb-8 text-xl text-red-600">
                 {Object.values(state.context.errors).join(' ') || 'There was an issue processing your payment.'}
               </p>
@@ -681,8 +681,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {/* ── Error ───────────────────────────────────────────────────────────── */}
         {state.matches('error') && (
           <div className="w-full max-w-2xl py-8 text-center">
-            <div className="rounded-3xl border-2 border-red-200 bg-white p-12">
-              <h2 className="mb-4 text-4xl font-bold text-black">Something Went Wrong</h2>
+            <div className="rounded-3xl border-2 border-red-200 bg-white p-6 sm:p-8 md:p-12">
+              <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Something Went Wrong</h2>
               <p className="mb-8 text-xl text-red-600">
                 {Object.values(state.context.errors).join(' ') || 'Please try again or ask a staff member for help.'}
               </p>
@@ -711,7 +711,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {/* ── Timeout ─────────────────────────────────────────────────────────── */}
         {state.matches('timeout') && (
           <div className="w-full max-w-xl py-16 text-center">
-            <h2 className="mb-4 text-4xl font-bold text-black">Session Timeout</h2>
+            <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Session Timeout</h2>
             <p className="mb-4 text-xl text-orange-600">For security, your session has timed out.</p>
             <p className="text-lg text-gray-500">Returning to home screen…</p>
           </div>

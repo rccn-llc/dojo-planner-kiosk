@@ -1,6 +1,6 @@
 import type { CheckinContext, CheckinEvent } from './types';
 import { assign, createMachine } from 'xstate';
-import { generateSessionId, isValidPhoneNumber } from '../shared/utils';
+import { generateSessionId, isValidPhoneNumber } from '../lib/utils';
 
 // Member check-in state machine
 export const checkinMachine = createMachine({

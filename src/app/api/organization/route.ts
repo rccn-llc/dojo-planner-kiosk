@@ -1,0 +1,27 @@
+import { NextResponse } from 'next/server';
+
+export async function GET() {
+  const orgId = process.env.ORGANIZATION_ID;
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+
+  if (!orgId || !clerkSecretKey) {
+    return NextResponse.json({ name: null }, { status: 200 });
+  }
+
+  try {
+    const res = await fetch(`https://api.clerk.com/v1/organizations/${orgId}`, {
+      headers: { Authorization: `Bearer ${clerkSecretKey}` },
+      next: { revalidate: 3600 },
+    });
+
+    if (!res.ok) {
+      return NextResponse.json({ name: null }, { status: 200 });
+    }
+
+    const org = await res.json() as { name: string };
+    return NextResponse.json({ name: org.name });
+  }
+  catch {
+    return NextResponse.json({ name: null }, { status: 200 });
+  }
+}

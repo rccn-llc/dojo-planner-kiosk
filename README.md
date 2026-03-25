@@ -122,8 +122,8 @@ src/
 │   └── useKioskMachines.ts # React hooks for XState machines
 ├── services/
 │   └── audit.ts           # Audit logging service
-└── shared/
-    ├── types.ts           # Shared type definitions
+└── lib/
+    ├── types.ts           # Kiosk type definitions
     └── utils.ts           # Phone formatting, validation
 ```
 
@@ -131,8 +131,8 @@ src/
 
 ### Prerequisites
 - Node.js 18+
-- Access to shared Dojo Planner database
-- Clerk and Stripe API keys
+- PostgreSQL database
+- IQPro payment API credentials (for payment processing)
 
 ### Development Setup
 
@@ -171,19 +171,6 @@ npm run dev
 - Real authentication (currently mocked)
 - Database persistence
 
-## Shared Libraries Strategy
-
-This kiosk app shares core services and database schema with the main Dojo Planner application:
-
-### Option 1: Git Submodule (Recommended)
-```bash
-git submodule add ../dojo-planner shared/dojo-planner
-```
-
-### Option 2: Direct File Copying
-Copy essential services from the main app to `src/shared/services/`
-
-See `claude.md` for detailed implementation approaches.
 
 ## Deployment
 

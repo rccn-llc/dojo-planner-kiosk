@@ -3,7 +3,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useState } from 'react';
 import { useMemberAreaMachine } from '../../hooks/useKioskMachines';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../shared/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 
 interface MemberAreaFlowProps {
   onComplete: () => void;
@@ -25,7 +25,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="flex items-center justify-between bg-black p-8">
+      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
         <button
           type="button"
           onClick={onBack}
@@ -33,7 +33,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
         >
           <ArrowBackIcon sx={{ fontSize: 48 }} />
         </button>
-        <h1 className="flex-1 text-center text-5xl font-bold text-white">
+        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">
           Member Area
         </h1>
         <div className="w-12" />
@@ -42,13 +42,13 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
       </header>
 
       {/* Main Content */}
-      <main className="flex flex-1 items-center justify-center p-8">
+      <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
         <div className="w-full max-w-4xl">
 
           {/* Member Login State */}
           {state.matches('selectingProgram') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-12">
-              <h2 className="mb-2 text-center text-4xl font-bold text-black">
+            <div className="rounded-3xl border-2 border-black bg-white p-6 sm:p-8 md:p-12">
+              <h2 className="mb-2 text-center text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                 Member Login
               </h2>
               <p className="mb-8 text-center text-xl text-gray-600">
@@ -86,7 +86,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                   type="button"
                   onClick={() => send({ type: 'SELECT_PROGRAM', program: { id: 'login', name: 'Login', description: 'Member Login', price: 0, isActive: true } })}
                   disabled={sanitizePhoneInput(phoneInput).length !== 10 || !passwordInput}
-                  className="min-h-16 w-full cursor-pointer rounded-2xl bg-black px-8 py-4 text-2xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  className="min-h-16 w-full cursor-pointer rounded-2xl bg-black px-8 py-4 text-lg font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400 sm:text-xl md:text-2xl"
                 >
                   Continue
                 </button>
@@ -96,9 +96,9 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
 
           {/* Member Dashboard */}
           {state.matches('selectingPlan') && (
-            <div className="mx-auto max-w-6xl rounded-3xl bg-white p-8">
+            <div className="mx-auto max-w-6xl rounded-3xl bg-white p-4 sm:p-6 md:p-8">
               <div className="mb-6 flex items-center justify-between">
-                <h2 className="text-4xl font-bold text-black">John Smith</h2>
+                <h2 className="text-2xl font-bold text-black sm:text-3xl md:text-4xl">John Smith</h2>
                 <button
                   type="button"
                   onClick={onBack}
@@ -110,17 +110,17 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
 
               {/* Tabs */}
               <div className="mb-8 flex border-b-2 border-gray-200">
-                <button type="button" className="cursor-pointer border-b-4 border-black px-6 py-3 text-lg font-bold text-black">
+                <button type="button" className="cursor-pointer border-b-4 border-black px-3 py-2 text-lg font-bold text-black sm:px-4 sm:py-3 md:px-6">
                   Account
                 </button>
-                <button type="button" className="cursor-pointer px-6 py-3 text-lg font-medium text-gray-500 hover:text-black">
+                <button type="button" className="cursor-pointer px-3 py-2 text-lg font-medium text-gray-500 hover:text-black sm:px-4 sm:py-3 md:px-6">
                   Billing
                 </button>
               </div>
 
               {/* Family Members & Memberships */}
               <div>
-                <h3 className="mb-6 text-2xl font-bold text-black">Family Members & Memberships</h3>
+                <h3 className="mb-6 text-xl font-bold text-black sm:text-2xl">Family Members & Memberships</h3>
 
                 <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                   {/* John Smith's Membership */}
