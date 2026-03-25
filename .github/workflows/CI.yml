@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        node-version: [22.x, 24.x]
+        # See supported Node.js release schedule at https://nodejs.org/en/about/releases/
+
+    name: Build with ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js environment
+        uses: ./.github/actions/setup-project
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Restore or cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: |
+            .next/cache
+          # Generate a new cache whenever packages or source files change.
+          key: nextjs-${{ matrix.node-version }}-${{ hashFiles('**/package-lock.json') }}-${{ hashFiles('src/**') }}
+
+      - name: Build Next.js
+        run: npm run build
+
+      - if: matrix.node-version == '22.x' && success()
+        name: Cache Next.js build output
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .next
+          key: nextjs-build-${{ matrix.node-version }}-${{ github.sha }}
+
+  static:
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    name: Run static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Retrieve Git history, needed to verify commits
+          submodules: recursive
+
+      - name: Set up Node.js environment
+        uses: ./.github/actions/setup-project
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - if: github.event_name == 'pull_request'
+        name: Validate all commits from PR
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
+      - name: Linter
+        run: npm run lint
+
+      - name: Type checking
+        run: npm run check:types
+
+      - name: Check dependencies
+        run: npm run check:deps
+
+      - name: Security audit
+        # Audit runs but doesn't fail CI due to unfixable transitive deps
+        run: npm audit --audit-level=critical || true
+
+  unit:
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    name: Run unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js environment
+        uses: ./.github/actions/setup-project
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Run unit tests
+        uses: docker://mcr.microsoft.com/playwright:v1.58.0-noble
+        with:
+          args: npx vitest --coverage --passWithNoTests
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  e2e:
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    name: Run E2E tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [build]
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js environment
+        uses: ./.github/actions/setup-project
+        with:
+          node-version: ${{ matrix.node-version }}
+          restore-nextjs-cache: true
+
+      - name: Run E2E tests
+        uses: docker://mcr.microsoft.com/playwright:v1.58.0-noble
+        with:
+          args: npx playwright test --pass-with-no-tests
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: test-results
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
