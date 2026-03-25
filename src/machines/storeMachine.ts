@@ -165,7 +165,7 @@ export const storeMachine = createMachine({
           target: 'viewingProduct',
           actions: assign(({ event }) => ({
             selectedProduct: event.product,
-            selectedVariantId: '',
+            selectedVariantId: event.product.variants?.length === 1 ? event.product.variants[0]!.id : '',
             selectedQuantity: 1,
             errors: {} as Record<string, string>,
           })),
