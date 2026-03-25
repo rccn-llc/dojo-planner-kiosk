@@ -23,5 +23,7 @@ export const isValidEmail = (email: string): boolean => {
 };
 
 export const generateSessionId = (): string => {
-  return `kiosk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `kiosk_${Date.now()}_${hex}`;
 };
