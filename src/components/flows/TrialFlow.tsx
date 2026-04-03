@@ -95,6 +95,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       .catch(() => {
         // Non-fatal — proceed without a pre-selected plan
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
   // Load waiver content when entering collectingWaiver (once per session)
@@ -117,6 +118,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       .catch(() => {
         // Non-fatal — waiver text falls back to hardcoded content
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
   // Submit trial when entering creatingTrial
@@ -195,6 +197,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
         send({ type: 'TRIAL_FAILED', error: message });
       });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
   const handleInputChange = (field: string, value: string) => {
