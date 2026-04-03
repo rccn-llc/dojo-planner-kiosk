@@ -29,6 +29,7 @@ export interface TrialContext {
   addressLine2: string;
   city: string;
   state: string;
+  zip: string;
 
   // Youth - Parent/Guardian info
   parentFirstName: string;
@@ -39,6 +40,7 @@ export interface TrialContext {
   parentAddressLine2: string;
   parentCity: string;
   parentState: string;
+  parentZip: string;
 
   // Youth - current child being entered
   currentChildFirstName: string;
@@ -54,10 +56,17 @@ export interface TrialContext {
   // Program selection
   selectedProgram: Program | null;
   availablePrograms: Program[];
+  selectedMembershipPlanId: string;
 
   // Waiver
   waiverAgreed: boolean;
   signature: string;
+  waiverContent: string;
+  waiverTemplateId: string;
+  waiverTemplateVersion: number;
+
+  // Result
+  memberId: string;
 
   // Form validation and state
   errors: Record<string, string>;
@@ -124,6 +133,10 @@ export type TrialEvent
     | { type: 'FINISH_YOUTH' }
     | { type: 'SUBMIT_WAIVER' }
     | { type: 'AGREE_WAIVER'; agreed: boolean }
+    | { type: 'PROGRAMS_LOADED'; selectedMembershipPlanId: string }
+    | { type: 'WAIVER_LOADED'; id: string; version: number; content: string }
+    | { type: 'TRIAL_SUCCESS'; memberId: string }
+    | { type: 'TRIAL_FAILED'; error: string }
     | { type: 'TRY_AGAIN' }
     | { type: 'BACK' }
     | { type: 'TIMEOUT' }

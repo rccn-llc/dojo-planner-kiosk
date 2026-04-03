@@ -2,13 +2,16 @@
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import { useEffect, useRef } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
+import { StepIndicator } from '../StepIndicator';
 
 interface TrialFlowProps {
   onComplete: () => void;
   onBack: () => void;
-  onCheckIn?: () => void;
+  onCheckIn?: (memberId: string) => void;
 }
 
 const US_STATES = [
@@ -64,21 +67,138 @@ const US_STATES = [
   'WY',
 ];
 
-function StepIndicator({ current, total }: { current: number; total: number }) {
-  return (
-    <div className="mt-6 flex items-center justify-center gap-3">
-      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
-        <div
-          key={stepKey}
-          className={`h-3 w-8 rounded-full transition-all ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
-        />
-      ))}
-    </div>
-  );
-}
-
 export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const [state, send] = useTrialMachine();
+
+  // Track session IDs so effects re-run on each new session but not on re-renders
+  const programsLoadedRef = useRef<string>('');
+  const waiverLoadedRef = useRef<string>('');
+  const processingRef = useRef(false);
+
+  // Load programs when entering selectingAge (re-fetches on each new session)
+  useEffect(() => {
+    if (!state.matches('selectingAge')) {
+      return;
+    }
+    if (programsLoadedRef.current === state.context.sessionId) {
+      return;
+    }
+    programsLoadedRef.current = state.context.sessionId;
+    processingRef.current = false;
+
+    fetch('/api/trial/programs')
+      .then(res => res.json())
+      .then((data: { programs: Array<{ id: string; trialPlans: Array<{ id: string }> }> }) => {
+        const firstPlan = data.programs?.[0]?.trialPlans?.[0];
+        send({ type: 'PROGRAMS_LOADED', selectedMembershipPlanId: firstPlan?.id ?? '' });
+      })
+      .catch(() => {
+        // Non-fatal — proceed without a pre-selected plan
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Load waiver content when entering collectingWaiver (once per session)
+  useEffect(() => {
+    if (!state.matches('collectingWaiver')) {
+      return;
+    }
+    if (waiverLoadedRef.current === state.context.sessionId) {
+      return;
+    }
+    waiverLoadedRef.current = state.context.sessionId;
+
+    fetch('/api/trial/waiver')
+      .then(res => res.json())
+      .then((data: { id: string; version: number; content: string }) => {
+        if (data.id) {
+          send({ type: 'WAIVER_LOADED', id: data.id, version: data.version, content: data.content });
+        }
+      })
+      .catch(() => {
+        // Non-fatal — waiver text falls back to hardcoded content
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Submit trial when entering creatingTrial
+  useEffect(() => {
+    if (!state.matches('creatingTrial')) {
+      return;
+    }
+    if (processingRef.current) {
+      return;
+    }
+    processingRef.current = true;
+
+    const ctx = state.context;
+    const isYouth = ctx.ageGroup === 'youth';
+
+    const body = isYouth
+      ? {
+          ageGroup: 'youth' as const,
+          member: {
+            firstName: ctx.parentFirstName,
+            lastName: ctx.parentLastName,
+            email: ctx.parentEmail,
+            phone: ctx.parentPhone,
+            address: ctx.parentAddress,
+            addressLine2: ctx.parentAddressLine2,
+            city: ctx.parentCity,
+            state: ctx.parentState,
+            zip: ctx.parentZip,
+          },
+          children: ctx.children,
+          waiver: {
+            templateId: ctx.waiverTemplateId,
+            templateVersion: ctx.waiverTemplateVersion,
+            renderedContent: ctx.waiverContent,
+            signature: ctx.signature,
+          },
+          membershipPlanId: ctx.selectedMembershipPlanId,
+        }
+      : {
+          ageGroup: 'adult' as const,
+          member: {
+            firstName: ctx.firstName,
+            lastName: ctx.lastName,
+            email: ctx.email,
+            phone: ctx.phoneNumber,
+            address: ctx.address,
+            addressLine2: ctx.addressLine2,
+            city: ctx.city,
+            state: ctx.state,
+            zip: ctx.zip,
+          },
+          waiver: {
+            templateId: ctx.waiverTemplateId,
+            templateVersion: ctx.waiverTemplateVersion,
+            renderedContent: ctx.waiverContent,
+            signature: ctx.signature,
+          },
+          membershipPlanId: ctx.selectedMembershipPlanId,
+        };
+
+    fetch('/api/trial/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          return res.json().then(d => Promise.reject(new Error(d.error ?? 'Submission failed')));
+        }
+        return res.json();
+      })
+      .then((data: { memberId: string }) => {
+        send({ type: 'TRIAL_SUCCESS', memberId: data.memberId });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+        send({ type: 'TRIAL_FAILED', error: message });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
 
   const handleInputChange = (field: string, value: string) => {
     if (field === 'phoneNumber') {
@@ -91,8 +211,6 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       send({ type: 'UPDATE_FIELD', field, value });
     }
   };
-
-  // No auto-redirect on success — user chooses next action
 
   const inputClass = (field: string) =>
     `w-full text-xl p-4 bg-white border-2 rounded-xl text-black placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-gray-400 focus:border-gray-600 ${
@@ -139,20 +257,10 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6">
-        <button
-          type="button"
-          onClick={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
-          className="cursor-pointer text-white transition-colors hover:text-gray-300"
-        >
-          <ArrowBackIcon sx={{ fontSize: 40 }} />
-        </button>
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-4xl">
-          {headerTitle()}
-        </h1>
-        <div className="w-10" />
-      </header>
+      <KioskFlowHeader
+        title={headerTitle()}
+        onBack={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
+      />
 
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
 
@@ -312,6 +420,23 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                   {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 {state.context.errors?.parentState && <p className="mt-1 text-base text-red-600">{state.context.errors.parentState}</p>}
+              </div>
+
+              <div>
+                <label className={labelClass} htmlFor="parentZip">
+                  Zip Code
+                  <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="parentZip"
+                  type="text"
+                  inputMode="numeric"
+                  value={state.context.parentZip || ''}
+                  onChange={e => handleInputChange('parentZip', e.target.value)}
+                  className={inputClass('parentZip')}
+                  placeholder="12345"
+                />
+                {state.context.errors?.parentZip && <p className="mt-1 text-base text-red-600">{state.context.errors.parentZip}</p>}
               </div>
 
             </div>
@@ -622,6 +747,25 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 )}
               </div>
 
+              <div>
+                <label className={labelClass} htmlFor="zip">
+                  Zip Code
+                  <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="zip"
+                  type="text"
+                  inputMode="numeric"
+                  value={state.context.zip || ''}
+                  onChange={e => handleInputChange('zip', e.target.value)}
+                  className={inputClass('zip')}
+                  placeholder="12345"
+                />
+                {state.context.errors?.zip && (
+                  <p className="mt-1 text-base text-red-600">{state.context.errors.zip}</p>
+                )}
+              </div>
+
             </div>
 
             <div className="mt-8 flex items-center justify-between">
@@ -653,21 +797,15 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             <p className="mb-6 text-center text-xl text-gray-500">Please read and sign the forms below</p>
 
             <div className="mb-6 max-h-72 overflow-y-auto rounded-2xl border-2 border-gray-300 bg-gray-50 p-8 text-base leading-relaxed text-gray-800">
-              <h3 className="mb-3 text-xl font-bold text-black">Acknowledgment of Risks</h3>
-              <p className="mb-4">
-                I understand that martial arts training involves physical activity that carries inherent risks of injury. These risks include, but are not limited to, bruises, sprains, strains, fractures, and in rare cases more serious injuries. I voluntarily choose to participate with full knowledge of these risks.
-              </p>
-              <h3 className="mb-3 text-xl font-bold text-black">Assumption of Risks</h3>
-              <p className="mb-4">
-                I knowingly and voluntarily assume all risks associated with participation in martial arts classes, seminars, and related activities offered by this dojo, whether or not such risks are presently known to me.
-              </p>
-              <h3 className="mb-3 text-xl font-bold text-black">Release and Waiver of Liability</h3>
-              <p className="mb-4">
-                In consideration of being permitted to participate in dojo activities, I hereby release and discharge the dojo, its owners, instructors, and staff from any and all claims, demands, damages, rights of action, or causes of action arising from my participation. This release applies to injuries sustained during training, warm-up, or any activity on the premises.
-              </p>
-              <p className="text-sm text-gray-600">
-                This agreement shall be binding upon me, my heirs, executors, administrators, and assigns.
-              </p>
+              {state.context.waiverContent
+                ? (
+                    <div className="whitespace-pre-wrap">{state.context.waiverContent}</div>
+                  )
+                : (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="h-8 w-8 animate-spin rounded-full border-4 border-black border-t-transparent" />
+                    </div>
+                  )}
             </div>
 
             <div
@@ -737,7 +875,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_WAIVER' })}
-                disabled={state.context.isSubmitting}
+                disabled={state.context.isSubmitting || !state.context.waiverTemplateId}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
               >
                 Continue Signup →
@@ -785,7 +923,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => onCheckIn?.()}
+                  onClick={() => onCheckIn?.(state.context.memberId)}
                   className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
                   Check In Now

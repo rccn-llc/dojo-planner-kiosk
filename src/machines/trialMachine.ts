@@ -37,6 +37,9 @@ function validateContactInfo(context: TrialContext): Record<string, string> {
   if (!context.state?.trim()) {
     errors.state = 'State is required';
   }
+  if (!context.zip?.trim()) {
+    errors.zip = 'Zip code is required';
+  }
 
   return errors;
 }
@@ -74,6 +77,9 @@ function validateYouthParent(context: TrialContext): Record<string, string> {
   }
   if (!context.parentState?.trim()) {
     errors.parentState = 'State is required';
+  }
+  if (!context.parentZip?.trim()) {
+    errors.parentZip = 'Zip code is required';
   }
 
   return errors;
@@ -167,6 +173,7 @@ const emptyContext: TrialContext = {
   addressLine2: '',
   city: '',
   state: '',
+  zip: '',
   parentFirstName: '',
   parentLastName: '',
   parentEmail: '',
@@ -175,6 +182,7 @@ const emptyContext: TrialContext = {
   parentAddressLine2: '',
   parentCity: '',
   parentState: '',
+  parentZip: '',
   currentChildFirstName: '',
   currentChildLastName: '',
   currentChildDateOfBirth: '',
@@ -182,8 +190,13 @@ const emptyContext: TrialContext = {
   isAddingAdditionalChild: false,
   selectedProgram: null,
   availablePrograms: [],
+  selectedMembershipPlanId: '',
   waiverAgreed: false,
   signature: '',
+  waiverContent: '',
+  waiverTemplateId: '',
+  waiverTemplateVersion: 0,
+  memberId: '',
   errors: {},
   isSubmitting: false,
   sessionId: '',
@@ -212,6 +225,11 @@ export const trialMachine = createMachine({
       }),
 
       on: {
+        PROGRAMS_LOADED: {
+          actions: assign(({ event }) => ({
+            selectedMembershipPlanId: event.selectedMembershipPlanId,
+          })),
+        },
         SELECT_AGE_GROUP: [
           {
             target: 'collectingInfo',
@@ -396,6 +414,13 @@ export const trialMachine = createMachine({
       entry: assign({ errors: {} as Record<string, string> }),
 
       on: {
+        WAIVER_LOADED: {
+          actions: assign(({ event }) => ({
+            waiverContent: event.content,
+            waiverTemplateId: event.id,
+            waiverTemplateVersion: event.version,
+          })),
+        },
         UPDATE_FIELD: {
           actions: assign(({ event, context }) => {
             const { field, value } = event;
@@ -469,14 +494,21 @@ export const trialMachine = createMachine({
     creatingTrial: {
       entry: assign({ isSubmitting: true }),
 
-      after: {
-        2000: {
-          target: 'success',
-          actions: assign({ isSubmitting: false }),
-        },
-      },
-
       on: {
+        TRIAL_SUCCESS: {
+          target: 'success',
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            memberId: event.memberId,
+          })),
+        },
+        TRIAL_FAILED: {
+          target: 'error',
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            errors: { general: event.error },
+          })),
+        },
         TIMEOUT: 'timeout',
       },
     },
@@ -498,7 +530,10 @@ export const trialMachine = createMachine({
       entry: assign({ isSubmitting: false }),
 
       on: {
-        TRY_AGAIN: 'collectingInfo',
+        TRY_AGAIN: [
+          { target: 'collectingYouthParentInfo', guard: 'isYouthFlow' },
+          { target: 'collectingInfo' },
+        ],
         RESET: 'selectingAge',
       },
     },
