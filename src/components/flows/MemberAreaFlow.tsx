@@ -1,9 +1,9 @@
 'use client';
 
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { useState } from 'react';
 import { useMemberAreaMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
 
 interface MemberAreaFlowProps {
   onComplete: () => void;
@@ -24,22 +24,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
-        <button
-          type="button"
-          onClick={onBack}
-          className="cursor-pointer text-white transition-colors hover:text-gray-300"
-        >
-          <ArrowBackIcon sx={{ fontSize: 48 }} />
-        </button>
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">
-          Member Area
-        </h1>
-        <div className="w-12" />
-        {' '}
-        {/* Spacer */}
-      </header>
+      <KioskFlowHeader title="Member Area" onBack={onBack} />
 
       {/* Main Content */}
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">

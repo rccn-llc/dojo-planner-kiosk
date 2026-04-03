@@ -6,6 +6,8 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
+import { StepIndicator } from '../StepIndicator';
 
 const US_STATES = [
   'AL',
@@ -59,19 +61,6 @@ const US_STATES = [
   'WI',
   'WY',
 ];
-
-function StepIndicator({ current, total }: { current: number; total: number }) {
-  return (
-    <div className="mt-8 flex justify-center gap-2">
-      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
-        <div
-          key={stepKey}
-          className={`h-2 w-8 rounded-full transition-colors ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
-        />
-      ))}
-    </div>
-  );
-}
 
 function formatPlanPrice(plan: MembershipPlan): string {
   const formatted = plan.price.toLocaleString();
@@ -172,14 +161,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
-        <button type="button" onClick={onBack} className="cursor-pointer text-white transition-colors hover:text-gray-300">
-          <ArrowBackIcon sx={{ fontSize: 48 }} />
-        </button>
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">{headerTitle()}</h1>
-        <div className="w-12" />
-      </header>
+      <KioskFlowHeader title={headerTitle()} onBack={onBack} />
 
       {/* Main content */}
       <main className="flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8">

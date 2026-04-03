@@ -1,5 +1,7 @@
 import antfu from '@antfu/eslint-config';
+
 import jsxA11y from 'eslint-plugin-jsx-a11y';
+// For more info, see https://github.com/storybookjs/eslint-plugin-storybook#configuration-flat-config-format
 import tailwind from 'eslint-plugin-tailwindcss';
 
 export default antfu(
