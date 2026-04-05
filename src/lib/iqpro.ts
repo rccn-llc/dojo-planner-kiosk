@@ -177,6 +177,54 @@ export async function iqproGet<T = Record<string, unknown>>(
   return res.json() as Promise<T>;
 }
 
+// ── Gateway processors ───────────────────────────────────────────────────────
+
+interface GatewayProcessors {
+  cardProcessorId: string | null;
+  achProcessorId: string | null;
+}
+
+let cachedProcessors: GatewayProcessors | null = null;
+
+export async function getGatewayProcessors(): Promise<GatewayProcessors> {
+  if (cachedProcessors) {
+    return cachedProcessors;
+  }
+  if (!isIQProConfigured()) {
+    return { cardProcessorId: null, achProcessorId: null };
+  }
+
+  const token = await getOAuthToken();
+  const baseUrl = process.env.IQPRO_BASE_URL!;
+  const gatewayId = process.env.IQPRO_GATEWAY_ID!;
+
+  const res = await fetch(`${baseUrl}/api/gateway/${gatewayId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gateway config request failed: ${res.status}`);
+  }
+
+  const json = await res.json() as Record<string, unknown>;
+  const data = json?.data as Record<string, unknown> | undefined;
+  const processors = (data?.processors ?? []) as Array<{
+    processorId: string;
+    isDefaultCard: boolean;
+    isDefaultAch: boolean;
+  }>;
+
+  const defaultCard = processors.find(p => p.isDefaultCard);
+  const defaultAch = processors.find(p => p.isDefaultAch);
+
+  cachedProcessors = {
+    cardProcessorId: defaultCard?.processorId ?? null,
+    achProcessorId: defaultAch?.processorId ?? null,
+  };
+
+  return cachedProcessors;
+}
+
 // ── ACH tokenization ──────────────────────────────────────────────────────────
 
 export async function tokenizeAch(params: TokenizeAchParams): Promise<TokenizeAchResult> {

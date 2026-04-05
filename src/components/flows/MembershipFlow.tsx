@@ -1,11 +1,21 @@
 'use client';
 
+import type { TokenizationIframeConfig } from '../../lib/iqpro';
 import type { MembershipPlan } from '../../lib/types';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useEffect, useState } from 'react';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { useEffect, useRef, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
+import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
+import { SignatureCapture } from '../SignatureCapture';
+import { StepIndicator } from '../StepIndicator';
+import { TouchDatePicker } from '../TouchDatePicker';
+
+const TOKENEX_CARD_ID = 'membership-tokenex-card';
+const TOKENEX_CVV_ID = 'membership-tokenex-cvv';
 
 const US_STATES = [
   'AL',
@@ -60,19 +70,6 @@ const US_STATES = [
   'WY',
 ];
 
-function StepIndicator({ current, total }: { current: number; total: number }) {
-  return (
-    <div className="mt-8 flex justify-center gap-2">
-      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
-        <div
-          key={stepKey}
-          className={`h-2 w-8 rounded-full transition-colors ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
-        />
-      ))}
-    </div>
-  );
-}
-
 function formatPlanPrice(plan: MembershipPlan): string {
   const formatted = plan.price.toLocaleString();
   return plan.interval === 'yearly' ? `$${formatted}/yr` : `$${formatted}/mo`;
@@ -98,8 +95,154 @@ interface MembershipFlowProps {
 export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
   const [planPage, setPlanPage] = useState(0);
+  const [successCountdown, setSuccessCountdown] = useState(60);
 
-  const PLANS_PER_PAGE = 2;
+  // Determine if member is a minor
+  const memberIsMinor = (() => {
+    const dob = state.context.dateOfBirth;
+    if (!dob) {
+      return false;
+    }
+    const birthDate = new Date(dob);
+    if (Number.isNaN(birthDate.getTime())) {
+      return false;
+    }
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const monthDiff = today.getMonth() - birthDate.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age < 18;
+  })();
+
+  // Tokenization state
+  const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
+  const [tokenizationError, setTokenizationError] = useState<string | null>(null);
+  const capturedTokenRef = useRef<{ token: string; firstSix: string; lastFour: string } | null>(null);
+
+  const isCardPayment = state.context.paymentMethod === 'card';
+
+  const { isLoaded: iframeLoaded, isValid: iframeValid, isCvvValid: iframeCvvValid, error: iframeError, tokenize: iframeTokenize } = useTokenExIframe({
+    containerId: TOKENEX_CARD_ID,
+    cvvContainerId: TOKENEX_CVV_ID,
+    config: isCardPayment && state.matches('collectingPayment') ? tokenizationConfig : null,
+  });
+
+  // Fetch programs and plans when entering selectingProgram state
+  useEffect(() => {
+    if (!state.matches('selectingProgram') || !state.context.isLoadingPrograms) {
+      return;
+    }
+    fetch('/api/programs')
+      .then(r => r.json())
+      .then((data) => {
+        const programs = (data.programs ?? []).map((p: Record<string, unknown>) => ({
+          id: p.id as string,
+          name: p.name as string,
+          description: (p.description as string) ?? '',
+          price: 0,
+          isActive: true,
+        }));
+        const plansByProgram: Record<string, MembershipPlan[]> = {};
+        for (const [programId, plans] of Object.entries(data.plansByProgram ?? {})) {
+          plansByProgram[programId] = (plans as Array<Record<string, unknown>>).map(p => ({
+            id: p.id as string,
+            name: p.name as string,
+            description: (p.description as string) ?? '',
+            price: p.price as number,
+            interval: ((p.frequency as string) ?? 'Monthly').toLowerCase() === 'annual' ? 'yearly' as const : 'monthly' as const,
+            isActive: true,
+          }));
+        }
+        send({ type: 'PROGRAMS_LOADED', programs, plansByProgram });
+      })
+      .catch(() => send({ type: 'PROGRAMS_FAILED' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Handle member lookup when entering lookingUpMember state
+  useEffect(() => {
+    if (!state.matches('lookingUpMember')) {
+      return;
+    }
+    const phone = state.context.memberLookupPhone;
+    fetch('/api/members/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.found && data.members?.length > 0) {
+          const m = data.members[0];
+          send({
+            type: 'MEMBER_FOUND',
+            member: {
+              id: m.memberId,
+              firstName: m.firstName,
+              lastName: m.lastName,
+              email: '',
+              phoneNumber: phone,
+              status: m.status,
+              joinedAt: new Date(),
+            },
+          });
+        }
+        else {
+          send({ type: 'MEMBER_NOT_FOUND' });
+        }
+      })
+      .catch(() => send({ type: 'MEMBER_NOT_FOUND' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Fetch waiver content when entering reviewingCommitment state
+  useEffect(() => {
+    if (!state.matches('reviewingCommitment') || !state.context.isLoadingWaiver) {
+      return;
+    }
+    const planId = state.context.selectedPlan?.id;
+    if (!planId) {
+      send({ type: 'WAIVER_FAILED' });
+      return;
+    }
+    fetch('/api/waiver-content', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.found) {
+          send({ type: 'WAIVER_LOADED', content: data.content, templateName: data.templateName });
+        }
+        else {
+          send({ type: 'WAIVER_FAILED' });
+        }
+      })
+      .catch(() => send({ type: 'WAIVER_FAILED' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Fetch tokenization config when entering payment step
+  useEffect(() => {
+    if (state.matches('collectingPayment') && !tokenizationConfig && !tokenizationError) {
+      fetch('/api/payment/tokenization-config')
+        .then(r => r.json())
+        .then((data: { config: TokenizationIframeConfig }) => {
+          if (data.config) {
+            setTokenizationConfig(data.config);
+          }
+          else {
+            setTokenizationError('Payment form unavailable');
+          }
+        })
+        .catch(() => setTokenizationError('Failed to load payment form'));
+    }
+  }, [state, tokenizationConfig, tokenizationError]);
+
+  const PLANS_PER_PAGE = 4;
   const totalPlanPages = Math.ceil((state.context.availablePlans?.length ?? 0) / PLANS_PER_PAGE);
   const visiblePlans = state.context.availablePlans.slice(
     planPage * PLANS_PER_PAGE,
@@ -111,15 +254,106 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
     setPlanPage(0);
   }, [state.context.selectedProgram]);
 
-  // Auto-advance after success
+  // Process payment when entering processingPayment state
   useEffect(() => {
-    if (state.matches('success')) {
-      const timer = setTimeout(onComplete, 15000);
-      return () => clearTimeout(timer);
+    if (!state.matches('processingPayment')) {
+      return;
     }
-    return undefined;
+
+    const ctx = state.context;
+    const planFrequency = ctx.selectedPlan?.interval === 'yearly' ? 'Annual' : 'Monthly';
+    const isRecurring = !ctx.selectedPlan?.trialPeriodDays;
+
+    // Use the dynamically fetched waiver content from the commitment screen
+    const waiverContent = ctx.waiverContent || '';
+
+    const paymentBody = {
+      firstName: ctx.firstName,
+      lastName: ctx.lastName,
+      email: ctx.email,
+      phone: ctx.phoneNumber,
+      address: ctx.address,
+      addressLine2: ctx.addressLine2,
+      city: ctx.city,
+      state: ctx.state,
+      zip: ctx.zip,
+      paymentMethod: ctx.paymentMethod,
+      cardToken: ctx.cardToken || capturedTokenRef.current?.token || '',
+      cardFirstSix: ctx.cardFirstSix || capturedTokenRef.current?.firstSix || '',
+      cardLastFour: ctx.cardLastFour || capturedTokenRef.current?.lastFour || '',
+      cardExpiry: ctx.cardExpiry,
+      cardholderName: ctx.cardholderName,
+      achAccountHolder: ctx.achAccountHolder,
+      achRoutingNumber: ctx.achRoutingNumber,
+      achAccountNumber: ctx.achAccountNumber,
+      achAccountType: ctx.achAccountType,
+      planId: ctx.selectedPlan?.id ?? '',
+      planName: ctx.selectedPlan?.name ?? '',
+      planPrice: ctx.selectedPlan?.price ?? 0,
+      planFrequency,
+      planContractLength: ctx.selectedPlan?.description?.split('\n')[0] ?? '',
+      billingType: isRecurring ? 'autopay' : 'one-time',
+      programName: ctx.selectedProgram?.name ?? '',
+      dateOfBirth: ctx.dateOfBirth || undefined,
+      guardianFirstName: ctx.guardianFirstName || undefined,
+      guardianLastName: ctx.guardianLastName || undefined,
+      guardianEmail: ctx.guardianEmail || undefined,
+      guardianRelationship: ctx.guardianRelationship || undefined,
+      waiverSignature: ctx.waiverSignature,
+      signedByName: ctx.guardianFirstName
+        ? `${ctx.guardianFirstName} ${ctx.guardianLastName}`
+        : `${ctx.firstName} ${ctx.lastName}`,
+      waiverContent,
+      organizationName: '',
+      organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? '',
+    };
+
+    fetch('/api/payment/membership', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(paymentBody),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.success && data.status !== 'declined') {
+          capturedTokenRef.current = null;
+          send({ type: 'PAYMENT_SUCCESS' });
+        }
+        else {
+          send({ type: 'PAYMENT_FAILED', error: data.error ?? 'Payment was declined' });
+        }
+      })
+      .catch((err) => {
+        send({ type: 'PAYMENT_FAILED', error: err instanceof Error ? err.message : 'Payment failed' });
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value, onComplete]);
+  }, [state.value]);
+
+  // Auto-return to home after success (60s countdown)
+  useEffect(() => {
+    if (!state.matches('success')) {
+      return;
+    }
+    setSuccessCountdown(60);
+    const interval = setInterval(() => {
+      setSuccessCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Navigate home once countdown reaches 0
+  useEffect(() => {
+    if (successCountdown === 0 && state.matches('success')) {
+      onComplete();
+    }
+  }, [successCountdown, state, onComplete]);
 
   const handleInputChange = (field: string, value: string | boolean) => {
     if ((field === 'phoneNumber' || field === 'memberLookupPhone') && typeof value === 'string') {
@@ -150,7 +384,10 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
       return state.context.selectedPlan?.name ?? 'Review Commitment';
     }
     if (state.matches('collectingInfo') || state.matches('validatingContact') || state.matches('lookingUpMember')) {
-      return 'Complete Your Membership';
+      return 'Member Information';
+    }
+    if (state.matches('collectingPayment')) {
+      return 'Payment';
     }
     if (state.matches('processingPayment') || state.matches('creatingMembership')) {
       return 'Processing…';
@@ -172,14 +409,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
-        <button type="button" onClick={onBack} className="cursor-pointer text-white transition-colors hover:text-gray-300">
-          <ArrowBackIcon sx={{ fontSize: 48 }} />
-        </button>
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">{headerTitle()}</h1>
-        <div className="w-12" />
-      </header>
+      <KioskFlowHeader title={headerTitle()} onBack={onBack} />
 
       {/* Main content */}
       <main className="flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8">
@@ -188,19 +418,29 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         {state.matches('selectingProgram') && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Choose the program you'd like to join</p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
-              {state.context.programs.map(program => (
-                <button
-                  type="button"
-                  key={program.id}
-                  onClick={() => send({ type: 'SELECT_PROGRAM', program })}
-                  className="cursor-pointer rounded-3xl border-2 border-black bg-white p-6 text-left transition-all hover:scale-105 hover:bg-gray-50 sm:p-8 md:p-10"
-                >
-                  <h2 className="text-xl font-bold text-black sm:text-2xl md:text-3xl">{program.name}</h2>
-                  <p className="mt-3 text-lg text-gray-500">{program.description}</p>
-                </button>
-              ))}
-            </div>
+            {state.context.isLoadingPrograms
+              ? (
+                  <p className="py-16 text-center text-xl text-gray-400">Loading programs...</p>
+                )
+              : state.context.programs.length === 0
+                ? (
+                    <p className="py-16 text-center text-xl text-gray-400">No programs available</p>
+                  )
+                : (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6">
+                      {state.context.programs.map(prog => (
+                        <button
+                          type="button"
+                          key={prog.id}
+                          onClick={() => send({ type: 'SELECT_PROGRAM', program: prog })}
+                          className="cursor-pointer rounded-3xl border-2 border-black bg-white p-6 text-left transition-all hover:scale-105 hover:bg-gray-50 sm:p-8 md:p-10"
+                        >
+                          <h2 className="text-xl font-bold text-black sm:text-2xl md:text-3xl">{prog.name}</h2>
+                          <p className="mt-3 text-lg text-gray-500">{prog.description}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
           </div>
         )}
 
@@ -280,7 +520,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 Next →
               </button>
             </div>
-            <StepIndicator current={0} total={3} />
+            <StepIndicator current={0} total={4} />
           </div>
         )}
 
@@ -298,35 +538,141 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             )}
 
             <div className="mb-2">
-              <p className="mb-2 text-xl font-semibold text-black">Membership Description</p>
+              <p className="mb-2 text-xl font-semibold text-black">
+                {state.context.waiverTemplateName || 'Membership Agreement'}
+              </p>
               <div className="h-52 overflow-y-auto rounded-2xl border border-gray-200 bg-gray-50 p-5 text-lg leading-relaxed text-gray-700">
-                <p className="mb-2 font-semibold">Membership Agreement</p>
-                <p className="mb-3">By joining, you agree to the following terms and conditions. This membership grants access to all regularly scheduled classes for the program selected above.</p>
-                <p className="mb-2 font-semibold">Cancellation Policy</p>
-                <p className="mb-3">Month-to-month memberships may be cancelled with 30 days written notice. Commitment plans (6-month, 12-month) require full payment for the committed term and may not be cancelled early except for documented medical reasons.</p>
-                <p className="mb-2 font-semibold">Hold Policy</p>
-                <p className="mb-3">Members may place their account on hold for up to 60 days per calendar year for medical or military reasons with appropriate documentation.</p>
-                <p>You understand and agree that martial arts training involves physical contact and risk of injury. The dojo and its instructors are not liable for injuries sustained during training when proper safety protocols are followed.</p>
+                {state.context.isLoadingWaiver
+                  ? <p className="text-gray-400">Loading waiver...</p>
+                  : state.context.waiverContent
+                    ? state.context.waiverContent.split('\n').map((line, i) => {
+                        const lineKey = `w-${line.slice(0, 40).replace(/\s/g, '-')}-${i}`;
+                        return (
+                          <p key={lineKey} className={line.trim() ? 'mb-3' : 'mb-1'}>
+                            {line}
+                          </p>
+                        );
+                      })
+                    : <p className="text-gray-400">No waiver content available</p>}
               </div>
-              <p className="mt-2 text-right text-sm text-gray-400">Scroll to read full agreement</p>
+              {state.context.waiverContent && (
+                <p className="mt-2 text-right text-sm text-gray-400">Scroll to read full agreement</p>
+              )}
             </div>
 
-            <label className="mt-4 flex cursor-pointer items-start gap-4 rounded-2xl border-2 border-gray-200 p-5 hover:bg-gray-50">
-              <input
-                type="checkbox"
-                checked={!!state.context.hasAgreedToCommitment}
-                onChange={e => handleInputChange('hasAgreedToCommitment', e.target.checked)}
-                className="mt-1 h-6 w-6 shrink-0 cursor-pointer accent-black"
-              />
+            {/* Guardian info for minors */}
+            {memberIsMinor && (
+              <div className="mt-4 rounded-2xl border-2 border-amber-200 bg-amber-50 p-5">
+                <p className="mb-3 text-lg font-semibold text-amber-800">
+                  Parent/Guardian Required
+                </p>
+                <p className="mb-4 text-base text-amber-700">
+                  The member is under 18. A parent or legal guardian must sign the waiver on their behalf.
+                </p>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold text-amber-800" htmlFor="guardianFirstName">
+                      Guardian First Name
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="guardianFirstName"
+                      type="text"
+                      value={state.context.guardianFirstName || ''}
+                      onChange={e => handleInputChange('guardianFirstName', e.target.value)}
+                      className="w-full rounded-xl border-2 border-amber-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:ring-2 focus:ring-black focus:outline-none"
+                      placeholder="First name"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold text-amber-800" htmlFor="guardianLastName">
+                      Guardian Last Name
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="guardianLastName"
+                      type="text"
+                      value={state.context.guardianLastName || ''}
+                      onChange={e => handleInputChange('guardianLastName', e.target.value)}
+                      className="w-full rounded-xl border-2 border-amber-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:ring-2 focus:ring-black focus:outline-none"
+                      placeholder="Last name"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold text-amber-800" htmlFor="guardianEmail">
+                      Guardian Email
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      id="guardianEmail"
+                      type="email"
+                      value={state.context.guardianEmail || ''}
+                      onChange={e => handleInputChange('guardianEmail', e.target.value)}
+                      className="w-full rounded-xl border-2 border-amber-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:ring-2 focus:ring-black focus:outline-none"
+                      placeholder="guardian@email.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-semibold text-amber-800" htmlFor="guardianRelationship">Relationship</label>
+                    <select
+                      id="guardianRelationship"
+                      value={state.context.guardianRelationship || 'parent'}
+                      onChange={e => handleInputChange('guardianRelationship', e.target.value)}
+                      className="w-full rounded-xl border-2 border-amber-300 bg-white p-4 text-xl text-black focus:border-black focus:ring-2 focus:ring-black focus:outline-none"
+                    >
+                      <option value="parent">Parent</option>
+                      <option value="guardian">Guardian</option>
+                      <option value="legal_guardian">Legal Guardian</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div
+              role="checkbox"
+              aria-checked={!!state.context.hasAgreedToCommitment}
+              tabIndex={0}
+              className={`mt-4 flex cursor-pointer items-start gap-4 rounded-2xl border-2 p-5 transition-colors ${
+                state.context.hasAgreedToCommitment ? 'border-black bg-gray-50' : 'border-gray-200 bg-white'
+              } hover:bg-gray-50`}
+              onClick={() => handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment)}
+              onKeyDown={(e) => {
+                if (e.key === ' ' || e.key === 'Enter') {
+                  handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment);
+                }
+              }}
+            >
+              <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border-2 transition-colors ${
+                state.context.hasAgreedToCommitment ? 'border-black bg-black' : 'border-gray-400'
+              }`}
+              >
+                {state.context.hasAgreedToCommitment && (
+                  <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </div>
               <span className="text-lg text-black">
-                I agree to the terms of the membership agreement above and authorize recurring billing as described.
+                {memberIsMinor
+                  ? 'As the parent/guardian, I agree to the waiver and membership agreement on behalf of the minor.'
+                  : 'I agree to the waiver, membership agreement, and authorize recurring billing as described.'}
               </span>
-            </label>
+            </div>
+
+            {/* Signature capture */}
+            <div className="mt-4 mb-2">
+              <SignatureCapture
+                label={memberIsMinor ? 'Parent/Guardian Signature' : 'Signature'}
+                onSignatureChange={(dataUrl) => {
+                  handleInputChange('waiverSignature', dataUrl ?? '');
+                }}
+              />
+            </div>
 
             <div className="mt-6 flex items-center justify-between">
               <button
                 type="button"
-
                 onClick={() => send({ type: 'BACK' })}
                 className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
               >
@@ -336,15 +682,18 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               </button>
               <button
                 type="button"
-
                 onClick={() => send({ type: 'SUBMIT_COMMITMENT' })}
-                disabled={!state.context.hasAgreedToCommitment}
+                disabled={
+                  !state.context.hasAgreedToCommitment
+                  || !state.context.waiverSignature?.trim()
+                  || (memberIsMinor && (!state.context.guardianFirstName?.trim() || !state.context.guardianLastName?.trim() || !state.context.guardianEmail?.trim()))
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
               </button>
             </div>
-            <StepIndicator current={1} total={3} />
+            <StepIndicator current={1} total={4} />
           </div>
         )}
 
@@ -443,6 +792,19 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                     />
                     {state.context.errors?.phoneNumber && <p className="mt-1 text-base text-red-600">{state.context.errors.phoneNumber}</p>}
                   </div>
+                  <div>
+                    <span className={labelClass}>
+                      Date of Birth
+                      <span className="text-red-500">*</span>
+                    </span>
+                    <TouchDatePicker
+                      value={state.context.dateOfBirth || ''}
+                      onChange={v => handleInputChange('dateOfBirth', v)}
+                      label="Date of Birth"
+                      error={state.context.errors?.dateOfBirth}
+                      placeholder="Select date of birth"
+                    />
+                  </div>
                   <div className="col-span-2">
                     <label className={labelClass} htmlFor="address">
                       Address
@@ -489,15 +851,20 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                       State
                       <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      id="state"
-                      value={state.context.state || ''}
-                      onChange={e => handleInputChange('state', e.target.value)}
-                      className={inputClass('state')}
-                    >
-                      <option value="">Select state…</option>
-                      {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    <div className="relative">
+                      <select
+                        id="state"
+                        value={state.context.state || ''}
+                        onChange={e => handleInputChange('state', e.target.value)}
+                        className={`appearance-none pr-10 ${inputClass('state')}`}
+                      >
+                        <option value="">Select state…</option>
+                        {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
+                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
+                      </span>
+                    </div>
                     {state.context.errors?.state && <p className="mt-1 text-base text-red-600">{state.context.errors.state}</p>}
                   </div>
                   <div>
@@ -552,11 +919,15 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                     </div>
 
                     {/* Membership agreement snippet */}
-                    <div className="h-40 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 text-sm leading-relaxed text-gray-600">
-                      <p className="mb-1 font-semibold">Membership Agreement</p>
-                      <p className="mb-2">Cancellation Policy: 30-day written notice required for month-to-month. Commitment plans require payment for the full committed term.</p>
-                      <p>Hold Policy: Accounts may be placed on hold up to 60 days/year for medical or military reasons. Two holds allowed per year, minimum 30 days each.</p>
-                    </div>
+                    {state.context.waiverContent && (
+                      <div className="h-40 overflow-y-auto rounded-xl border border-gray-200 bg-white p-4 text-sm leading-relaxed text-gray-600">
+                        <p className="mb-1 font-semibold">{state.context.waiverTemplateName || 'Membership Agreement'}</p>
+                        {state.context.waiverContent.split('\n').slice(0, 10).map((line, i) => {
+                          const snippetKey = `s-${line.slice(0, 40).replace(/\s/g, '-')}-${i}`;
+                          return <p key={snippetKey} className="mb-1">{line}</p>;
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -583,19 +954,293 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 disabled={state.context.isSubmitting || state.matches('lookingUpMember')}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {state.context.isSubmitting ? 'Validating…' : 'Complete Membership →'}
+                {state.context.isSubmitting ? 'Validating…' : 'Next →'}
               </button>
             </div>
-            <StepIndicator current={2} total={3} />
+            <StepIndicator current={2} total={4} />
+          </div>
+        )}
+
+        {/* ── Step 5: Payment ────────────────────────────────────────────────── */}
+        {state.matches('collectingPayment') && (
+          <div className="w-full max-w-6xl">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
+
+              {/* Left: payment form */}
+              <div className="lg:col-span-3">
+                <p className="mb-6 text-lg font-semibold text-black">Payment Method</p>
+
+                {/* Card / ACH toggle */}
+                <div className="mb-6 flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleInputChange('paymentMethod', 'card')}
+                    className={`flex-1 cursor-pointer rounded-xl border-2 py-4 text-center text-lg font-bold transition-all ${
+                      state.context.paymentMethod === 'card'
+                        ? 'border-black bg-black text-white'
+                        : 'border-gray-300 bg-white text-gray-500 hover:border-black'
+                    }`}
+                  >
+                    Credit / Debit Card
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleInputChange('paymentMethod', 'ach')}
+                    className={`flex-1 cursor-pointer rounded-xl border-2 py-4 text-center text-lg font-bold transition-all ${
+                      state.context.paymentMethod === 'ach'
+                        ? 'border-black bg-black text-white'
+                        : 'border-gray-300 bg-white text-gray-500 hover:border-black'
+                    }`}
+                  >
+                    Bank Account (ACH)
+                  </button>
+                </div>
+
+                {/* Card fields */}
+                {state.context.paymentMethod === 'card' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className={labelClass} htmlFor="cardholderName">
+                        Cardholder Name
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        id="cardholderName"
+                        type="text"
+                        value={state.context.cardholderName || ''}
+                        onChange={e => handleInputChange('cardholderName', e.target.value)}
+                        className={inputClass('cardholderName')}
+                        placeholder="Name on card"
+                      />
+                    </div>
+                    <div>
+                      <p className={labelClass}>
+                        Card Number
+                        <span className="text-red-500">*</span>
+                      </p>
+                      {tokenizationError
+                        ? (
+                            <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-base text-red-600">
+                              {tokenizationError}
+                            </div>
+                          )
+                        : !tokenizationConfig
+                            ? (
+                                <div className="flex items-center gap-3 rounded-xl border-2 border-gray-300 bg-white p-4 text-lg text-gray-400">
+                                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                  Loading card form...
+                                </div>
+                              )
+                            : (
+                                <>
+                                  {!iframeLoaded && !iframeError && (
+                                    <div className="flex items-center gap-3 rounded-xl border-2 border-gray-300 bg-white p-4 text-lg text-gray-400">
+                                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-gray-600" />
+                                      Loading card form...
+                                    </div>
+                                  )}
+                                  {iframeError && (
+                                    <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-base text-red-600">
+                                      {iframeError}
+                                    </div>
+                                  )}
+                                  <div
+                                    id={TOKENEX_CARD_ID}
+                                    className={`w-full overflow-hidden rounded-xl border-2 border-gray-300 bg-white [&_iframe]:border-none ${!iframeLoaded && !iframeError ? 'hidden' : ''}`}
+                                    style={{ height: '56px' }}
+                                  />
+                                </>
+                              )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass} htmlFor="cardExpiry">
+                          Expiry (MM/YY)
+                          <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          id="cardExpiry"
+                          type="text"
+                          value={state.context.cardExpiry || ''}
+                          onChange={e => handleInputChange('cardExpiry', e.target.value)}
+                          className={inputClass('cardExpiry')}
+                          placeholder="MM/YY"
+                          maxLength={5}
+                        />
+                      </div>
+                      <div>
+                        <p className={labelClass}>
+                          CVV
+                          <span className="text-red-500">*</span>
+                        </p>
+                        {tokenizationConfig
+                          ? (
+                              <div
+                                id={TOKENEX_CVV_ID}
+                                className={`w-full overflow-hidden rounded-xl border-2 border-gray-300 bg-white [&_iframe]:border-none ${!iframeLoaded ? 'opacity-0' : ''}`}
+                                style={{ height: '56px' }}
+                              />
+                            )
+                          : (
+                              <div className="h-14 rounded-xl border-2 border-gray-300 bg-white" />
+                            )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ACH fields */}
+                {state.context.paymentMethod === 'ach' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className={labelClass} htmlFor="achAccountHolder">
+                        Account Holder Name
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        id="achAccountHolder"
+                        type="text"
+                        value={state.context.achAccountHolder || ''}
+                        onChange={e => handleInputChange('achAccountHolder', e.target.value)}
+                        className={inputClass('achAccountHolder')}
+                        placeholder="Name on account"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="achRoutingNumber">
+                        Routing Number
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        id="achRoutingNumber"
+                        type="text"
+                        value={state.context.achRoutingNumber || ''}
+                        onChange={e => handleInputChange('achRoutingNumber', e.target.value)}
+                        className={inputClass('achRoutingNumber')}
+                        placeholder="9-digit routing number"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="achAccountNumber">
+                        Account Number
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        id="achAccountNumber"
+                        type="text"
+                        value={state.context.achAccountNumber || ''}
+                        onChange={e => handleInputChange('achAccountNumber', e.target.value)}
+                        className={inputClass('achAccountNumber')}
+                        placeholder="Account number"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass} htmlFor="achAccountType">
+                        Account Type
+                        <span className="text-red-500">*</span>
+                      </label>
+                      <div className="relative">
+                        <select
+                          id="achAccountType"
+                          value={state.context.achAccountType || 'Checking'}
+                          onChange={e => handleInputChange('achAccountType', e.target.value)}
+                          className={`appearance-none pr-10 ${inputClass('achAccountType')}`}
+                        >
+                          <option value="Checking">Checking</option>
+                          <option value="Savings">Savings</option>
+                        </select>
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
+                          <ExpandMoreIcon sx={{ fontSize: 24 }} />
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Right: order summary */}
+              <div className="lg:col-span-2">
+                {state.context.selectedPlan && (
+                  <div className="sticky top-4 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
+                    <p className="mb-4 text-base font-semibold tracking-wide text-gray-500 uppercase">Order Summary</p>
+                    <div className="mb-4 space-y-2 border-b border-gray-200 pb-4 text-base">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Program</span>
+                        <span className="max-w-36 text-right font-semibold text-black">{state.context.selectedProgram?.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Plan</span>
+                        <span className="max-w-36 text-right font-semibold text-black">{state.context.selectedPlan.name}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Member</span>
+                        <span className="font-semibold text-black">
+                          {state.context.firstName}
+                          {' '}
+                          {state.context.lastName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex justify-between text-xl font-bold text-black">
+                      <span>Total Due Today</span>
+                      <span>{formatPlanPrice(state.context.selectedPlan)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+            <div className="mt-8 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => send({ type: 'BACK' })}
+                className="flex cursor-pointer items-center gap-2 text-xl text-gray-600 transition-colors hover:text-black"
+              >
+                <ArrowBackIcon sx={{ fontSize: 24 }} />
+                {' '}
+                Go back
+              </button>
+              <button
+                type="button"
+                disabled={state.context.isSubmitting || (isCardPayment ? (!tokenizationConfig || !iframeLoaded || !iframeValid || !iframeCvvValid || !state.context.cardholderName || !state.context.cardExpiry) : (!state.context.achAccountHolder || !state.context.achRoutingNumber || !state.context.achAccountNumber))}
+                onClick={async () => {
+                  if (isCardPayment && tokenizationConfig) {
+                    try {
+                      handleInputChange('isSubmitting', true as unknown as string);
+                      const result = await iframeTokenize();
+                      capturedTokenRef.current = {
+                        token: result.token,
+                        firstSix: result.firstSix ?? '',
+                        lastFour: result.lastFour ?? '',
+                      };
+                      send({ type: 'UPDATE_FIELD', field: 'cardToken', value: result.token });
+                      send({ type: 'UPDATE_FIELD', field: 'cardFirstSix', value: result.firstSix ?? '' });
+                      send({ type: 'UPDATE_FIELD', field: 'cardLastFour', value: result.lastFour ?? '' });
+                    }
+                    catch (err) {
+                      handleInputChange('isSubmitting', false as unknown as string);
+                      console.error('Tokenization failed:', err);
+                      return;
+                    }
+                  }
+                  send({ type: 'SUBMIT_PAYMENT' });
+                }}
+                className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {state.context.isSubmitting ? 'Processing...' : 'Complete Membership →'}
+              </button>
+            </div>
+            <StepIndicator current={3} total={4} />
           </div>
         )}
 
         {/* ── Processing ──────────────────────────────────────────────────────── */}
-        {(state.matches('processingPayment') || state.matches('creatingMembership')) && (
+        {state.matches('processingPayment') && (
           <div className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-20 w-20 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
             <h2 className="mb-4 text-3xl font-bold text-black">
-              {state.matches('creatingMembership') ? 'Setting up your membership…' : 'Processing payment…'}
+              Processing payment…
             </h2>
             <p className="text-xl text-gray-500">Please don't leave this screen</p>
           </div>
@@ -627,16 +1272,14 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
             <div className="flex justify-center gap-4">
               <button
                 type="button"
-
                 onClick={onComplete}
                 className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-5 text-xl font-bold text-black transition-colors hover:bg-gray-100"
               >
-                Done
+                Return Home
               </button>
               {onCheckIn && (
                 <button
                   type="button"
-
                   onClick={onCheckIn}
                   className="flex-1 cursor-pointer rounded-2xl border-2 border-black bg-black px-8 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
@@ -644,7 +1287,36 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 </button>
               )}
             </div>
-            <p className="mt-8 text-base text-gray-400">Auto-returning to home in 15 seconds…</p>
+            <div className="mt-8 flex flex-col items-center gap-2">
+              <div className="relative h-16 w-16">
+                <svg className="-rotate-90" width="64" height="64" viewBox="0 0 64 64">
+                  <circle cx="32" cy="32" r="28" fill="none" stroke="#e5e7eb" strokeWidth="4" />
+                  <circle
+                    cx="32"
+                    cy="32"
+                    r="28"
+                    fill="none"
+                    stroke="#000000"
+                    strokeWidth="4"
+                    strokeDasharray={`${2 * Math.PI * 28}`}
+                    strokeDashoffset={`${2 * Math.PI * 28 * (1 - successCountdown / 60)}`}
+                    strokeLinecap="round"
+                    className="transition-all duration-1000"
+                  />
+                </svg>
+                <span className="absolute inset-0 flex items-center justify-center text-lg font-bold text-black">
+                  {successCountdown}
+                </span>
+              </div>
+              <p className="text-base text-gray-400">
+                Returning to home in
+                {' '}
+                {successCountdown}
+                {' '}
+                second
+                {successCountdown !== 1 ? 's' : ''}
+              </p>
+            </div>
           </div>
         )}
 

@@ -2,8 +2,10 @@
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import { useEffect } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { TouchDatePicker } from '../TouchDatePicker';
 
 interface TrialFlowProps {
   onComplete: () => void;
@@ -91,6 +93,56 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       send({ type: 'UPDATE_FIELD', field, value });
     }
   };
+
+  // Submit trial signup when entering creatingTrial state
+  useEffect(() => {
+    if (!state.matches('creatingTrial')) {
+      return;
+    }
+    const ctx = state.context;
+    const body = {
+      ageGroup: ctx.ageGroup,
+      firstName: ctx.firstName,
+      lastName: ctx.lastName,
+      email: ctx.ageGroup === 'youth' ? ctx.parentEmail : ctx.email,
+      phone: ctx.ageGroup === 'youth' ? ctx.parentPhone : ctx.phoneNumber,
+      address: ctx.ageGroup === 'youth' ? ctx.parentAddress : ctx.address,
+      city: ctx.ageGroup === 'youth' ? ctx.parentCity : ctx.city,
+      state: ctx.ageGroup === 'youth' ? ctx.parentState : ctx.state,
+      parentFirstName: ctx.parentFirstName,
+      parentLastName: ctx.parentLastName,
+      parentEmail: ctx.parentEmail,
+      parentPhone: ctx.parentPhone,
+      children: ctx.ageGroup === 'youth'
+        ? [...ctx.children, ...(ctx.currentChildFirstName
+            ? [{ firstName: ctx.currentChildFirstName, lastName: ctx.currentChildLastName, dateOfBirth: ctx.currentChildDateOfBirth }]
+            : [])]
+        : undefined,
+      waiverSignature: ctx.signature,
+      signedByName: ctx.ageGroup === 'youth'
+        ? `${ctx.parentFirstName} ${ctx.parentLastName}`
+        : `${ctx.firstName} ${ctx.lastName}`,
+    };
+
+    fetch('/api/trial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.success) {
+          send({ type: 'TRIAL_CREATED' });
+        }
+        else {
+          send({ type: 'TRIAL_FAILED', error: data.error });
+        }
+      })
+      .catch((err) => {
+        send({ type: 'TRIAL_FAILED', error: err instanceof Error ? err.message : 'Trial signup failed' });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
 
   // No auto-redirect on success — user chooses next action
 
@@ -394,18 +446,17 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               </div>
 
               <div className="col-span-2">
-                <label className={labelClass} htmlFor="currentChildDateOfBirth">
+                <span className={labelClass}>
                   Date of Birth
                   <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="currentChildDateOfBirth"
-                  type="date"
+                </span>
+                <TouchDatePicker
                   value={state.context.currentChildDateOfBirth || ''}
-                  onChange={e => handleInputChange('currentChildDateOfBirth', e.target.value)}
-                  className={inputClass('currentChildDateOfBirth')}
+                  onChange={v => handleInputChange('currentChildDateOfBirth', v)}
+                  label="Child's Date of Birth"
+                  error={state.context.errors?.currentChildDateOfBirth}
+                  placeholder="Select date of birth"
                 />
-                {state.context.errors?.currentChildDateOfBirth && <p className="mt-1 text-base text-red-600">{state.context.errors.currentChildDateOfBirth}</p>}
               </div>
             </div>
 

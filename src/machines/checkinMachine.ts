@@ -2,7 +2,6 @@ import type { CheckinContext, CheckinEvent } from './types';
 import { assign, createMachine } from 'xstate';
 import { generateSessionId, isValidPhoneNumber } from '../lib/utils';
 
-// Member check-in state machine
 export const checkinMachine = createMachine({
   id: 'checkin',
   types: {} as {
@@ -12,96 +11,146 @@ export const checkinMachine = createMachine({
   initial: 'idle',
   context: {
     phoneNumber: '',
-    member: null,
+    members: [],
+    selectedMember: null,
+    classes: [],
+    selectedClass: null,
     sessionId: '',
     errors: {} as Record<string, string>,
   },
   states: {
+    // Step 1: Enter phone number
     idle: {
-      entry: assign(({ context }) => ({
-        ...context,
+      entry: assign({
         phoneNumber: '',
-        member: null,
+        members: [],
+        selectedMember: null,
+        classes: [],
+        selectedClass: null,
         sessionId: '',
         errors: {} as Record<string, string>,
-      })),
+      }),
       on: {
         ENTER_PHONE: {
-          target: 'validatingPhone',
+          target: 'lookingUp',
+          guard: ({ event }) => isValidPhoneNumber(event.phoneNumber),
           actions: assign(({ event }) => ({
             phoneNumber: event.phoneNumber,
+            sessionId: generateSessionId(),
             errors: {} as Record<string, string>,
           })),
-          guard: ({ event }) => isValidPhoneNumber(event.phoneNumber),
-        },
-        INVALID_PHONE: {
-          target: 'idle',
-          actions: assign({
-            errors: { phone: 'Please enter a valid phone number' },
-          }),
         },
       },
     },
-    validatingPhone: {
-      entry: assign(() => ({ sessionId: generateSessionId() })),
-      after: {
-        2000: {
-          target: 'memberFound',
-          actions: assign({
-            member: {
-              id: 'mock_member_123',
-              firstName: 'John',
-              lastName: 'Doe',
-              email: 'john@example.com',
-              phoneNumber: '5551234567',
-              status: 'active' as const,
-              joinedAt: new Date('2024-01-01'),
-              lastCheckIn: new Date('2024-01-25'),
-            },
-          }),
-        }, // Simulate async lookup
-      },
+
+    // Looking up member by phone (component calls API and sends event)
+    lookingUp: {
       on: {
-        RESET: { target: 'idle' },
+        MEMBERS_FOUND: {
+          target: 'selectingMember',
+          actions: assign(({ event }) => ({
+            members: event.members,
+          })),
+        },
+        MEMBER_NOT_FOUND: {
+          target: 'notFound',
+        },
+        RESET: 'idle',
       },
     },
-    memberFound: {
+
+    // Step 1b: If multiple members share a phone, pick one
+    selectingMember: {
       on: {
-        CONFIRM_CHECKIN: {
+        SELECT_MEMBER: {
+          target: 'loadingClasses',
+          actions: assign(({ event }) => ({
+            selectedMember: event.member,
+          })),
+        },
+        BACK: 'idle',
+        RESET: 'idle',
+      },
+    },
+
+    // Loading today's classes (component calls API and sends event)
+    loadingClasses: {
+      on: {
+        CLASSES_LOADED: {
+          target: 'selectingClass',
+          actions: assign(({ event }) => ({
+            classes: event.classes,
+          })),
+        },
+        NO_ACTIVE_MEMBERSHIP: {
+          target: 'noMembership',
+          actions: assign(({ event }) => ({
+            errors: { general: event.message },
+          })),
+        },
+        RESET: 'idle',
+      },
+    },
+
+    // Step 2: Select a class to check into
+    selectingClass: {
+      on: {
+        SELECT_CLASS: {
           target: 'processingCheckin',
+          actions: assign(({ event }) => ({
+            selectedClass: event.classItem,
+          })),
         },
-        RESET: {
-          target: 'idle',
-        },
+        BACK: 'idle',
+        RESET: 'idle',
       },
     },
+
+    // Processing check-in (component calls API and sends event)
     processingCheckin: {
-      after: {
-        1000: { target: 'checkinComplete' }, // Simulate async checkin
-      },
       on: {
-        RESET: { target: 'idle' },
+        CHECKIN_SUCCESS: 'checkinComplete',
+        CHECKIN_FAILED: {
+          target: 'error',
+          actions: assign(({ event }) => ({
+            errors: { general: event.error ?? 'Check-in failed. Please try again.' },
+          })),
+        },
+        RESET: 'idle',
       },
     },
+
+    // Success
     checkinComplete: {
       after: {
-        5000: { target: 'idle' },
+        5000: 'idle',
       },
       on: {
-        RESET: { target: 'idle' },
-      },
-    },
-    memberNotFound: {
-      on: {
-        TRY_AGAIN: { target: 'idle' },
-        GO_TO_TRIAL: { target: 'idle' },
-        RESET: { target: 'idle' },
+        RESET: 'idle',
       },
     },
-    checkinError: {
+
+    // No active membership
+    noMembership: {
       on: {
-        TRY_AGAIN: { target: 'processingCheckin' },
-        RESET: { target: 'idle' },
+        TRY_AGAIN: 'idle',
+        RESET: 'idle',
+      },
+    },
+
+    // Member not found
+    notFound: {
+      on: {
+        TRY_AGAIN: 'idle',
+        RESET: 'idle',
+      },
+    },
+
+    // Error
+    error: {
+      on: {
+        TRY_AGAIN: 'idle',
+        RESET: 'idle',
       },
     },
   },

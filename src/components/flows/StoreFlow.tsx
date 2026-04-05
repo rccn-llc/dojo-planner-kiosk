@@ -216,7 +216,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           discountAmount: ctx.discountAmount,
           amount: total,
           description: 'Kiosk store order',
-          organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? '',
+          organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? process.env.ORGANIZATION_ID ?? '',
           items: ctx.cartItems.map(i => ({
             productName: i.productName,
             variantName: i.variantName,
@@ -264,6 +264,64 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
+  // Validate discount code when entering applyingDiscount state
+  useEffect(() => {
+    if (!state.matches('applyingDiscount')) {
+      return;
+    }
+    const subtotal = state.context.cartItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
+    );
+    fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: state.context.discountCode, subtotal }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.valid) {
+          send({ type: 'DISCOUNT_APPLIED', discountAmount: data.discountAmount });
+        }
+        else {
+          send({ type: 'DISCOUNT_FAILED', error: data.error ?? 'Invalid coupon' });
+        }
+      })
+      .catch(() => send({ type: 'DISCOUNT_FAILED', error: 'Failed to validate coupon' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Handle member lookup when entering lookingUpMember state
+  useEffect(() => {
+    if (!state.matches('lookingUpMember')) {
+      return;
+    }
+    const phone = state.context.memberSearchPhone;
+    fetch('/api/members/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.found && data.members?.length > 0) {
+          const m = data.members[0];
+          send({
+            type: 'MEMBER_FOUND',
+            firstName: m.firstName,
+            lastName: m.lastName,
+            email: '',
+            phone,
+          });
+        }
+        else {
+          send({ type: 'MEMBER_NOT_FOUND' });
+        }
+      })
+      .catch(() => send({ type: 'MEMBER_NOT_FOUND' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
   // Auto-return to home after order success (60s countdown)
   useEffect(() => {
     if (!state.matches('orderSuccess')) {
@@ -277,7 +335,6 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       setSuccessCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          onComplete();
           return 0;
         }
         return prev - 1;
@@ -287,6 +344,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
+
+  // Navigate home once countdown reaches 0
+  useEffect(() => {
+    if (successCountdown === 0 && state.matches('orderSuccess')) {
+      onComplete();
+    }
+  }, [successCountdown, state, onComplete]);
 
   // ── Shared styles (match MembershipFlow exactly) ────────────────────────────
   const labelClass = 'block text-lg font-semibold text-black mb-2';

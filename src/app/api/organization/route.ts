@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
+import { validateDevice } from '@/lib/deviceAuth';
 
-export async function GET() {
-  const orgId = process.env.ORGANIZATION_ID;
+export async function GET(request: Request) {
+  const device = await validateDevice(request);
+  const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
   const clerkSecretKey = process.env.CLERK_SECRET_KEY;
 
   if (!orgId || !clerkSecretKey) {

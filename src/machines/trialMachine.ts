@@ -469,14 +469,18 @@ export const trialMachine = createMachine({
     creatingTrial: {
       entry: assign({ isSubmitting: true }),
 
-      after: {
-        2000: {
+      on: {
+        TRIAL_CREATED: {
           target: 'success',
           actions: assign({ isSubmitting: false }),
         },
-      },
-
-      on: {
+        TRIAL_FAILED: {
+          target: 'error',
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            errors: { general: event.error ?? 'Trial signup failed. Please try again.' },
+          })),
+        },
         TIMEOUT: 'timeout',
       },
     },

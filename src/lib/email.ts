@@ -1,3 +1,4 @@
+import type { Buffer } from 'node:buffer';
 import { Resend } from 'resend';
 
 // Lazily initialized — only if RESEND_API_KEY is set
@@ -47,6 +48,198 @@ export async function sendStoreOrderReceipt(params: StoreOrderReceiptParams): Pr
   }
   catch (error) {
     console.error('[Email] Failed to send order receipt', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      to: params.toEmail,
+    });
+    return false;
+  }
+}
+
+// ── Membership confirmation email ────────────────────────────────────────────
+
+interface MembershipConfirmationParams {
+  toEmail: string;
+  firstName: string;
+  lastName: string;
+  programName: string;
+  planName: string;
+  planPrice: number;
+  planFrequency: string;
+  planContractLength?: string;
+  waiverPdfBuffer?: Buffer;
+  waiverPdfFilename?: string;
+}
+
+export async function sendMembershipConfirmation(params: MembershipConfirmationParams): Promise<boolean> {
+  if (!resend) {
+    console.warn('[Email] Membership confirmation skipped — RESEND_API_KEY not configured');
+    return false;
+  }
+
+  try {
+    const priceStr = params.planPrice === 0 ? 'Free' : `$${params.planPrice.toFixed(2)}`;
+    const frequencyStr = params.planFrequency === 'None' ? '' : ` / ${params.planFrequency.toLowerCase()}`;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f9fafb;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+    <tr>
+      <td style="padding: 40px 32px;">
+
+        <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Welcome to the Team!</h1>
+        <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
+          Hi ${params.firstName}, your membership is now active.
+        </p>
+
+        <!-- Membership details -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="padding: 16px; background-color: #f9fafb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Program</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.programName}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Amount</p>
+              <p style="margin: 0; color: #111827; font-size: 20px; font-weight: 700;">${priceStr}${frequencyStr}</p>
+            </td>
+          </tr>
+          ${params.planContractLength
+            ? `
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Contract</p>
+              <p style="margin: 0; color: #111827; font-size: 16px;">${params.planContractLength}</p>
+            </td>
+          </tr>`
+            : ''}
+        </table>
+
+        ${params.waiverPdfBuffer ? '<p style="margin: 0 0 24px; color: #6b7280; font-size: 14px;">Your signed waiver is attached to this email as a PDF.</p>' : ''}
+
+        <!-- Footer -->
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding: 24px 0 0; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
+              <p style="margin: 0;">This is an automated confirmation. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const attachments: Array<{ filename: string; content: Buffer }> = [];
+    if (params.waiverPdfBuffer && params.waiverPdfFilename) {
+      attachments.push({
+        filename: params.waiverPdfFilename,
+        content: params.waiverPdfBuffer,
+      });
+    }
+
+    await resend.emails.send({
+      from: fromEmail,
+      to: params.toEmail,
+      subject: 'Your membership is active!',
+      html,
+      ...(attachments.length > 0 && { attachments }),
+    });
+
+    console.warn('[Email] Membership confirmation sent', {
+      to: params.toEmail,
+      hasWaiver: !!params.waiverPdfBuffer,
+    });
+    return true;
+  }
+  catch (error) {
+    console.error('[Email] Failed to send membership confirmation', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      to: params.toEmail,
+    });
+    return false;
+  }
+}
+
+// ── Waiver email ─────────────────────────────────────────────────────────────
+
+interface SendWaiverEmailParams {
+  toEmail: string;
+  memberName: string;
+  waiverName: string;
+  signedAt: string;
+  pdfBuffer: Buffer;
+  pdfFilename: string;
+}
+
+export async function sendWaiverEmail(params: SendWaiverEmailParams): Promise<boolean> {
+  if (!resend) {
+    console.warn('[Email] Waiver email skipped — RESEND_API_KEY not configured');
+    return false;
+  }
+
+  try {
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f9fafb;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+    <tr>
+      <td style="padding: 40px 32px;">
+        <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Your Signed Waiver</h1>
+        <p style="margin: 0 0 24px; color: #6b7280; font-size: 16px;">
+          Hi ${params.memberName}, your signed waiver is attached to this email.
+        </p>
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <tr>
+            <td style="padding: 16px;">
+              <p style="margin: 0 0 4px; font-weight: 600; color: #111827;">${params.waiverName}</p>
+              <p style="margin: 0; color: #6b7280; font-size: 14px;">Signed on ${params.signedAt}</p>
+            </td>
+          </tr>
+        </table>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding: 24px 0 0; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
+              <p style="margin: 0;">This is an automated email. Please do not reply.</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await resend.emails.send({
+      from: fromEmail,
+      to: params.toEmail,
+      subject: `Your Signed Waiver — ${params.waiverName}`,
+      html,
+      attachments: [{
+        filename: params.pdfFilename,
+        content: params.pdfBuffer,
+      }],
+    });
+
+    console.warn('[Email] Waiver sent', { to: params.toEmail, waiver: params.waiverName });
+    return true;
+  }
+  catch (error) {
+    console.error('[Email] Failed to send waiver', {
       error: error instanceof Error ? error.message : 'Unknown error',
       to: params.toEmail,
     });
