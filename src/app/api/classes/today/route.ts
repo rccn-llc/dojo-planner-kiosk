@@ -1,13 +1,16 @@
 import type { NextRequest } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import {
+  attendance,
   classScheduleInstance,
   dojoClass,
   member,
   memberMembership,
+  membershipPlan,
+  program,
 } from '@/lib/memberSchema';
 
 export async function GET(request: NextRequest) {
@@ -28,15 +31,18 @@ export async function GET(request: NextRequest) {
 
     // Check if member has an active membership
     const activeMemberships = await db
-      .select({ id: memberMembership.id, status: memberMembership.status })
+      .select({
+        id: memberMembership.id,
+        status: memberMembership.status,
+        membershipPlanId: memberMembership.membershipPlanId,
+      })
       .from(memberMembership)
       .where(
         and(
           eq(memberMembership.memberId, memberId),
           eq(memberMembership.status, 'active'),
         ),
-      )
-      .limit(1);
+      );
 
     if (activeMemberships.length === 0) {
       // Also check member status
@@ -55,13 +61,38 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // Member has trial/active status but no membership record — allow access
+      // Member has trial/active status but no membership record -- allow access
       if (memberStatus !== 'active' && memberStatus !== 'trial') {
         return NextResponse.json({
           membershipStatus: 'inactive',
           message: 'Your membership is not currently active.',
           classes: [],
         });
+      }
+    }
+
+    // Determine allowed program IDs based on membership plans
+    let accessLevel = 'limited';
+    const allowedProgramIds: string[] = [];
+
+    if (activeMemberships.length > 0) {
+      const planIds = activeMemberships.map(m => m.membershipPlanId);
+
+      const plans = await db
+        .select({
+          programId: membershipPlan.programId,
+          accessLevel: membershipPlan.accessLevel,
+        })
+        .from(membershipPlan)
+        .where(inArray(membershipPlan.id, planIds));
+
+      for (const p of plans) {
+        if (p.accessLevel === 'Unlimited') {
+          accessLevel = 'Unlimited';
+        }
+        if (p.programId) {
+          allowedProgramIds.push(p.programId);
+        }
       }
     }
 
@@ -78,6 +109,7 @@ export async function GET(request: NextRequest) {
         endTime: classScheduleInstance.endTime,
         room: classScheduleInstance.room,
         className: dojoClass.name,
+        programId: dojoClass.programId,
       })
       .from(classScheduleInstance)
       .innerJoin(dojoClass, eq(classScheduleInstance.classId, dojoClass.id))
@@ -90,15 +122,73 @@ export async function GET(request: NextRequest) {
         ),
       );
 
+    // Filter by allowed programs unless member has Unlimited access
+    const filteredSchedules = accessLevel === 'Unlimited'
+      ? schedules
+      : schedules.filter((s) => {
+          // Classes without a program are open to everyone
+          if (!s.programId) {
+            return true;
+          }
+          return allowedProgramIds.includes(s.programId);
+        });
+
+    // Exclude classes the member has already checked into today
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+    const scheduleIds = filteredSchedules.map(s => s.scheduleId);
+    const checkedInScheduleIds = new Set<string>();
+
+    if (scheduleIds.length > 0) {
+      const existingCheckins = await db
+        .select({ classScheduleInstanceId: attendance.classScheduleInstanceId })
+        .from(attendance)
+        .where(
+          and(
+            eq(attendance.memberId, memberId),
+            inArray(attendance.classScheduleInstanceId, scheduleIds),
+            gte(attendance.attendanceDate, todayStart),
+            lt(attendance.attendanceDate, tomorrowStart),
+          ),
+        );
+
+      for (const row of existingCheckins) {
+        if (row.classScheduleInstanceId) {
+          checkedInScheduleIds.add(row.classScheduleInstanceId);
+        }
+      }
+    }
+
+    const availableSchedules = filteredSchedules.filter(s => !checkedInScheduleIds.has(s.scheduleId));
+
+    // Verify program names for display
+    const programIds = [...new Set(availableSchedules.map(s => s.programId).filter(Boolean) as string[])];
+    const programMap = new Map<string, string>();
+
+    if (programIds.length > 0) {
+      const programs = await db
+        .select({ id: program.id, name: program.name })
+        .from(program)
+        .where(inArray(program.id, programIds));
+
+      for (const p of programs) {
+        programMap.set(p.id, p.name);
+      }
+    }
+
     return NextResponse.json({
       membershipStatus: 'active',
-      classes: schedules.map(s => ({
+      accessLevel,
+      classes: availableSchedules.map(s => ({
         scheduleId: s.scheduleId,
         classId: s.classId,
         className: s.className,
         startTime: s.startTime,
         endTime: s.endTime,
         room: s.room,
+        programName: s.programId ? programMap.get(s.programId) : undefined,
       })),
     });
   }

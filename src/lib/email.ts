@@ -173,24 +173,37 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
   }
 }
 
-// ── Waiver email ─────────────────────────────────────────────────────────────
+// ── Trial confirmation email ─────────────────────────────────────────────────
 
-interface SendWaiverEmailParams {
+interface TrialConfirmationParams {
   toEmail: string;
-  memberName: string;
-  waiverName: string;
-  signedAt: string;
-  pdfBuffer: Buffer;
-  pdfFilename: string;
+  firstName: string;
+  lastName: string;
+  programName: string;
+  planName: string;
+  childNames?: string[];
+  waiverPdfBuffer?: Buffer;
+  waiverPdfFilename?: string;
 }
 
-export async function sendWaiverEmail(params: SendWaiverEmailParams): Promise<boolean> {
+export async function sendTrialConfirmation(params: TrialConfirmationParams): Promise<boolean> {
   if (!resend) {
-    console.warn('[Email] Waiver email skipped — RESEND_API_KEY not configured');
+    console.warn('[Email] Trial confirmation skipped — RESEND_API_KEY not configured');
     return false;
   }
 
   try {
+    const hasChildren = params.childNames && params.childNames.length > 0;
+    const childrenRow = hasChildren
+      ? `
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Participants</p>
+              <p style="margin: 0; color: #111827; font-size: 16px;">${params.childNames!.join(', ')}</p>
+            </td>
+          </tr>`
+      : '';
+
     const html = `
 <!DOCTYPE html>
 <html>
@@ -199,47 +212,74 @@ export async function sendWaiverEmail(params: SendWaiverEmailParams): Promise<bo
   <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
     <tr>
       <td style="padding: 40px 32px;">
-        <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Your Signed Waiver</h1>
-        <p style="margin: 0 0 24px; color: #6b7280; font-size: 16px;">
-          Hi ${params.memberName}, your signed waiver is attached to this email.
+
+        <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Welcome!</h1>
+        <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
+          Hi ${params.firstName}, your free trial is confirmed.
         </p>
-        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px;">
+
+        <!-- Trial details -->
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
           <tr>
-            <td style="padding: 16px;">
-              <p style="margin: 0 0 4px; font-weight: 600; color: #111827;">${params.waiverName}</p>
-              <p style="margin: 0; color: #6b7280; font-size: 14px;">Signed on ${params.signedAt}</p>
+            <td style="padding: 16px; background-color: #f9fafb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Program</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.programName}</p>
             </td>
           </tr>
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+            </td>
+          </tr>
+          ${childrenRow}
         </table>
+
+        ${params.waiverPdfBuffer ? '<p style="margin: 0 0 24px; color: #6b7280; font-size: 14px;">Your signed waiver is attached to this email as a PDF.</p>' : ''}
+
+        <p style="margin: 0 0 24px; color: #374151; font-size: 15px; line-height: 1.6;">
+          We look forward to seeing you at the dojo. Stop by anytime during your trial to get started.
+        </p>
+
+        <!-- Footer -->
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td style="padding: 24px 0 0; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
-              <p style="margin: 0;">This is an automated email. Please do not reply.</p>
+              <p style="margin: 0;">This is an automated confirmation. Please do not reply to this email.</p>
             </td>
           </tr>
         </table>
+
       </td>
     </tr>
   </table>
 </body>
 </html>`;
 
+    const attachments: Array<{ filename: string; content: Buffer }> = [];
+    if (params.waiverPdfBuffer && params.waiverPdfFilename) {
+      attachments.push({
+        filename: params.waiverPdfFilename,
+        content: params.waiverPdfBuffer,
+      });
+    }
+
     await resend.emails.send({
       from: fromEmail,
       to: params.toEmail,
-      subject: `Your Signed Waiver — ${params.waiverName}`,
+      subject: 'Your free trial is confirmed!',
       html,
-      attachments: [{
-        filename: params.pdfFilename,
-        content: params.pdfBuffer,
-      }],
+      ...(attachments.length > 0 && { attachments }),
     });
 
-    console.warn('[Email] Waiver sent', { to: params.toEmail, waiver: params.waiverName });
+    console.warn('[Email] Trial confirmation sent', {
+      to: params.toEmail,
+      hasWaiver: !!params.waiverPdfBuffer,
+    });
     return true;
   }
   catch (error) {
-    console.error('[Email] Failed to send waiver', {
+    console.error('[Email] Failed to send trial confirmation', {
       error: error instanceof Error ? error.message : 'Unknown error',
       to: params.toEmail,
     });

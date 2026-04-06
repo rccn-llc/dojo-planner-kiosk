@@ -210,7 +210,7 @@ export async function PATCH(
       memberUpdate.phone = digits || null;
     }
     if (body.dateOfBirth !== undefined) {
-      memberUpdate.dateOfBirth = body.dateOfBirth ? new Date(body.dateOfBirth) : null;
+      memberUpdate.dateOfBirth = body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : null;
     }
 
     if (Object.keys(memberUpdate).length > 0) {

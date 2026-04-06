@@ -18,9 +18,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ verified: false, error: 'Missing required fields' }, { status: 400 });
     }
 
-    const verified = await verifyOTP(memberId, code);
-    if (!verified) {
-      return NextResponse.json({ verified: false, error: 'Invalid or expired code' });
+    const result = await verifyOTP(memberId, code);
+    if (!result.verified) {
+      return NextResponse.json({
+        verified: false,
+        reason: result.reason,
+        attemptsRemaining: result.attemptsRemaining,
+      });
     }
 
     // Fetch member details for session

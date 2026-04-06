@@ -5,7 +5,6 @@ import type { CartItem, StoreProduct } from '../../machines/types';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import LocalMallOutlinedIcon from '@mui/icons-material/LocalMallOutlined';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import Image from 'next/image';
@@ -13,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
+import { KioskSelect } from '../KioskSelect';
 
 const US_STATES = [
   'AL',
@@ -565,34 +565,18 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                 )}
                 {state.context.selectedProduct.variants && state.context.selectedProduct.variants.length > 1 && (
                   <div>
-                    <label className={labelClass} htmlFor="variantSelect">Select Option</label>
-                    <div className="relative">
-                      <select
-                        id="variantSelect"
-                        value={state.context.selectedVariantId}
-                        onChange={e => send({ type: 'SELECT_VARIANT', variantId: e.target.value })}
-                        className={`appearance-none pr-10 ${inputClass('selectedVariantId')}`}
-                      >
-                        <option value="">Choose an option</option>
-                        {state.context.selectedProduct.variants.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {v.name}
-                            {' '}
-                            —
-                            {' '}
-                            {formatCurrency(v.price)}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
-                    {state.context.errors?.selectedVariantId && (
-                      <p className="mt-1 text-base text-red-600">
-                        {state.context.errors.selectedVariantId}
-                      </p>
-                    )}
+                    <KioskSelect
+                      id="variantSelect"
+                      value={state.context.selectedVariantId}
+                      onChange={v => send({ type: 'SELECT_VARIANT', variantId: v })}
+                      label="Select Option"
+                      placeholder="Choose an option"
+                      options={state.context.selectedProduct.variants.map(v => ({
+                        value: v.id,
+                        label: `${v.name} — ${formatCurrency(v.price)}`,
+                      }))}
+                      error={state.context.errors?.selectedVariantId}
+                    />
                   </div>
                 )}
 
@@ -912,20 +896,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
                   {/* Country */}
                   <div className="sm:col-span-2">
-                    <label className={labelClass} htmlFor="country">Country</label>
-                    <div className="relative">
-                      <select
-                        id="country"
-                        value={state.context.country}
-                        onChange={e => handleInputChange('country', e.target.value)}
-                        className={`appearance-none pr-10 ${inputClass('country')}`}
-                      >
-                        <option value="United States">United States</option>
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
+                    <KioskSelect
+                      id="country"
+                      value={state.context.country}
+                      onChange={v => handleInputChange('country', v)}
+                      label="Country"
+                      options={[{ value: 'United States', label: 'United States' }]}
+                    />
                   </div>
 
                   {/* Address */}
@@ -975,29 +952,16 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       <p className="mt-1 text-base text-red-600">{state.context.errors.city}</p>
                     )}
                   </div>
-                  <div>
-                    <label className={labelClass} htmlFor="state">
-                      State / Province / Region
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        id="state"
-                        value={state.context.state}
-                        onChange={e => handleInputChange('state', e.target.value)}
-                        className={`appearance-none pr-10 ${inputClass('state')}`}
-                      >
-                        <option value="">Select state…</option>
-                        {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
-                    {state.context.errors?.state && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.state}</p>
-                    )}
-                  </div>
+                  <KioskSelect
+                    id="state"
+                    value={state.context.state}
+                    onChange={v => handleInputChange('state', v)}
+                    label="State / Province / Region"
+                    required
+                    options={US_STATES.map(s => ({ value: s, label: s }))}
+                    placeholder="Select state…"
+                    error={state.context.errors?.state}
+                  />
 
                   <div>
                     <label className={labelClass} htmlFor="zip">
@@ -1162,23 +1126,16 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           placeholder="Name on account"
                         />
                       </div>
-                      <div>
-                        <label className={labelClass} htmlFor="achAccountType">Account type</label>
-                        <div className="relative">
-                          <select
-                            id="achAccountType"
-                            value={state.context.achAccountType}
-                            onChange={e => handleInputChange('achAccountType', e.target.value)}
-                            className={`appearance-none pr-10 ${inputClass('achAccountType')}`}
-                          >
-                            <option value="Checking">Checking</option>
-                            <option value="Savings">Savings</option>
-                          </select>
-                          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                            <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                          </span>
-                        </div>
-                      </div>
+                      <KioskSelect
+                        id="achAccountType"
+                        value={state.context.achAccountType}
+                        onChange={v => handleInputChange('achAccountType', v)}
+                        label="Account type"
+                        options={[
+                          { value: 'Checking', label: 'Checking' },
+                          { value: 'Savings', label: 'Savings' },
+                        ]}
+                      />
                       <div>
                         <label className={labelClass} htmlFor="achRoutingNumber">Routing number</label>
                         <input

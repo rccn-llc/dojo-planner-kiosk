@@ -40,6 +40,15 @@ export const checkinMachine = createMachine({
             errors: {} as Record<string, string>,
           })),
         },
+        // Pre-seed: caller (e.g. TrialFlow) supplies already-known members,
+        // skipping the phone lookup
+        MEMBERS_FOUND: {
+          target: 'selectingMember',
+          actions: assign(({ event }) => ({
+            members: event.members,
+            sessionId: generateSessionId(),
+          })),
+        },
       },
     },
 
@@ -120,11 +129,8 @@ export const checkinMachine = createMachine({
       },
     },
 
-    // Success
+    // Success — component calls onComplete after 5s to return home
     checkinComplete: {
-      after: {
-        5000: 'idle',
-      },
       on: {
         RESET: 'idle',
       },

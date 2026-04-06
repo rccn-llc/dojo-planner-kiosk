@@ -41,7 +41,6 @@
     "react-dom": "19.2.3",
     "react-signature-canvas": "^1.0.6",
     "resend": "^6.9.4",
-    "speakeasy": "^2.0.0",
     "xstate": "^5.26.0"
   },
   "release": {

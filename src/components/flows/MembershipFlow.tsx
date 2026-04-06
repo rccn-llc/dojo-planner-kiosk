@@ -4,12 +4,12 @@ import type { TokenizationIframeConfig } from '../../lib/iqpro';
 import type { MembershipPlan } from '../../lib/types';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { useEffect, useRef, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
+import { KioskSelect } from '../KioskSelect';
 import { SignatureCapture } from '../SignatureCapture';
 import { StepIndicator } from '../StepIndicator';
 import { TouchDatePicker } from '../TouchDatePicker';
@@ -92,10 +92,28 @@ interface MembershipFlowProps {
   onCheckIn?: () => void;
 }
 
+interface LookupResult {
+  memberId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  dateOfBirth: string | null;
+  status: string;
+  memberType: string;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  trialMembershipId: string | null;
+}
+
 export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
   const [planPage, setPlanPage] = useState(0);
   const [successCountdown, setSuccessCountdown] = useState(60);
+  const [lookupResults, setLookupResults] = useState<LookupResult[]>([]);
+  const [showLookupPicker, setShowLookupPicker] = useState(false);
 
   // Determine if member is a minor
   const memberIsMinor = (() => {
@@ -161,6 +179,27 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
+  const dispatchMemberFound = (m: LookupResult) => {
+    send({
+      type: 'MEMBER_FOUND',
+      member: {
+        id: m.memberId,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        email: m.email,
+        phoneNumber: m.phone ?? state.context.memberLookupPhone,
+        status: (m.status as 'active' | 'inactive' | 'trial' | 'suspended') ?? 'active',
+        joinedAt: new Date(),
+        dateOfBirth: m.dateOfBirth ?? undefined,
+        address: m.address ?? undefined,
+        city: m.city ?? undefined,
+        state: m.state ?? undefined,
+        zip: m.zip ?? undefined,
+        trialMembershipId: m.trialMembershipId,
+      },
+    });
+  };
+
   // Handle member lookup when entering lookingUpMember state
   useEffect(() => {
     if (!state.matches('lookingUpMember')) {
@@ -170,32 +209,42 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
     fetch('/api/members/lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({
+        phone,
+        selectedPlanId: state.context.selectedPlan?.id,
+        convertOnly: true,
+      }),
     })
       .then(r => r.json())
-      .then((data) => {
-        if (data.found && data.members?.length > 0) {
-          const m = data.members[0];
-          send({
-            type: 'MEMBER_FOUND',
-            member: {
-              id: m.memberId,
-              firstName: m.firstName,
-              lastName: m.lastName,
-              email: '',
-              phoneNumber: phone,
-              status: m.status,
-              joinedAt: new Date(),
-            },
-          });
-        }
-        else {
+      .then((data: { found: boolean; members: LookupResult[] }) => {
+        if (!data.found || !data.members || data.members.length === 0) {
           send({ type: 'MEMBER_NOT_FOUND' });
+          return;
         }
+
+        if (data.members.length === 1) {
+          // Single match — dispatch immediately
+          const m = data.members[0];
+          if (m) {
+            dispatchMemberFound(m);
+          }
+          return;
+        }
+
+        // Multiple matches — show picker
+        setLookupResults(data.members);
+        setShowLookupPicker(true);
+        send({ type: 'MEMBER_NOT_FOUND' }); // Transition back to collectingInfo; picker stays as overlay
       })
       .catch(() => send({ type: 'MEMBER_NOT_FOUND' }));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
+
+  const handlePickLookupResult = (m: LookupResult) => {
+    setShowLookupPicker(false);
+    setLookupResults([]);
+    dispatchMemberFound(m);
+  };
 
   // Fetch waiver content when entering reviewingCommitment state
   useEffect(() => {
@@ -306,6 +355,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
       waiverContent,
       organizationName: '',
       organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? '',
+      existingMemberId: ctx.existingMemberId,
+      convertingTrialMembershipId: ctx.convertingTrialMembershipId,
     };
 
     fetch('/api/payment/membership', {
@@ -612,19 +663,17 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                       placeholder="guardian@email.com"
                     />
                   </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-semibold text-amber-800" htmlFor="guardianRelationship">Relationship</label>
-                    <select
-                      id="guardianRelationship"
-                      value={state.context.guardianRelationship || 'parent'}
-                      onChange={e => handleInputChange('guardianRelationship', e.target.value)}
-                      className="w-full rounded-xl border-2 border-amber-300 bg-white p-4 text-xl text-black focus:border-black focus:ring-2 focus:ring-black focus:outline-none"
-                    >
-                      <option value="parent">Parent</option>
-                      <option value="guardian">Guardian</option>
-                      <option value="legal_guardian">Legal Guardian</option>
-                    </select>
-                  </div>
+                  <KioskSelect
+                    id="guardianRelationship"
+                    value={state.context.guardianRelationship || 'parent'}
+                    onChange={v => handleInputChange('guardianRelationship', v)}
+                    label="Relationship"
+                    options={[
+                      { value: 'parent', label: 'Parent' },
+                      { value: 'guardian', label: 'Guardian' },
+                      { value: 'legal_guardian', label: 'Legal Guardian' },
+                    ]}
+                  />
                 </div>
               </div>
             )}
@@ -715,7 +764,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                       value={state.context.memberLookupPhone || ''}
                       onChange={e => handleInputChange('memberLookupPhone', e.target.value)}
                       placeholder="Phone number"
-                      className="flex-1 rounded-xl border-2 border-gray-300 p-4 text-xl focus:border-black focus:outline-none"
+                      className="flex-1 rounded-xl border-2 border-gray-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:outline-none"
                     />
                     <button
                       type="button"
@@ -846,27 +895,16 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                     />
                     {state.context.errors?.city && <p className="mt-1 text-base text-red-600">{state.context.errors.city}</p>}
                   </div>
-                  <div>
-                    <label className={labelClass} htmlFor="state">
-                      State
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        id="state"
-                        value={state.context.state || ''}
-                        onChange={e => handleInputChange('state', e.target.value)}
-                        className={`appearance-none pr-10 ${inputClass('state')}`}
-                      >
-                        <option value="">Select state…</option>
-                        {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
-                    {state.context.errors?.state && <p className="mt-1 text-base text-red-600">{state.context.errors.state}</p>}
-                  </div>
+                  <KioskSelect
+                    id="state"
+                    value={state.context.state || ''}
+                    onChange={v => handleInputChange('state', v)}
+                    label="State"
+                    required
+                    options={US_STATES.map(s => ({ value: s, label: s }))}
+                    placeholder="Select state…"
+                    error={state.context.errors?.state}
+                  />
                   <div>
                     <label className={labelClass} htmlFor="zip">
                       ZIP Code
@@ -1134,26 +1172,17 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                         placeholder="Account number"
                       />
                     </div>
-                    <div>
-                      <label className={labelClass} htmlFor="achAccountType">
-                        Account Type
-                        <span className="text-red-500">*</span>
-                      </label>
-                      <div className="relative">
-                        <select
-                          id="achAccountType"
-                          value={state.context.achAccountType || 'Checking'}
-                          onChange={e => handleInputChange('achAccountType', e.target.value)}
-                          className={`appearance-none pr-10 ${inputClass('achAccountType')}`}
-                        >
-                          <option value="Checking">Checking</option>
-                          <option value="Savings">Savings</option>
-                        </select>
-                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                          <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                        </span>
-                      </div>
-                    </div>
+                    <KioskSelect
+                      id="achAccountType"
+                      value={state.context.achAccountType || 'Checking'}
+                      onChange={v => handleInputChange('achAccountType', v)}
+                      label="Account Type"
+                      required
+                      options={[
+                        { value: 'Checking', label: 'Checking' },
+                        { value: 'Savings', label: 'Savings' },
+                      ]}
+                    />
                   </div>
                 )}
               </div>
@@ -1390,6 +1419,57 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         )}
 
       </main>
+
+      {/* Multi-member lookup picker overlay */}
+      {showLookupPicker && lookupResults.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl sm:p-8">
+            <h3 className="mb-2 text-center text-2xl font-bold text-black">
+              {lookupResults.length}
+              {' '}
+              Members Found
+            </h3>
+            <p className="mb-6 text-center text-lg text-gray-500">Select who is signing up</p>
+            <div className="space-y-3">
+              {lookupResults.map(m => (
+                <button
+                  key={m.memberId}
+                  type="button"
+                  onClick={() => handlePickLookupResult(m)}
+                  className="flex w-full cursor-pointer items-center justify-between rounded-2xl border-2 border-gray-200 px-6 py-5 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-95"
+                >
+                  <div>
+                    <p className="text-xl font-bold text-black">
+                      {m.firstName}
+                      {' '}
+                      {m.lastName}
+                    </p>
+                    <p className="text-sm text-gray-400 capitalize">{m.memberType.replace(/-/g, ' ')}</p>
+                  </div>
+                  <span className={`rounded-lg px-3 py-1 text-sm font-semibold capitalize ${
+                    m.status === 'active'
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}
+                  >
+                    {m.status}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowLookupPicker(false);
+                setLookupResults([]);
+              }}
+              className="mt-6 min-h-14 w-full cursor-pointer rounded-2xl border-2 border-gray-200 text-lg font-bold text-gray-500 transition-all hover:bg-gray-50 active:scale-95"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

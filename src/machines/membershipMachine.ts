@@ -82,6 +82,8 @@ const emptyContext: MembershipContext = {
   isLoadingWaiver: false,
   memberLookupPhone: '',
   memberLookupResult: null,
+  convertingTrialMembershipId: null,
+  existingMemberId: null,
   paymentMethod: 'card' as const,
   cardholderName: '',
   cardToken: '',
@@ -247,13 +249,20 @@ export const membershipMachine = createMachine({
       on: {
         MEMBER_FOUND: {
           target: 'collectingInfo',
-          actions: assign(({ event }) => ({
+          actions: assign(({ event, context }) => ({
             isSubmitting: false,
             firstName: event.member.firstName,
             lastName: event.member.lastName,
             email: event.member.email,
             phoneNumber: event.member.phoneNumber,
+            dateOfBirth: event.member.dateOfBirth ?? context.dateOfBirth,
+            address: event.member.address ?? context.address,
+            city: event.member.city ?? context.city,
+            state: event.member.state ?? context.state,
+            zip: event.member.zip ?? context.zip,
             memberLookupResult: event.member,
+            existingMemberId: event.member.id,
+            convertingTrialMembershipId: event.member.trialMembershipId ?? null,
           })),
         },
         MEMBER_NOT_FOUND: {

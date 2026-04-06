@@ -17,9 +17,19 @@ const MAX_SENDS_PER_WINDOW = 3;
 const MAX_ATTEMPTS = 3;
 const OTP_TTL_MS = 5 * 60 * 1000;
 
-// In-memory store for development; Upstash Redis for production
-const memoryStore = new Map<string, StoredOTP>();
-const sendTrackers = new Map<string, SendTracker>();
+// In-memory store for development; Upstash Redis for production.
+// Stash on globalThis so the store survives Next.js dev HMR and is shared
+// across route handlers (each route is bundled independently, so a plain
+// module-scoped const would create a separate Map per route handler).
+interface OtpGlobals {
+  __kioskOtpStore?: Map<string, StoredOTP>;
+  __kioskOtpSendTrackers?: Map<string, SendTracker>;
+}
+const otpGlobals = globalThis as typeof globalThis & OtpGlobals;
+const memoryStore: Map<string, StoredOTP>
+  = otpGlobals.__kioskOtpStore ?? (otpGlobals.__kioskOtpStore = new Map<string, StoredOTP>());
+const sendTrackers: Map<string, SendTracker>
+  = otpGlobals.__kioskOtpSendTrackers ?? (otpGlobals.__kioskOtpSendTrackers = new Map<string, SendTracker>());
 
 function getRedisClient() {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
@@ -84,11 +94,17 @@ export async function storeOTP(memberId: string, code: string): Promise<boolean>
   return true;
 }
 
+interface VerifyOTPResult {
+  verified: boolean;
+  reason?: 'not_found' | 'expired' | 'exhausted' | 'wrong_code';
+  attemptsRemaining?: number;
+}
+
 /**
  * Verify an OTP code for a member.
- * Returns true if the code matches and is still valid.
+ * Returns { verified: true } on match, otherwise a reason and remaining attempts.
  */
-export async function verifyOTP(memberId: string, code: string): Promise<boolean> {
+export async function verifyOTP(memberId: string, code: string): Promise<VerifyOTPResult> {
   const redis = getRedisClient();
   let entry: StoredOTP | undefined;
 
@@ -105,7 +121,7 @@ export async function verifyOTP(memberId: string, code: string): Promise<boolean
   }
 
   if (!entry) {
-    return false;
+    return { verified: false, reason: 'not_found' };
   }
 
   if (Date.now() > entry.expiresAt) {
@@ -117,11 +133,11 @@ export async function verifyOTP(memberId: string, code: string): Promise<boolean
     else {
       memoryStore.delete(memberId);
     }
-    return false;
+    return { verified: false, reason: 'expired' };
   }
 
   if (entry.attempts >= MAX_ATTEMPTS) {
-    return false;
+    return { verified: false, reason: 'exhausted', attemptsRemaining: 0 };
   }
 
   entry.attempts++;
@@ -135,7 +151,7 @@ export async function verifyOTP(memberId: string, code: string): Promise<boolean
     else {
       memoryStore.delete(memberId);
     }
-    return true;
+    return { verified: true };
   }
 
   // Wrong code — update attempt count
@@ -150,5 +166,10 @@ export async function verifyOTP(memberId: string, code: string): Promise<boolean
     memoryStore.set(memberId, entry);
   }
 
-  return false;
+  const attemptsRemaining = Math.max(0, MAX_ATTEMPTS - entry.attempts);
+  return {
+    verified: false,
+    reason: attemptsRemaining === 0 ? 'exhausted' : 'wrong_code',
+    attemptsRemaining,
+  };
 }

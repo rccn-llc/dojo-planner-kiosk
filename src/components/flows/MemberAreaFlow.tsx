@@ -8,6 +8,7 @@ import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { useEffect, useState } from 'react';
 import { validateMemberEditForm } from '../../lib/validation';
 import { KioskFlowHeader } from '../KioskFlowHeader';
+import { KioskSelect } from '../KioskSelect';
 import { TouchDatePicker } from '../TouchDatePicker';
 
 interface MemberAreaFlowProps {
@@ -105,14 +106,15 @@ interface MemberDetail {
   attendance: AttendanceData[];
 }
 
-type View = 'staffAuth' | 'search' | 'results' | 'memberDetail' | 'addFamily';
+type View = 'search' | 'results' | 'otpVerify' | 'memberDetail' | 'addFamily';
 type DetailTab = 'overview' | 'billing' | 'waivers' | 'attendance' | 'family';
 
 export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
-  const [view, setView] = useState<View>('staffAuth');
-  const [totpCode, setTotpCode] = useState('');
-  const [totpError, setTotpError] = useState('');
-  const [totpLoading, setTotpLoading] = useState(false);
+  const [view, setView] = useState<View>('search');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [otpMember, setOtpMember] = useState<{ memberId: string; firstName: string; emailHint: string } | null>(null);
   const [searchPhone, setSearchPhone] = useState('');
   const [searchName, setSearchName] = useState('');
   const [results, setResults] = useState<MemberResult[]>([]);
@@ -251,6 +253,92 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
     }
     catch { setError('Failed to load member details'); }
     setLoading(false);
+  };
+
+  // ── OTP verification for member access ──
+
+  const sendOtpToMember = async (m: MemberResult) => {
+    setOtpLoading(true);
+    setOtpError('');
+    setOtpCode('');
+
+    try {
+      // Look up member's email hint via the member-portal lookup
+      const lookupRes = await fetch('/api/member-portal/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: searchPhone.replace(/\D/g, ''), orgSlug: '_kiosk' }),
+      });
+      const lookupData = await lookupRes.json();
+
+      // Find the matching member's email hint
+      const match = lookupData.members?.find((lm: { memberId: string }) => lm.memberId === m.memberId);
+      const emailHint = match?.emailHint ?? '***@***.***';
+
+      // Send OTP
+      await fetch('/api/member-portal/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId: m.memberId, orgSlug: '_kiosk' }),
+      });
+
+      setOtpMember({ memberId: m.memberId, firstName: m.firstName, emailHint });
+      setView('otpVerify');
+    }
+    catch {
+      setOtpError('Failed to send verification code. Please try again.');
+    }
+    setOtpLoading(false);
+  };
+
+  const verifyOtpAndLoadMember = async (code: string) => {
+    if (!otpMember) {
+      return;
+    }
+    setOtpLoading(true);
+    setOtpError('');
+
+    try {
+      const res = await fetch('/api/member-portal/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId: otpMember.memberId, code, orgSlug: '_kiosk', isKiosk: true }),
+      });
+      const data = await res.json();
+
+      if (!data.verified) {
+        setOtpCode('');
+        const reason = data.reason as 'not_found' | 'expired' | 'exhausted' | 'wrong_code' | undefined;
+        const attemptsRemaining = typeof data.attemptsRemaining === 'number' ? data.attemptsRemaining : undefined;
+        let message: string;
+        if (reason === 'not_found') {
+          message = 'No verification code found. Please request a new code.';
+        }
+        else if (reason === 'expired') {
+          message = 'Your verification code expired. Please request a new code.';
+        }
+        else if (reason === 'exhausted' || attemptsRemaining === 0) {
+          message = 'Too many attempts. Please request a new code.';
+        }
+        else if (typeof attemptsRemaining === 'number') {
+          message = `Invalid code. ${attemptsRemaining} attempt${attemptsRemaining === 1 ? '' : 's'} remaining.`;
+        }
+        else {
+          message = 'Invalid code. Please try again.';
+        }
+        setOtpError(message);
+        setOtpLoading(false);
+        return;
+      }
+
+      // OTP verified — load member detail
+      await loadMemberDetail(otpMember.memberId);
+    }
+    catch {
+      setOtpCode('');
+      setOtpError('Verification failed. Please try again.');
+    }
+    setOtpLoading(false);
   };
 
   // ── Edit member ──
@@ -469,111 +557,88 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
     setFamilyLoading(false);
   };
 
-  // ── TOTP STAFF AUTH VIEW ──
+  // ── OTP VERIFICATION VIEW ──
 
-  if (view === 'staffAuth') {
-    const verifyTotp = async (code: string) => {
-      setTotpLoading(true);
-      setTotpError('');
-      try {
-        const res = await fetch('/api/staff/verify-totp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code }),
-        });
-        const data = await res.json();
-
-        if (res.status === 503) {
-          setTotpError('Staff access not configured. Contact your administrator.');
-          setTotpCode('');
-          setTotpLoading(false);
-          return;
-        }
-
-        if (data.verified) {
-          setView('search');
-        }
-        else {
-          setTotpError('Invalid code. Please try again.');
-          setTotpCode('');
-        }
-      }
-      catch {
-        setTotpError('Verification failed. Please try again.');
-        setTotpCode('');
-      }
-      setTotpLoading(false);
-    };
-
-    const handleTotpDigit = (digit: string) => {
-      if (totpCode.length < 6) {
-        const newCode = totpCode + digit;
-        setTotpCode(newCode);
-        setTotpError('');
+  if (view === 'otpVerify' && otpMember) {
+    const handleOtpDigit = (digit: string) => {
+      if (otpCode.length < 6) {
+        const newCode = otpCode + digit;
+        setOtpCode(newCode);
+        setOtpError('');
 
         if (newCode.length === 6) {
-          verifyTotp(newCode);
+          verifyOtpAndLoadMember(newCode);
         }
       }
     };
 
-    const handleTotpBackspace = () => {
-      setTotpCode(totpCode.slice(0, -1));
-      setTotpError('');
+    const handleOtpBackspace = () => {
+      setOtpCode(otpCode.slice(0, -1));
+      setOtpError('');
     };
 
-    const totpDigits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'];
+    const otpDigits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'];
 
     return (
       <Shell
-        title="Member Management"
-        onBack={onBack}
+        title="Verify Identity"
+        onBack={() => {
+          setView('results');
+          setOtpCode('');
+          setOtpError('');
+          setOtpMember(null);
+        }}
       >
         <div className="w-full max-w-sm">
           <h2 className="mb-2 text-center text-2xl font-bold text-black sm:text-3xl">
-            Staff Access
+            Enter Code
           </h2>
           <p className="mb-8 text-center text-lg text-gray-500">
-            Enter your 6-digit code from your authenticator app
+            Hi
+            {' '}
+            {otpMember.firstName}
+            ! We sent a code to
+            {' '}
+            <span className="font-semibold text-black">{otpMember.emailHint}</span>
           </p>
 
           {/* Code display */}
           <div className="mb-6 flex justify-center gap-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <div
-                key={`totp-${String(i)}`}
+                key={`otp-${String(i)}`}
                 className={`flex h-14 w-12 items-center justify-center rounded-xl border-2 text-2xl font-bold ${
-                  totpCode[i]
+                  otpCode[i]
                     ? 'border-black bg-gray-50 text-black'
                     : 'border-gray-200 text-gray-300'
                 }`}
               >
-                {totpCode[i] ?? '·'}
+                {otpCode[i] ?? '·'}
               </div>
             ))}
           </div>
 
-          {totpError && (
-            <p className="mb-4 text-center text-red-500">{totpError}</p>
+          {otpError && (
+            <p className="mb-4 text-center text-red-500">{otpError}</p>
           )}
 
-          {totpLoading && (
+          {otpLoading && (
             <p className="mb-4 text-center text-gray-500">Verifying...</p>
           )}
 
           {/* Number pad */}
           <div className="grid grid-cols-3 gap-3">
-            {totpDigits.map((d, i) => {
+            {otpDigits.map((d, i) => {
               if (d === '') {
-                return <div key={`totp-pad-empty-${String(i)}`} />;
+                return <div key={`otp-pad-empty-${String(i)}`} />;
               }
               if (d === 'back') {
                 return (
                   <button
-                    key="totp-back"
+                    key="otp-back"
                     type="button"
-                    onClick={handleTotpBackspace}
-                    disabled={totpLoading}
+                    onClick={handleOtpBackspace}
+                    disabled={otpLoading}
                     className="flex min-h-16 cursor-pointer items-center justify-center rounded-2xl bg-gray-100 text-xl font-bold text-gray-600 transition-all active:scale-95 disabled:opacity-50"
                   >
                     ←
@@ -582,10 +647,10 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
               }
               return (
                 <button
-                  key={`totp-${d}`}
+                  key={`otp-${d}`}
                   type="button"
-                  onClick={() => handleTotpDigit(d)}
-                  disabled={totpLoading || totpCode.length >= 6}
+                  onClick={() => handleOtpDigit(d)}
+                  disabled={otpLoading || otpCode.length >= 6}
                   className="flex min-h-16 cursor-pointer items-center justify-center rounded-2xl bg-gray-100 text-2xl font-bold text-black transition-all hover:bg-gray-200 active:scale-95 disabled:opacity-50"
                 >
                   {d}
@@ -649,10 +714,10 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
             {' '}
             Found
           </h2>
-          <p className="mb-8 text-center text-lg text-gray-500">Select a member to view details</p>
+          <p className="mb-8 text-center text-lg text-gray-500">Select a member to verify identity</p>
           <div className="space-y-3">
             {results.map(m => (
-              <button key={m.memberId} type="button" onClick={() => loadMemberDetail(m.memberId)} className="flex w-full cursor-pointer items-center justify-between rounded-2xl border-2 border-gray-200 px-6 py-5 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-95">
+              <button key={m.memberId} type="button" onClick={() => sendOtpToMember(m)} disabled={otpLoading} className="flex w-full cursor-pointer items-center justify-between rounded-2xl border-2 border-gray-200 px-6 py-5 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-95 disabled:opacity-50">
                 <div>
                   <p className="text-xl font-bold text-black">
                     {m.firstName}
@@ -688,15 +753,20 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
           <p className="mb-6 text-center text-lg text-gray-500">Search for an existing member to link as a family member</p>
 
           <div className="mb-4">
-            <label htmlFor="family-relationship" className="mb-1 block text-sm font-semibold text-gray-500">Relationship</label>
-            <select id="family-relationship" value={familyRelationship} onChange={e => setFamilyRelationship(e.target.value)} className="w-full rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black focus:border-black focus:outline-none">
-              <option value="">Select relationship...</option>
-              <option value="spouse">Spouse</option>
-              <option value="child">Child</option>
-              <option value="parent">Parent</option>
-              <option value="sibling">Sibling</option>
-              <option value="other">Other</option>
-            </select>
+            <KioskSelect
+              id="family-relationship"
+              value={familyRelationship}
+              onChange={setFamilyRelationship}
+              label="Relationship"
+              placeholder="Select relationship..."
+              options={[
+                { value: 'spouse', label: 'Spouse' },
+                { value: 'child', label: 'Child' },
+                { value: 'parent', label: 'Parent' },
+                { value: 'sibling', label: 'Sibling' },
+                { value: 'other', label: 'Other' },
+              ]}
+            />
           </div>
 
           <div className="mb-4">
@@ -899,24 +969,17 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                           )}
                           {isConverting && (
                             <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
-                              <p className="text-sm font-semibold text-black">Convert to a new plan</p>
-                              <select
+                              <KioskSelect
+                                id="convert-plan"
                                 value={selectedNewPlanId}
-                                onChange={e => setSelectedNewPlanId(e.target.value)}
-                                className="w-full rounded-lg border-2 border-gray-300 bg-white px-4 py-3 text-base text-black focus:border-black focus:outline-none"
-                              >
-                                <option value="">Select a plan...</option>
-                                {availablePlans.map(p => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name}
-                                    {' '}
-                                    — $
-                                    {p.price.toFixed(2)}
-                                    {p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}
-                                    {p.category ? ` (${p.category})` : ''}
-                                  </option>
-                                ))}
-                              </select>
+                                onChange={setSelectedNewPlanId}
+                                label="Convert to a new plan"
+                                placeholder="Select a plan..."
+                                options={availablePlans.map(p => ({
+                                  value: p.id,
+                                  label: `${p.name} — $${p.price.toFixed(2)}${p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}${p.category ? ` (${p.category})` : ''}`,
+                                }))}
+                              />
                               {prorationLoading && <p className="text-center text-sm text-gray-400">Calculating proration...</p>}
                               {prorationData && !prorationLoading && (
                                 <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3 text-sm">
@@ -1012,23 +1075,17 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                           </button>
                           {isConverting && (
                             <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
-                              <p className="text-sm font-semibold text-black">Select a membership plan</p>
-                              <select
+                              <KioskSelect
+                                id="assign-plan"
                                 value={selectedNewPlanId}
-                                onChange={e => setSelectedNewPlanId(e.target.value)}
-                                className="w-full rounded-lg border-2 border-gray-300 bg-white px-4 py-3 text-base text-black focus:border-black focus:outline-none"
-                              >
-                                <option value="">Select a plan...</option>
-                                {availablePlans.map(p => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name}
-                                    {' '}
-                                    — $
-                                    {p.price.toFixed(2)}
-                                    {p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}
-                                  </option>
-                                ))}
-                              </select>
+                                onChange={setSelectedNewPlanId}
+                                label="Select a membership plan"
+                                placeholder="Select a plan..."
+                                options={availablePlans.map(p => ({
+                                  value: p.id,
+                                  label: `${p.name} — $${p.price.toFixed(2)}${p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}`,
+                                }))}
+                              />
                               <div className="flex gap-2">
                                 <button
                                   type="button"
@@ -1166,7 +1223,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                                 <p className="text-sm text-gray-500 capitalize">{(a.checkInMethod ?? 'kiosk').replace(/-/g, ' ')}</p>
                                 {a.checkInTime && (
                                   <p className="text-xs text-gray-400">
-                                    {new Date(a.checkInTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' })}
+                                    {new Date(a.checkInTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
                                   </p>
                                 )}
                               </div>

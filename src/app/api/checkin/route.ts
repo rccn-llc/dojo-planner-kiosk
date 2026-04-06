@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { and, eq, gte, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
+import { withRetry } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { attendance } from '@/lib/memberSchema';
 
@@ -22,18 +23,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const db = getDatabase();
     const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
-    await db.insert(attendance).values({
-      id: randomUUID(),
-      organizationId: orgId,
-      memberId: body.memberId,
-      classScheduleInstanceId: body.classScheduleInstanceId,
-      attendanceDate: now,
-      checkInTime: now,
-      checkInMethod: 'kiosk',
+    const result = await withRetry(async (db) => {
+      // Check for existing check-in to this class today
+      const [existing] = await db
+        .select({ id: attendance.id })
+        .from(attendance)
+        .where(
+          and(
+            eq(attendance.memberId, body.memberId),
+            eq(attendance.classScheduleInstanceId, body.classScheduleInstanceId),
+            gte(attendance.attendanceDate, todayStart),
+            lt(attendance.attendanceDate, tomorrowStart),
+          ),
+        )
+        .limit(1);
+
+      if (existing) {
+        return { alreadyCheckedIn: true };
+      }
+
+      await db.insert(attendance).values({
+        id: randomUUID(),
+        organizationId: orgId,
+        memberId: body.memberId,
+        classScheduleInstanceId: body.classScheduleInstanceId,
+        attendanceDate: now,
+        checkInTime: now,
+        checkInMethod: 'kiosk',
+      });
+
+      return { alreadyCheckedIn: false };
     });
+
+    if (result.alreadyCheckedIn) {
+      return NextResponse.json({
+        success: false,
+        error: 'You are already checked in to this class today.',
+        alreadyCheckedIn: true,
+      });
+    }
 
     return NextResponse.json({ success: true });
   }

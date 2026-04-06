@@ -4,12 +4,13 @@ import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
-import { iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
+import { getGatewayProcessors, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
 import {
   address,
   member,
   memberMembership,
   membershipPlan,
+  membershipWaiver,
   signedWaiver,
   transaction,
   waiverTemplate,
@@ -36,6 +37,7 @@ interface MembershipPaymentBody {
   achRoutingNumber?: string;
   achAccountNumber?: string;
   achAccountType?: 'Checking' | 'Savings';
+  country?: string;
   planId: string;
   planName: string;
   planPrice: number;
@@ -53,6 +55,10 @@ interface MembershipPaymentBody {
   waiverContent: string;
   organizationName: string;
   organizationId: string;
+  couponCode?: string;
+  couponDiscount?: number;
+  existingMemberId?: string | null;
+  convertingTrialMembershipId?: string | null;
 }
 
 function sanitizePhone(phone?: string): string | undefined {
@@ -89,27 +95,50 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Membership plan not found' }, { status: 404 });
     }
 
-    // Create or find the member
-    const memberId = randomUUID();
+    // Create or reuse the member
     const phone = sanitizePhone(body.phone);
+    const memberId = body.existingMemberId ?? randomUUID();
 
-    await db.insert(member).values({
-      id: memberId,
-      organizationId: orgId,
-      firstName: body.firstName,
-      lastName: body.lastName,
-      email: body.email,
-      phone: phone ?? null,
-      memberType: 'individual',
-      dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : undefined,
-      status: 'active',
-      statusChangedAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    if (body.existingMemberId) {
+      // Update existing member with any new info from the form
+      await db.update(member)
+        .set({
+          firstName: body.firstName,
+          lastName: body.lastName,
+          email: body.email,
+          phone: phone ?? null,
+          dateOfBirth: body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : undefined,
+          status: 'active',
+          statusChangedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(member.id, body.existingMemberId));
+    }
+    else {
+      await db.insert(member).values({
+        id: memberId,
+        organizationId: orgId,
+        firstName: body.firstName,
+        lastName: body.lastName,
+        email: body.email,
+        phone: phone ?? null,
+        memberType: 'individual',
+        dateOfBirth: body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : undefined,
+        status: 'active',
+        statusChangedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
 
-    // Create address
+    // Create or update the default address
     const street = [body.address, body.addressLine2].filter(Boolean).join(' ');
+    if (body.existingMemberId) {
+      // Remove existing default address and insert a fresh one to avoid conflicts
+      await db.delete(address).where(
+        and(eq(address.memberId, body.existingMemberId), eq(address.isDefault, true)),
+      );
+    }
     await db.insert(address).values({
       id: randomUUID(),
       memberId,
@@ -137,20 +166,47 @@ export async function POST(request: Request) {
       updatedAt: now,
     });
 
-    // Fetch waiver template for signed waiver record
-    const waiverTemplates = await db
-      .select()
-      .from(waiverTemplate)
-      .where(
-        and(
-          eq(waiverTemplate.organizationId, orgId),
-          eq(waiverTemplate.isActive, true),
-        ),
-      )
-      .orderBy(desc(waiverTemplate.version))
+    // Look up waiver template via membershipWaiver junction table
+    let wt: typeof waiverTemplate.$inferSelect | undefined;
+
+    const linkedWaivers = await db
+      .select({ waiverTemplateId: membershipWaiver.waiverTemplateId })
+      .from(membershipWaiver)
+      .where(eq(membershipWaiver.membershipPlanId, body.planId))
       .limit(1);
 
-    const wt = waiverTemplates[0];
+    if (linkedWaivers[0]) {
+      const templates = await db
+        .select()
+        .from(waiverTemplate)
+        .where(
+          and(
+            eq(waiverTemplate.id, linkedWaivers[0].waiverTemplateId),
+            eq(waiverTemplate.isActive, true),
+          ),
+        )
+        .orderBy(desc(waiverTemplate.version))
+        .limit(1);
+
+      wt = templates[0];
+    }
+
+    // Fallback: default active waiver template for the org
+    if (!wt) {
+      const waiverTemplates = await db
+        .select()
+        .from(waiverTemplate)
+        .where(
+          and(
+            eq(waiverTemplate.organizationId, orgId),
+            eq(waiverTemplate.isActive, true),
+          ),
+        )
+        .orderBy(desc(waiverTemplate.version))
+        .limit(1);
+
+      wt = waiverTemplates[0];
+    }
 
     // Create signed waiver
     const signedByRelationship = body.guardianRelationship ?? null;
@@ -166,6 +222,8 @@ export async function POST(request: Request) {
         membershipPlanPrice: plan.price,
         membershipPlanFrequency: plan.frequency,
         membershipPlanContractLength: plan.contractLength,
+        membershipPlanSignupFee: plan.signupFee,
+        membershipPlanIsTrial: plan.isTrial,
         signatureDataUrl: body.waiverSignature,
         signedByName: body.signedByName,
         signedByEmail: body.guardianEmail ?? body.email,
@@ -173,7 +231,7 @@ export async function POST(request: Request) {
         memberFirstName: body.firstName,
         memberLastName: body.lastName,
         memberEmail: body.email,
-        memberDateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : undefined,
+        memberDateOfBirth: body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : undefined,
         renderedContent: body.waiverContent,
         signedAt: now,
         createdAt: now,
@@ -186,6 +244,9 @@ export async function POST(request: Request) {
 
     if (plan.price > 0 && isIQProConfigured() && gatewayId) {
       try {
+        // Get gateway processor IDs for card/ACH
+        const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
+
         // Create IQPro customer
         const customerRes = await iqproPost<{ data?: Record<string, unknown> }>(
           `/api/gateway/${gatewayId}/customer`,
@@ -212,6 +273,20 @@ export async function POST(request: Request) {
 
         const customerData = customerRes.data ?? customerRes;
         const customerId = (customerData as Record<string, unknown>).customerId as string;
+
+        // Fetch customer details to get billing address ID
+        const customerDetail = await iqproGet<{ data?: Record<string, unknown> }>(
+          `/api/gateway/${gatewayId}/customer/${customerId}`,
+        );
+        const detailData = customerDetail.data ?? customerDetail;
+        const addresses = ((detailData as Record<string, unknown>).addresses ?? []) as Array<Record<string, unknown>>;
+        const custBillingAddr = addresses.find(a => a.isBilling) ?? addresses[0];
+        const customerBillingAddressId = (custBillingAddr?.customerAddressId ?? custBillingAddr?.id ?? '') as string;
+
+        // Update member with IQPro customer ID
+        await db.update(member)
+          .set({ iqproCustomerId: customerId })
+          .where(eq(member.id, memberId));
 
         // Register payment method
         let paymentMethodId: string;
@@ -251,6 +326,8 @@ export async function POST(request: Request) {
                 secCode: 'WEB',
                 routingNumber: body.achRoutingNumber,
                 accountType: body.achAccountType ?? 'Checking',
+                checkNumber: null,
+                accountHolderAuth: { dlState: null, dlNumber: null },
               },
               isDefault: true,
             },
@@ -259,37 +336,97 @@ export async function POST(request: Request) {
           paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? '') as string;
         }
 
-        // Process transaction
-        const amount = Math.round(plan.price * 100) / 100;
+        // Calculate payment amount (apply coupon discount if any)
+        const baseAmount = Math.round(plan.price * 100) / 100;
+        const discountAmount = body.couponDiscount ? Math.round(body.couponDiscount * 100) / 100 : 0;
+        const amount = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
+
+        // Build address objects for IQPro (used by both subscription and transaction)
+        const country = body.country || 'US';
+        const billingAddress = {
+          isBilling: true,
+          isShipping: false,
+          isRemittance: false,
+          firstName: body.firstName,
+          lastName: body.lastName,
+          email: body.email,
+          state: body.state,
+          country,
+          ...(sanitizePhone(body.phone) && { phone: sanitizePhone(body.phone) }),
+          addressLine1: body.address,
+          ...(body.addressLine2 && { addressLine2: body.addressLine2 }),
+          city: body.city,
+          postalCode: body.zip,
+        };
+        const remittanceAddress = {
+          isBilling: false,
+          isShipping: false,
+          isRemittance: true,
+          firstName: body.firstName,
+          lastName: body.lastName,
+          email: body.email,
+          country,
+        };
 
         if (isRecurring) {
-          // Create subscription
+          const billingPeriodId = plan.frequency === 'Annual' ? 6 : 4;
+          const dayOfMonth = now.getDate();
+
+          const schedule: Record<string, number[]> = {
+            minutes: [0],
+            hours: [0],
+            daysOfMonth: [dayOfMonth],
+          };
+          if (plan.frequency === 'Annual') {
+            schedule.monthsOfYear = [now.getMonth() + 1];
+          }
+
           const subRes = await iqproPost<{ data?: Record<string, unknown> }>(
             `/api/gateway/${gatewayId}/subscription`,
             {
               customerId,
-              customerPaymentMethodId: paymentMethodId,
-              plan: {
-                name: plan.name,
-                amount,
-                frequency: plan.frequency === 'Annual' ? 'yearly' : 'monthly',
-                duration: 0,
+              subscriptionStatusId: 1,
+              name: plan.name,
+              prefix: 'MBR',
+              recurrence: {
+                termStartDate: now.toISOString(),
+                billingStartDate: now.toISOString(),
+                isAutoRenewed: true,
+                allowProration: false,
+                trialLengthInDays: 0,
+                invoiceLengthInDays: 1,
+                billingPeriodId,
+                schedule,
               },
+              paymentMethod: {
+                customerPaymentMethodId: paymentMethodId,
+                isAutoCharged: true,
+                ...(cardProcessorId && { cardProcessorId }),
+                ...(achProcessorId && { achProcessorId }),
+              },
+              addresses: [billingAddress, remittanceAddress],
+              lineItems: [
+                {
+                  name: plan.name,
+                  description: `${plan.frequency} membership payment`,
+                  quantity: 1,
+                  unitPrice: amount,
+                  discount: 0,
+                  unitOfMeasureId: plan.frequency === 'Annual' ? 4 : 3,
+                },
+              ],
             },
           );
           const subData = (subRes.data ?? subRes) as Record<string, unknown>;
-          txId = (subData.subscriptionId ?? subData.id ?? '') as string;
+          const subscriptionId = (subData.subscriptionId ?? subData.id ?? '') as string;
 
-          // Update member membership with subscription ID
           await db.update(memberMembership)
-            .set({ iqproSubscriptionId: txId })
+            .set({ iqproSubscriptionId: subscriptionId })
             .where(eq(memberMembership.id, memberMembershipId));
-        }
-        else {
-          // One-time charge
-          const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
-            `/api/gateway/${gatewayId}/transaction`,
-            {
+
+          // IQPro subscriptions don't auto-charge on creation — process initial Sale
+          if (amount > 0) {
+            const initTxPayload: Record<string, unknown> = {
               type: 'Sale',
               remit: {
                 baseAmount: amount,
@@ -300,9 +437,95 @@ export async function POST(request: Request) {
                 customer: {
                   customerId,
                   customerPaymentMethodId: paymentMethodId,
+                  ...(customerBillingAddressId && { customerBillingAddressId }),
                 },
               },
+              address: [
+                {
+                  isPhysical: true,
+                  isBilling: true,
+                  isShipping: false,
+                  firstName: body.firstName,
+                  lastName: body.lastName,
+                  email: body.email,
+                  phone: sanitizePhone(body.phone) || null,
+                  addressLine1: body.address,
+                  addressLine2: body.addressLine2 || null,
+                  city: body.city,
+                  state: body.state,
+                  postalCode: body.zip,
+                  country,
+                },
+              ],
+              caption: `Membership: ${plan.name}`.substring(0, 19),
+            };
+
+            if (body.paymentMethod === 'ach') {
+              initTxPayload.ach = {
+                secCode: 'WEB',
+                checkNumber: null,
+                accountHolderAuth: { dlState: null, dlNumber: null },
+              };
+            }
+
+            const initTxRes = await iqproPost<{ data?: Record<string, unknown> }>(
+              `/api/gateway/${gatewayId}/transaction`,
+              initTxPayload,
+            );
+            const initTxRaw = initTxRes.data ?? initTxRes;
+            const initTxData = ((initTxRaw as Record<string, unknown>).transaction ?? initTxRaw) as Record<string, unknown>;
+            txId = (initTxData.transactionId ?? initTxData.id ?? '') as string;
+          }
+
+          txId = txId ?? subscriptionId;
+        }
+        else {
+          // One-time charge
+          const txPayload: Record<string, unknown> = {
+            type: 'Sale',
+            remit: {
+              baseAmount: amount,
+              totalAmount: amount,
+              currencyCode: 'USD',
             },
+            paymentMethod: {
+              customer: {
+                customerId,
+                customerPaymentMethodId: paymentMethodId,
+                ...(customerBillingAddressId && { customerBillingAddressId }),
+              },
+            },
+            address: [
+              {
+                isPhysical: true,
+                isBilling: true,
+                isShipping: false,
+                firstName: body.firstName,
+                lastName: body.lastName,
+                email: body.email,
+                phone: sanitizePhone(body.phone) || null,
+                addressLine1: body.address,
+                addressLine2: body.addressLine2 || null,
+                city: body.city,
+                state: body.state,
+                postalCode: body.zip,
+                country,
+              },
+            ],
+            caption: `Membership: ${plan.name}`.substring(0, 19),
+          };
+
+          if (body.paymentMethod === 'ach') {
+            txPayload.ach = {
+              secCode: 'WEB',
+              checkNumber: null,
+              accountHolderAuth: { dlState: null, dlNumber: null },
+            };
+          }
+
+          const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
+            `/api/gateway/${gatewayId}/transaction`,
+            txPayload,
           );
           const txRaw = txRes.data ?? txRes;
           const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
@@ -340,33 +563,50 @@ export async function POST(request: Request) {
       });
     }
 
-    // Send confirmation email (fire-and-forget)
-    if (body.email) {
-      let pdfBuffer: Buffer | undefined;
-      let pdfFilename: string | undefined;
-
-      if (body.waiverSignature && body.waiverContent) {
-        try {
-          pdfBuffer = await generateWaiverPdfBuffer({
-            memberFirstName: body.firstName,
-            memberLastName: body.lastName,
-            signedByName: body.signedByName,
-            signedByRelationship,
-            signedAt: now,
-            waiverTemplateName: wt?.name ?? 'Membership Waiver',
-            renderedContent: body.waiverContent,
-            signatureDataUrl: body.waiverSignature,
-            planName: plan.name,
-            planPrice: plan.price,
-            planFrequency: plan.frequency,
-          });
-          pdfFilename = generatePdfFilename(body.lastName, body.firstName);
-        }
-        catch (pdfErr) {
-          console.error('[payment/membership] PDF generation error:', pdfErr);
-        }
+    // If converting a trial, cancel the trial membership now that payment succeeded
+    if (body.convertingTrialMembershipId) {
+      try {
+        await db.update(memberMembership)
+          .set({
+            status: 'cancelled',
+            endDate: now,
+            updatedAt: now,
+          })
+          .where(eq(memberMembership.id, body.convertingTrialMembershipId));
       }
+      catch (cancelErr) {
+        console.error('[payment/membership] Failed to cancel trial membership:', cancelErr);
+      }
+    }
 
+    // Generate waiver PDF (used for both emails)
+    let pdfBuffer: Buffer | undefined;
+    let pdfFilename: string | undefined;
+
+    if (body.waiverSignature && body.waiverContent) {
+      try {
+        pdfBuffer = await generateWaiverPdfBuffer({
+          memberFirstName: body.firstName,
+          memberLastName: body.lastName,
+          signedByName: body.signedByName,
+          signedByRelationship,
+          signedAt: now,
+          waiverTemplateName: wt?.name ?? 'Membership Waiver',
+          renderedContent: body.waiverContent,
+          signatureDataUrl: body.waiverSignature,
+          planName: plan.name,
+          planPrice: plan.price,
+          planFrequency: plan.frequency,
+        });
+        pdfFilename = generatePdfFilename(body.lastName, body.firstName);
+      }
+      catch (pdfErr) {
+        console.error('[payment/membership] PDF generation error:', pdfErr);
+      }
+    }
+
+    // Send confirmation email with waiver PDF attached (fire-and-forget)
+    if (body.email) {
       sendMembershipConfirmation({
         toEmail: body.email,
         firstName: body.firstName,

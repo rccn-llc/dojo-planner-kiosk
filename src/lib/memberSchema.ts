@@ -3,17 +3,6 @@
 
 import { boolean, index, integer, pgTable, primaryKey, real, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
-// Organization table (minimal — only fields the kiosk reads)
-export const organization = pgTable(
-  'organization',
-  {
-    id: text('id').primaryKey(),
-    staffTotpSecret: text('staff_totp_secret'),
-    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
-    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
-  },
-);
-
 // Member table
 export const member = pgTable(
   'member',

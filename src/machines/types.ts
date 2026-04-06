@@ -44,6 +44,7 @@ export interface TrialContext {
   addressLine2: string;
   city: string;
   state: string;
+  zip: string;
 
   // Youth - Parent/Guardian info
   parentFirstName: string;
@@ -54,6 +55,7 @@ export interface TrialContext {
   parentAddressLine2: string;
   parentCity: string;
   parentState: string;
+  parentZip: string;
 
   // Youth - current child being entered
   currentChildFirstName: string;
@@ -73,6 +75,10 @@ export interface TrialContext {
   // Waiver
   waiverAgreed: boolean;
   signature: string;
+  waiverTemplateId: string;
+  waiverTemplateVersion: number;
+  waiverContent: string;
+  isLoadingWaiver: boolean;
 
   // Form validation and state
   errors: Record<string, string>;
@@ -120,6 +126,10 @@ export interface MembershipContext {
   // Member lookup
   memberLookupPhone: string;
   memberLookupResult: Member | null;
+  // If converting a trial membership, this holds the trial member_membership ID to cancel on success
+  convertingTrialMembershipId: string | null;
+  // The existing member's ID (if the lookup matched) — used to skip member creation
+  existingMemberId: string | null;
 
   // Payment
   paymentMethod: 'card' | 'ach';
@@ -164,6 +174,8 @@ export type TrialEvent
     | { type: 'FINISH_YOUTH' }
     | { type: 'SUBMIT_WAIVER' }
     | { type: 'AGREE_WAIVER'; agreed: boolean }
+    | { type: 'WAIVER_LOADED'; id: string; version: number; content: string }
+    | { type: 'WAIVER_FAILED' }
     | { type: 'TRIAL_CREATED' }
     | { type: 'TRIAL_FAILED'; error?: string }
     | { type: 'TRY_AGAIN' }
@@ -183,7 +195,17 @@ export type MembershipEvent
     | { type: 'SUBMIT_PAYMENT' }
     | { type: 'SUBMIT_COMMITMENT' }
     | { type: 'LOOKUP_MEMBER' }
-    | { type: 'MEMBER_FOUND'; member: Member }
+    | {
+      type: 'MEMBER_FOUND';
+      member: Member & {
+        dateOfBirth?: string;
+        address?: string;
+        city?: string;
+        state?: string;
+        zip?: string;
+        trialMembershipId?: string | null;
+      };
+    }
     | { type: 'MEMBER_NOT_FOUND' }
     | { type: 'PAYMENT_SUCCESS' }
     | { type: 'PAYMENT_FAILED'; error?: string }

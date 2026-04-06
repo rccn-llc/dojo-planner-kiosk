@@ -37,7 +37,7 @@ export function getDatabase(): ReturnType<typeof drizzle> {
  * Drop the cached connection so the next getDatabase() creates a fresh one.
  * Call this when a query fails with a connection-level error (ECONNRESET, etc.).
  */
-export function resetConnection() {
+function resetConnection() {
   g[globalKey] = undefined;
 }
 

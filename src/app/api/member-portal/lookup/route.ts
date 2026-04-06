@@ -18,10 +18,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ found: false, error: 'Organization slug is required' });
     }
 
-    // Resolve org by slug
-    const org = await resolveOrgBySlug(orgSlug);
-    if (!org) {
-      return NextResponse.json({ found: false, error: 'Organization not found' });
+    // Resolve org by slug, or fall back to ORGANIZATION_ID for kiosk usage
+    let orgId: string;
+    if (orgSlug === '_kiosk') {
+      const envOrgId = process.env.ORGANIZATION_ID;
+      if (!envOrgId) {
+        return NextResponse.json({ found: false, error: 'Organization not configured' });
+      }
+      orgId = envOrgId;
+    }
+    else {
+      const org = await resolveOrgBySlug(orgSlug);
+      if (!org) {
+        return NextResponse.json({ found: false, error: 'Organization not found' });
+      }
+      orgId = org.orgId;
     }
 
     const db = getDatabase();
@@ -38,7 +49,7 @@ export async function POST(request: Request) {
       .from(member)
       .where(
         and(
-          eq(member.organizationId, org.orgId),
+          eq(member.organizationId, orgId),
           or(
             eq(member.phone, rawPhone),
             eq(member.phone, phoneWithCountry),
@@ -60,8 +71,7 @@ export async function POST(request: Request) {
         email: m.email,
         status: m.status,
       })),
-      orgId: org.orgId,
-      orgName: org.orgName,
+      orgId,
     });
   }
   catch (error) {

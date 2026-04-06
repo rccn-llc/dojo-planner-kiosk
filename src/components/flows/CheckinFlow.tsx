@@ -7,10 +7,17 @@ import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { StepIndicator } from '../StepIndicator';
 
+interface PreseededMember {
+  memberId: string;
+  firstName: string;
+  lastName: string;
+}
+
 interface CheckinFlowProps {
   onComplete: () => void;
   onBack: () => void;
   onSignUp?: () => void;
+  preseededMembers?: PreseededMember[];
 }
 
 function formatTime(time24: string): string {
@@ -27,9 +34,26 @@ function formatTime(time24: string): string {
   return `${h}:${m} ${ampm}`;
 }
 
-export function CheckinFlow({ onComplete, onBack, onSignUp }: CheckinFlowProps) {
+export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: CheckinFlowProps) {
   const [state, send] = useCheckinMachine();
   const [phoneInput, setPhoneInput] = useState('');
+
+  // If the caller supplied already-known members (e.g. from a just-created trial),
+  // skip the phone lookup and jump straight to member selection / class selection.
+  useEffect(() => {
+    if (!preseededMembers || preseededMembers.length === 0) {
+      return;
+    }
+    send({
+      type: 'MEMBERS_FOUND',
+      members: preseededMembers.map(m => ({
+        memberId: m.memberId,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        status: 'trial',
+      })),
+    });
+  }, [preseededMembers, send]);
 
   const handlePhoneChange = (value: string) => {
     const cleaned = sanitizePhoneInput(value);

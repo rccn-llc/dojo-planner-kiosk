@@ -1,8 +1,8 @@
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { member } from '@/lib/memberSchema';
+import { address, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -13,8 +13,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
     }
 
-    const body = await request.json() as { phone?: string };
+    const body = await request.json() as {
+      phone?: string;
+      selectedPlanId?: string;
+      convertOnly?: boolean;
+    };
     const rawPhone = body.phone?.replace(/\D/g, '') ?? '';
+    const selectedPlanId = body.selectedPlanId;
+    const convertOnly = !!body.convertOnly;
 
     if (!rawPhone || rawPhone.length !== 10) {
       return NextResponse.json({ found: false, members: [] });
@@ -30,6 +36,9 @@ export async function POST(request: Request) {
         memberId: member.id,
         firstName: member.firstName,
         lastName: member.lastName,
+        email: member.email,
+        phone: member.phone,
+        dateOfBirth: member.dateOfBirth,
         status: member.status,
         memberType: member.memberType,
       })
@@ -44,15 +53,109 @@ export async function POST(request: Request) {
         ),
       );
 
+    const memberIds = members.map(m => m.memberId);
+
+    // Fetch active memberships joined with plan info for all members
+    interface MemberMembershipInfo {
+      memberMembershipId: string;
+      memberId: string;
+      planId: string;
+      isTrial: boolean | null;
+    }
+    const membershipsByMember = new Map<string, MemberMembershipInfo[]>();
+
+    if (memberIds.length > 0) {
+      const memberships = await db
+        .select({
+          memberMembershipId: memberMembership.id,
+          memberId: memberMembership.memberId,
+          planId: memberMembership.membershipPlanId,
+          isTrial: membershipPlan.isTrial,
+        })
+        .from(memberMembership)
+        .innerJoin(membershipPlan, eq(memberMembership.membershipPlanId, membershipPlan.id))
+        .where(
+          and(
+            inArray(memberMembership.memberId, memberIds),
+            eq(memberMembership.status, 'active'),
+          ),
+        );
+
+      for (const m of memberships) {
+        const arr = membershipsByMember.get(m.memberId) ?? [];
+        arr.push(m);
+        membershipsByMember.set(m.memberId, arr);
+      }
+    }
+
+    // Fetch default addresses for these members
+    const addressMap = new Map<string, typeof address.$inferSelect>();
+
+    if (memberIds.length > 0) {
+      const addrs = await db
+        .select()
+        .from(address)
+        .where(
+          and(
+            inArray(address.memberId, memberIds),
+            eq(address.isDefault, true),
+          ),
+        );
+
+      for (const a of addrs) {
+        addressMap.set(a.memberId, a);
+      }
+    }
+
+    // Filter members based on plan matching and trial rules
+    const filteredMembers = members.filter((m) => {
+      const memberships = membershipsByMember.get(m.memberId) ?? [];
+
+      // If they already have an active non-trial membership for the selected plan, exclude
+      if (selectedPlanId) {
+        const hasMatchingNonTrial = memberships.some(
+          ms => ms.planId === selectedPlanId && !ms.isTrial,
+        );
+        if (hasMatchingNonTrial) {
+          return false;
+        }
+      }
+
+      // If convertOnly, only include members who have an active trial
+      if (convertOnly) {
+        const hasTrial = memberships.some(ms => ms.isTrial);
+        if (!hasTrial) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
     return NextResponse.json({
-      found: members.length > 0,
-      members: members.map(m => ({
-        memberId: m.memberId,
-        firstName: m.firstName,
-        lastName: m.lastName,
-        status: m.status,
-        memberType: m.memberType ?? 'individual',
-      })),
+      found: filteredMembers.length > 0,
+      members: filteredMembers.map((m) => {
+        const addr = addressMap.get(m.memberId);
+        const memberships = membershipsByMember.get(m.memberId) ?? [];
+        const trialMembership = memberships.find(ms => ms.isTrial);
+
+        return {
+          memberId: m.memberId,
+          firstName: m.firstName,
+          lastName: m.lastName,
+          email: m.email,
+          phone: m.phone,
+          dateOfBirth: m.dateOfBirth ? m.dateOfBirth.toISOString().split('T')[0] : null,
+          status: m.status,
+          memberType: m.memberType ?? 'individual',
+          address: addr?.street ?? null,
+          addressLine2: null,
+          city: addr?.city ?? null,
+          state: addr?.state ?? null,
+          zip: addr?.zipCode ?? null,
+          trialMembershipId: trialMembership?.memberMembershipId ?? null,
+        };
+      }),
     });
   }
   catch (error) {

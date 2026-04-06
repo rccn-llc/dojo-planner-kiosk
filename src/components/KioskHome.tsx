@@ -1,5 +1,6 @@
 'use client';
 
+import type { TrialCheckinMember } from './flows/TrialFlow';
 import { useEffect, useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
@@ -13,6 +14,7 @@ type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'st
 export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
   const [orgName, setOrgName] = useState<string | null>(null);
+  const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
 
   useEffect(() => {
     fetch('/api/organization')
@@ -27,10 +29,14 @@ export function KioskHome() {
 
   const handleFlowComplete = () => {
     setCurrentFlow('home');
+    setCheckinPreseededMembers([]);
   };
 
   const handleFlowChange = (newFlow: FlowType) => {
     setCurrentFlow(newFlow);
+    if (newFlow !== 'checkin') {
+      setCheckinPreseededMembers([]);
+    }
   };
 
   if (currentFlow === 'checkin') {
@@ -38,12 +44,22 @@ export function KioskHome() {
       <CheckinFlow
         onComplete={handleFlowComplete}
         onBack={() => handleFlowChange('home')}
+        preseededMembers={checkinPreseededMembers.length > 0 ? checkinPreseededMembers : undefined}
       />
     );
   }
 
   if (currentFlow === 'trial') {
-    return <TrialFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return (
+      <TrialFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        onCheckIn={(members) => {
+          setCheckinPreseededMembers(members);
+          setCurrentFlow('checkin');
+        }}
+      />
+    );
   }
 
   if (currentFlow === 'membership') {

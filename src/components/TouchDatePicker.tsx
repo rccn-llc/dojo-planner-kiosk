@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 interface TouchDatePickerProps {
   value: string; // YYYY-MM-DD
@@ -13,22 +13,71 @@ interface TouchDatePickerProps {
 }
 
 const MONTHS = [
-  'January',
-  'February',
-  'March',
-  'April',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
   'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 function daysInMonth(month: number, year: number): number {
   return new Date(year, month + 1, 0).getDate();
+}
+
+function ScrollColumn({
+  items,
+  selectedIndex,
+  onSelect,
+  label,
+}: {
+  items: Array<{ value: number; label: string }>;
+  selectedIndex: number;
+  onSelect: (value: number) => void;
+  label: string;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const ITEM_HEIGHT = 48;
+
+  // Scroll to selected item on mount and when selection changes
+  useEffect(() => {
+    if (containerRef.current && selectedIndex >= 0) {
+      containerRef.current.scrollTop = selectedIndex * ITEM_HEIGHT;
+    }
+  }, [selectedIndex]);
+
+  return (
+    <div className="flex flex-col">
+      <p className="mb-1 text-center text-xs font-semibold text-gray-400 uppercase">{label}</p>
+      <div
+        ref={containerRef}
+        className="h-48 overflow-y-auto overscroll-contain rounded-xl border border-gray-200 bg-gray-50"
+        style={{ scrollSnapType: 'y mandatory' }}
+      >
+        {items.map((item, i) => (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onSelect(item.value)}
+            className={`flex w-full items-center justify-center transition-colors ${
+              i === selectedIndex
+                ? 'bg-black font-bold text-white'
+                : 'text-black hover:bg-gray-100 active:bg-gray-200'
+            }`}
+            style={{ height: ITEM_HEIGHT, scrollSnapAlign: 'start' }}
+          >
+            <span className="text-lg">{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function TouchDatePicker({
@@ -42,7 +91,6 @@ export function TouchDatePicker({
   const currentYear = new Date().getFullYear();
   const resolvedMaxYear = maxYear ?? currentYear;
 
-  // Parse initial value
   const parsed = useMemo(() => {
     if (!value) {
       return { month: -1, day: -1, year: -1 };
@@ -62,7 +110,6 @@ export function TouchDatePicker({
   const [year, setYear] = useState(parsed.year);
   const [isOpen, setIsOpen] = useState(false);
 
-  // Sync internal state when value prop changes
   useEffect(() => {
     setMonth(parsed.month);
     setDay(parsed.day);
@@ -76,7 +123,6 @@ export function TouchDatePicker({
     return daysInMonth(month, year);
   }, [month, year]);
 
-  // Clamp day if month/year changed
   useEffect(() => {
     if (day > maxDay) {
       setDay(maxDay);
@@ -110,32 +156,32 @@ export function TouchDatePicker({
     if (month < 0 || day < 0 || year < 0) {
       return placeholder;
     }
-    const monthName = MONTHS[month] ?? '';
-    return `${monthName} ${day}, ${year}`;
+    return `${MONTHS[month]} ${day}, ${year}`;
   }, [month, day, year, placeholder]);
 
-  const years = useMemo(() => {
-    const arr: number[] = [];
+  const monthItems = MONTHS.map((name, i) => ({ value: i, label: name }));
+  const dayItems = useMemo(() => {
+    const arr = [];
+    for (let d = 1; d <= maxDay; d++) {
+      arr.push({ value: d, label: String(d) });
+    }
+    return arr;
+  }, [maxDay]);
+  const yearItems = useMemo(() => {
+    const arr = [];
     for (let y = resolvedMaxYear; y >= minYear; y--) {
-      arr.push(y);
+      arr.push({ value: y, label: String(y) });
     }
     return arr;
   }, [minYear, resolvedMaxYear]);
 
-  const days = useMemo(() => {
-    const arr: number[] = [];
-    for (let d = 1; d <= maxDay; d++) {
-      arr.push(d);
-    }
-    return arr;
-  }, [maxDay]);
-
   return (
-    <div className="relative">
+    <div>
+      {/* Trigger button */}
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className={`w-full rounded-xl border-2 bg-white px-4 py-3 text-left text-lg transition-colors ${
+        onClick={() => setIsOpen(true)}
+        className={`w-full rounded-xl border-2 bg-white px-4 py-4 text-left text-xl transition-colors ${
           error ? 'border-red-400' : 'border-gray-300'
         } focus:border-black focus:outline-none`}
       >
@@ -146,62 +192,56 @@ export function TouchDatePicker({
 
       {error && <p className="mt-1 text-sm text-red-600">{error}</p>}
 
+      {/* Full-screen overlay picker */}
       {isOpen && (
-        <div className="absolute z-50 mt-2 w-full rounded-2xl border-2 border-gray-200 bg-white p-4 shadow-lg">
-          <div className="grid grid-cols-3 gap-3">
-            {/* Month */}
-            <div>
-              <p className="mb-1 text-center text-xs font-semibold text-gray-500">Month</p>
-              <select
-                value={month}
-                onChange={e => handleMonthChange(Number(e.target.value))}
-                className="w-full rounded-lg border border-gray-200 px-2 py-2 text-sm text-black focus:border-black focus:outline-none"
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            {/* Header */}
+            <div className="mb-4 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  setMonth(parsed.month);
+                  setDay(parsed.day);
+                  setYear(parsed.year);
+                  setIsOpen(false);
+                }}
+                className="cursor-pointer text-lg font-semibold text-gray-400 transition-colors hover:text-black"
               >
-                <option value={-1}>--</option>
-                {MONTHS.map((name, i) => (
-                  <option key={name} value={i}>{name}</option>
-                ))}
-              </select>
+                Cancel
+              </button>
+              <p className="text-lg font-bold text-black">Date of Birth</p>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                className="cursor-pointer text-lg font-bold text-black transition-colors hover:text-gray-600"
+              >
+                Done
+              </button>
             </div>
 
-            {/* Day */}
-            <div>
-              <p className="mb-1 text-center text-xs font-semibold text-gray-500">Day</p>
-              <select
-                value={day}
-                onChange={e => handleDayChange(Number(e.target.value))}
-                className="w-full rounded-lg border border-gray-200 px-2 py-2 text-sm text-black focus:border-black focus:outline-none"
-              >
-                <option value={-1}>--</option>
-                {days.map(d => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Year */}
-            <div>
-              <p className="mb-1 text-center text-xs font-semibold text-gray-500">Year</p>
-              <select
-                value={year}
-                onChange={e => handleYearChange(Number(e.target.value))}
-                className="w-full rounded-lg border border-gray-200 px-2 py-2 text-sm text-black focus:border-black focus:outline-none"
-              >
-                <option value={-1}>--</option>
-                {years.map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
+            {/* Three scroll columns */}
+            <div className="grid grid-cols-3 gap-3">
+              <ScrollColumn
+                items={monthItems}
+                selectedIndex={month}
+                onSelect={handleMonthChange}
+                label="Month"
+              />
+              <ScrollColumn
+                items={dayItems}
+                selectedIndex={day - 1}
+                onSelect={handleDayChange}
+                label="Day"
+              />
+              <ScrollColumn
+                items={yearItems}
+                selectedIndex={year > 0 ? resolvedMaxYear - year : -1}
+                onSelect={handleYearChange}
+                label="Year"
+              />
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={() => setIsOpen(false)}
-            className="mt-3 w-full cursor-pointer rounded-xl bg-black py-2 text-center text-sm font-bold text-white transition-all hover:scale-105 active:scale-95"
-          >
-            Done
-          </button>
         </div>
       )}
     </div>

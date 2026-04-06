@@ -37,6 +37,9 @@ function validateContactInfo(context: TrialContext): Record<string, string> {
   if (!context.state?.trim()) {
     errors.state = 'State is required';
   }
+  if (!context.zip?.trim()) {
+    errors.zip = 'ZIP code is required';
+  }
 
   return errors;
 }
@@ -74,6 +77,9 @@ function validateYouthParent(context: TrialContext): Record<string, string> {
   }
   if (!context.parentState?.trim()) {
     errors.parentState = 'State is required';
+  }
+  if (!context.parentZip?.trim()) {
+    errors.parentZip = 'ZIP code is required';
   }
 
   return errors;
@@ -167,6 +173,7 @@ const emptyContext: TrialContext = {
   addressLine2: '',
   city: '',
   state: '',
+  zip: '',
   parentFirstName: '',
   parentLastName: '',
   parentEmail: '',
@@ -175,6 +182,7 @@ const emptyContext: TrialContext = {
   parentAddressLine2: '',
   parentCity: '',
   parentState: '',
+  parentZip: '',
   currentChildFirstName: '',
   currentChildLastName: '',
   currentChildDateOfBirth: '',
@@ -184,6 +192,10 @@ const emptyContext: TrialContext = {
   availablePrograms: [],
   waiverAgreed: false,
   signature: '',
+  waiverTemplateId: '',
+  waiverTemplateVersion: 0,
+  waiverContent: '',
+  isLoadingWaiver: false,
   errors: {},
   isSubmitting: false,
   sessionId: '',
@@ -393,7 +405,11 @@ export const trialMachine = createMachine({
 
     // Step 3 – Waiver & Agreement (adult) / Step 4 (youth)
     collectingWaiver: {
-      entry: assign({ errors: {} as Record<string, string> }),
+      entry: assign(({ context }) => ({
+        errors: {} as Record<string, string>,
+        // Only fetch if we don't already have content (avoid re-fetch on BACK navigation)
+        isLoadingWaiver: !context.waiverContent,
+      })),
 
       on: {
         UPDATE_FIELD: {
@@ -411,6 +427,18 @@ export const trialMachine = createMachine({
             delete newErrors.waiverAgreed;
             return { ...context, waiverAgreed: event.agreed, errors: newErrors };
           }),
+        },
+
+        WAIVER_LOADED: {
+          actions: assign(({ event }) => ({
+            isLoadingWaiver: false,
+            waiverTemplateId: event.id,
+            waiverTemplateVersion: event.version,
+            waiverContent: event.content,
+          })),
+        },
+        WAIVER_FAILED: {
+          actions: assign({ isLoadingWaiver: false }),
         },
 
         SUBMIT_WAIVER: 'validatingWaiver',

@@ -46,6 +46,7 @@ export const membershipPlanTrialSchema = pgTable('membership_plan', {
   id: text('id').primaryKey(),
   organizationId: text('organization_id').notNull(),
   programId: text('program_id'),
+  category: text('category'),
   name: text('name').notNull(),
   price: real('price').notNull().default(0),
   frequency: text('frequency').notNull().default('Monthly'),

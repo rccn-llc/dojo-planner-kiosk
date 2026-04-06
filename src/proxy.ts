@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   // Skip all auth in development
   if (process.env.NODE_ENV === 'development') {
     return NextResponse.next();
