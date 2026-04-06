@@ -6,6 +6,7 @@ import { MemberAreaFlow } from './flows/MemberAreaFlow';
 import { MembershipFlow } from './flows/MembershipFlow';
 import { StoreFlow } from './flows/StoreFlow';
 import { TrialFlow } from './flows/TrialFlow';
+import { KioskActionButton } from './KioskActionButton';
 
 type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'store';
 
@@ -79,52 +80,11 @@ export function KioskHome() {
       {/* Main Options */}
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
         <div className="grid w-full max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 md:grid-cols-3">
-
-          {/* Col 1 Row 1: Free Trial */}
-          <button
-            type="button"
-            onClick={() => handleFlowChange('trial')}
-            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-8 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100 sm:py-10 md:py-12"
-          >
-            <h2 className="text-3xl font-bold text-black">Free Trial</h2>
-          </button>
-
-          {/* Col 2 Row 1: Membership */}
-          <button
-            type="button"
-            onClick={() => handleFlowChange('membership')}
-            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-8 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100 sm:py-10 md:py-12"
-          >
-            <h2 className="text-3xl font-bold text-black">Membership</h2>
-          </button>
-
-          {/* Col 3 Row 1: Check In */}
-          <button
-            type="button"
-            onClick={() => handleFlowChange('checkin')}
-            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-8 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100 sm:py-10 md:py-12"
-          >
-            <h2 className="text-3xl font-bold text-black">Check In</h2>
-          </button>
-
-          {/* Col 1 Row 2: Members Area */}
-          <button
-            type="button"
-            onClick={() => handleFlowChange('memberArea')}
-            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-8 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100 sm:py-10 md:py-12"
-          >
-            <h2 className="text-3xl font-bold text-black">Members Area</h2>
-          </button>
-
-          {/* Col 2 Row 2: Store */}
-          <button
-            type="button"
-            onClick={() => handleFlowChange('store')}
-            className="flex cursor-pointer items-center justify-center rounded-3xl border-2 border-black bg-white py-8 text-center transition-all duration-300 hover:scale-105 hover:bg-gray-100 sm:py-10 md:py-12"
-          >
-            <h2 className="text-3xl font-bold text-black">Store</h2>
-          </button>
-
+          <KioskActionButton label="Free Trial" onClick={() => handleFlowChange('trial')} />
+          <KioskActionButton label="Membership" onClick={() => handleFlowChange('membership')} />
+          <KioskActionButton label="Check In" onClick={() => handleFlowChange('checkin')} />
+          <KioskActionButton label="Members Area" onClick={() => handleFlowChange('memberArea')} />
+          <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
         </div>
       </main>
 

@@ -1,4 +1,5 @@
 import antfu from '@antfu/eslint-config';
+
 import jsxA11y from 'eslint-plugin-jsx-a11y';
 import tailwind from 'eslint-plugin-tailwindcss';
 
