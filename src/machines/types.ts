@@ -38,6 +38,7 @@ export interface TrialContext {
   lastName: string;
   email: string;
   phoneNumber: string;
+  dateOfBirth: string;
 
   // Adult address
   address: string;
@@ -56,6 +57,7 @@ export interface TrialContext {
   parentCity: string;
   parentState: string;
   parentZip: string;
+  parentDateOfBirth: string;
 
   // Youth - current child being entered
   currentChildFirstName: string;
@@ -204,6 +206,7 @@ export type MembershipEvent
         state?: string;
         zip?: string;
         trialMembershipId?: string | null;
+        existingSignature?: string;
       };
     }
     | { type: 'MEMBER_NOT_FOUND' }

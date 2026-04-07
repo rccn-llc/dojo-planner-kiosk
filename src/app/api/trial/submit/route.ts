@@ -21,6 +21,7 @@ interface MemberInfo {
   lastName: string;
   email: string;
   phone: string;
+  dateOfBirth?: string;
   address: string;
   addressLine2?: string;
   city: string;
@@ -146,6 +147,7 @@ export async function POST(request: NextRequest) {
           email: member.email,
           memberType: 'individual',
           phone: member.phone,
+          dateOfBirth: member.dateOfBirth ? new Date(`${member.dateOfBirth}T12:00:00`) : undefined,
           status: 'trial',
           statusChangedAt: now,
           createdAt: now,
@@ -252,6 +254,7 @@ export async function POST(request: NextRequest) {
           email: member.email,
           memberType: 'head-of-household',
           phone: member.phone,
+          dateOfBirth: member.dateOfBirth ? new Date(`${member.dateOfBirth}T12:00:00`) : undefined,
           status: 'trial',
           statusChangedAt: now,
           createdAt: now,
@@ -305,7 +308,7 @@ export async function POST(request: NextRequest) {
           await tx.insert(familyMemberTrialSchema).values({
             memberId: parentMemberId,
             relatedMemberId: childMemberId,
-            relationship: 'parent',
+            relationship: 'child',
           });
 
           await tx.insert(signedWaiverTrialSchema).values({

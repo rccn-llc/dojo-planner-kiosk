@@ -1,6 +1,7 @@
 'use client';
 
 import type { MemberEditFormErrors } from '../../lib/validation';
+import type { ChildMembershipSeed } from './MembershipFlow';
 import EditIcon from '@mui/icons-material/Edit';
 import EmailIcon from '@mui/icons-material/Email';
 import SaveIcon from '@mui/icons-material/Save';
@@ -14,6 +15,7 @@ import { TouchDatePicker } from '../TouchDatePicker';
 interface MemberAreaFlowProps {
   onComplete: () => void;
   onBack: () => void;
+  onAssignChildMembership?: (seed: ChildMembershipSeed) => void;
 }
 
 interface MemberResult {
@@ -46,6 +48,7 @@ interface MembershipData {
   planPrice: number;
   planFrequency: string | null;
   planContractLength: string | null;
+  isTrial: boolean;
 }
 
 interface WaiverData {
@@ -64,6 +67,7 @@ interface TransactionData {
   description: string | null;
   processedAt: string | null;
   createdAt: string | null;
+  memberName: string | null;
 }
 
 interface FamilyMemberData {
@@ -106,10 +110,10 @@ interface MemberDetail {
   attendance: AttendanceData[];
 }
 
-type View = 'search' | 'results' | 'otpVerify' | 'memberDetail' | 'addFamily';
+type View = 'search' | 'results' | 'otpVerify' | 'memberDetail' | 'addFamily' | 'createFamily';
 type DetailTab = 'overview' | 'billing' | 'waivers' | 'attendance' | 'family';
 
-export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
+export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
   const [view, setView] = useState<View>('search');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
@@ -124,6 +128,13 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Track the parent member's info when navigating to a child's profile
+  const [parentContext, setParentContext] = useState<{
+    firstName: string;
+    lastName: string;
+    email: string;
+  } | null>(null);
 
   // Edit member
   const [isEditing, setIsEditing] = useState(false);
@@ -163,6 +174,15 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
   const [familySearchResults, setFamilySearchResults] = useState<MemberResult[]>([]);
   const [familyRelationship, setFamilyRelationship] = useState('');
   const [familyLoading, setFamilyLoading] = useState(false);
+
+  // Create new family member
+  const [newFamilyFirst, setNewFamilyFirst] = useState('');
+  const [newFamilyLast, setNewFamilyLast] = useState('');
+  const [newFamilyEmail, setNewFamilyEmail] = useState('');
+  const [newFamilyPhone, setNewFamilyPhone] = useState('');
+  const [newFamilyDob, setNewFamilyDob] = useState('');
+  const [newFamilyRelationship, setNewFamilyRelationship] = useState('');
+  const [newFamilySetHOH, setNewFamilySetHOH] = useState(false);
 
   const formatPhone = (digits: string) => {
     const d = digits.replace(/\D/g, '').slice(0, 10);
@@ -533,6 +553,53 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
     setFamilyLoading(false);
   };
 
+  const resetCreateFamilyForm = () => {
+    setNewFamilyFirst('');
+    setNewFamilyLast('');
+    setNewFamilyEmail('');
+    setNewFamilyPhone('');
+    setNewFamilyDob('');
+    setNewFamilyRelationship('');
+    setNewFamilySetHOH(false);
+  };
+
+  const handleCreateFamilyMember = async () => {
+    if (!selectedMemberId || !newFamilyFirst.trim() || !newFamilyLast.trim() || !newFamilyEmail.trim() || !newFamilyRelationship) {
+      setError('Please fill in all required fields');
+      return;
+    }
+    setFamilyLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/members/${selectedMemberId}/create-family`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName: newFamilyFirst.trim(),
+          lastName: newFamilyLast.trim(),
+          email: newFamilyEmail.trim(),
+          phone: newFamilyPhone.replace(/\D/g, '') || undefined,
+          dateOfBirth: newFamilyDob || undefined,
+          relationship: newFamilyRelationship,
+          setCurrentAsHOH: newFamilySetHOH,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setError(data.error ?? 'Failed to create family member');
+        setFamilyLoading(false);
+        return;
+      }
+      // Reload family + detail
+      await loadMemberDetail(selectedMemberId);
+      setView('memberDetail');
+      setActiveTab('family');
+      resetCreateFamilyForm();
+    }
+    catch { setError('Failed to create family member'); }
+    setFamilyLoading(false);
+  };
+
   const handleLinkFamily = async (relatedMemberId: string) => {
     if (!familyRelationship.trim() || !selectedMemberId) {
       return;
@@ -738,6 +805,130 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
 
   // ── ADD FAMILY MEMBER VIEW ──
 
+  // ── CREATE NEW FAMILY MEMBER VIEW ──
+  if (view === 'createFamily' && selectedMemberId) {
+    const inputClass = 'w-full rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black placeholder:text-gray-400 focus:border-black focus:outline-none';
+    const labelClass = 'mb-1 block text-sm font-semibold text-gray-500';
+    const isFormValid = newFamilyFirst.trim() && newFamilyLast.trim() && newFamilyEmail.trim() && newFamilyRelationship;
+
+    return (
+      <Shell
+        title="Create New Family Member"
+        onBack={() => {
+          setView('addFamily');
+          resetCreateFamilyForm();
+          setError('');
+        }}
+      >
+        <div className="w-full max-w-lg space-y-4">
+          <div className="mb-2">
+            <KioskSelect
+              id="new-family-relationship"
+              value={newFamilyRelationship}
+              onChange={setNewFamilyRelationship}
+              label="Relationship to current member"
+              required
+              placeholder="Select relationship..."
+              options={[
+                { value: 'child', label: 'Child' },
+                { value: 'spouse', label: 'Spouse' },
+                { value: 'parent', label: 'Parent' },
+                { value: 'sibling', label: 'Sibling' },
+                { value: 'other', label: 'Other' },
+              ]}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="new-family-first" className={labelClass}>
+                First Name
+                {' '}
+                <span className="text-red-500">*</span>
+              </label>
+              <input id="new-family-first" type="text" value={newFamilyFirst} onChange={e => setNewFamilyFirst(e.target.value)} placeholder="First name" className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="new-family-last" className={labelClass}>
+                Last Name
+                {' '}
+                <span className="text-red-500">*</span>
+              </label>
+              <input id="new-family-last" type="text" value={newFamilyLast} onChange={e => setNewFamilyLast(e.target.value)} placeholder="Last name" className={inputClass} />
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="new-family-email" className={labelClass}>
+              Email
+              {' '}
+              <span className="text-red-500">*</span>
+            </label>
+            <input id="new-family-email" type="email" value={newFamilyEmail} onChange={e => setNewFamilyEmail(e.target.value)} placeholder="email@example.com" className={inputClass} />
+          </div>
+
+          <div>
+            <label htmlFor="new-family-phone" className={labelClass}>Phone</label>
+            <input id="new-family-phone" type="tel" value={newFamilyPhone} onChange={e => setNewFamilyPhone(formatPhone(e.target.value))} placeholder="(555) 123-4567" className={inputClass} />
+          </div>
+
+          <TouchDatePicker
+            value={newFamilyDob}
+            onChange={setNewFamilyDob}
+            label="Date of Birth"
+          />
+
+          {/* Set current member as HOH */}
+          {memberDetail && memberDetail.member.memberType !== 'head-of-household' && (
+            <div
+              role="checkbox"
+              aria-checked={newFamilySetHOH}
+              tabIndex={0}
+              className={`flex cursor-pointer items-start gap-4 rounded-xl border-2 p-4 transition-colors ${newFamilySetHOH ? 'border-black bg-gray-50' : 'border-gray-200 bg-white'}`}
+              onClick={() => setNewFamilySetHOH(!newFamilySetHOH)}
+              onKeyDown={(e) => {
+                if (e.key === ' ' || e.key === 'Enter') {
+                  setNewFamilySetHOH(!newFamilySetHOH);
+                }
+              }}
+            >
+              <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded border-2 transition-colors ${newFamilySetHOH ? 'border-black bg-black' : 'border-gray-400'}`}>
+                {newFamilySetHOH && (
+                  <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
+                )}
+              </div>
+              <div>
+                <p className="text-lg font-semibold text-black">Set as Head of Household</p>
+                <p className="text-sm text-gray-500">
+                  Designate
+                  {' '}
+                  {memberDetail.member.firstName}
+                  {' '}
+                  {memberDetail.member.lastName}
+                  {' '}
+                  as the head of this household
+                </p>
+              </div>
+            </div>
+          )}
+
+          {error && <p className="text-center text-red-500">{error}</p>}
+
+          <button
+            type="button"
+            onClick={handleCreateFamilyMember}
+            disabled={!isFormValid || familyLoading}
+            className="min-h-14 w-full cursor-pointer rounded-2xl bg-black text-xl font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {familyLoading ? 'Creating...' : 'Create & Link Family Member'}
+          </button>
+        </div>
+      </Shell>
+    );
+  }
+
   if (view === 'addFamily' && selectedMemberId) {
     return (
       <Shell
@@ -750,7 +941,24 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
         }}
       >
         <div className="w-full max-w-lg">
-          <p className="mb-6 text-center text-lg text-gray-500">Search for an existing member to link as a family member</p>
+          <p className="mb-6 text-center text-lg text-gray-500">Search for an existing member or create a new one</p>
+
+          <button
+            type="button"
+            onClick={() => {
+              setView('createFamily');
+              setError('');
+            }}
+            className="mb-6 min-h-14 w-full cursor-pointer rounded-2xl border-2 border-black bg-white text-xl font-bold text-black transition-all hover:bg-gray-50 active:scale-95"
+          >
+            + Create New Member
+          </button>
+
+          <div className="mb-6 flex items-center gap-4">
+            <div className="h-px flex-1 bg-gray-200" />
+            <span className="text-sm font-semibold text-gray-400">OR SEARCH EXISTING</span>
+            <div className="h-px flex-1 bg-gray-200" />
+          </div>
 
           <div className="mb-4">
             <KioskSelect
@@ -962,10 +1170,39 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                             <StatusBadge status={activeMembership.status} />
                           </div>
                           {!isConverting && (
-                            <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
-                              <SwapHorizIcon sx={{ fontSize: 20 }} />
-                              Convert Membership
-                            </button>
+                            <>
+                              <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
+                                <SwapHorizIcon sx={{ fontSize: 20 }} />
+                                Convert Membership
+                              </button>
+                              {onAssignChildMembership && activeMembership.isTrial && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
+                                    onAssignChildMembership({
+                                      childMemberId: m.id,
+                                      firstName: m.firstName,
+                                      lastName: m.lastName,
+                                      email: m.email,
+                                      phone: m.phone ?? '',
+                                      dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
+                                      address: addr?.street ?? '',
+                                      city: addr?.city ?? '',
+                                      state: addr?.state ?? '',
+                                      zip: addr?.zipCode ?? '',
+                                      convertingTrialMembershipId: activeMembership.id,
+                                      guardianFirstName: parentContext?.firstName ?? '',
+                                      guardianLastName: parentContext?.lastName ?? '',
+                                      guardianEmail: parentContext?.email ?? '',
+                                    });
+                                  }}
+                                  className="mt-2 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
+                                >
+                                  Upgrade to Paid Membership
+                                </button>
+                              )}
+                            </>
                           )}
                           {isConverting && (
                             <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
@@ -1069,10 +1306,40 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                     : (
                         <>
                           <p className="text-gray-400">No active membership</p>
-                          <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
-                            <SwapHorizIcon sx={{ fontSize: 20 }} />
-                            Assign Membership
-                          </button>
+                          {onAssignChildMembership
+                            ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
+                                    onAssignChildMembership({
+                                      childMemberId: m.id,
+                                      firstName: m.firstName,
+                                      lastName: m.lastName,
+                                      email: m.email,
+                                      phone: m.phone ?? '',
+                                      dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
+                                      address: addr?.street ?? '',
+                                      city: addr?.city ?? '',
+                                      state: addr?.state ?? '',
+                                      zip: addr?.zipCode ?? '',
+                                      convertingTrialMembershipId: null,
+                                      guardianFirstName: parentContext?.firstName ?? '',
+                                      guardianLastName: parentContext?.lastName ?? '',
+                                      guardianEmail: parentContext?.email ?? '',
+                                    });
+                                  }}
+                                  className="mt-4 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
+                                >
+                                  Assign Membership
+                                </button>
+                              )
+                            : (
+                                <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
+                                  <SwapHorizIcon sx={{ fontSize: 20 }} />
+                                  Assign Membership
+                                </button>
+                              )}
                           {isConverting && (
                             <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
                               <KioskSelect
@@ -1126,6 +1393,11 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                             <div key={t.id} className="flex items-center justify-between rounded-xl border border-gray-100 p-4">
                               <div>
                                 <p className="font-semibold text-black">{t.description ?? t.transactionType?.replace(/_/g, ' ') ?? 'Payment'}</p>
+                                {t.memberName && (
+                                  <p className="text-sm font-medium text-amber-700">
+                                    {t.memberName}
+                                  </p>
+                                )}
                                 <p className="text-sm text-gray-400">
                                   {formatDate(t.processedAt ?? t.createdAt)}
                                   {' '}
@@ -1248,7 +1520,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                       setError('');
                       setFamilySearchResults([]);
                     }}
-                    className="cursor-pointer rounded-xl bg-black px-5 py-2 text-sm font-bold text-white transition-all hover:scale-105 active:scale-95"
+                    className="min-h-12 cursor-pointer rounded-xl bg-black px-6 py-3 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95"
                   >
                     + Add Family Member
                   </button>
@@ -1258,7 +1530,21 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                   ? (
                       <div className="space-y-3">
                         {familyMembers.map(fm => (
-                          <div key={fm.id} className="flex items-center justify-between rounded-2xl border-2 border-gray-200 px-6 py-4">
+                          <button
+                            key={fm.id}
+                            type="button"
+                            onClick={() => {
+                              if (memberDetail) {
+                                setParentContext({
+                                  firstName: memberDetail.member.firstName,
+                                  lastName: memberDetail.member.lastName,
+                                  email: memberDetail.member.email,
+                                });
+                              }
+                              loadMemberDetail(fm.id);
+                            }}
+                            className="flex w-full cursor-pointer items-center justify-between rounded-2xl border-2 border-gray-200 px-6 py-4 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-95"
+                          >
                             <div>
                               <p className="text-lg font-bold text-black">
                                 {fm.firstName}
@@ -1271,7 +1557,7 @@ export function MemberAreaFlow({ onBack }: MemberAreaFlowProps) {
                               </p>
                             </div>
                             <StatusBadge status={fm.status} />
-                          </div>
+                          </button>
                         ))}
                       </div>
                     )

@@ -4,6 +4,24 @@ import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { familyMember, member } from '@/lib/memberSchema';
 
+// Maps a relationship to its inverse.
+// The link stores: relatedMemberId is <relationship> of memberId.
+// e.g. (parent, child, 'child') → the child is a "child" of the parent.
+// When viewing from the child's profile, we invert to show "parent".
+const RELATIONSHIP_INVERSES: Record<string, string> = {
+  parent: 'child',
+  child: 'parent',
+  guardian: 'ward',
+  ward: 'guardian',
+  legal_guardian: 'ward',
+  spouse: 'spouse',
+  sibling: 'sibling',
+};
+
+function invertRelationship(relationship: string): string {
+  return RELATIONSHIP_INVERSES[relationship] ?? relationship;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ memberId: string }> },
@@ -64,11 +82,30 @@ export async function GET(
         continue;
       }
 
-      // Find the relationship from the link
+      // Find the relationship from the link.
+      // The link stores: memberId is <relationship> of relatedMemberId.
+      // e.g. (parent, child, 'parent') → parent is a "parent" of child.
+      //
+      // When we view from the parent's profile and list the child,
+      // we need to invert: the child is "child" of the parent.
+      // When we view from the child's profile and list the parent,
+      // the relationship 'parent' is already correct.
       const link = familyLinks.find(
         l => (l.memberId === memberId && l.relatedMemberId === relId)
           || (l.relatedMemberId === memberId && l.memberId === relId),
       );
+
+      let relationship = link?.relationship ?? 'related';
+      // The link stores: memberId selected <relationship> when adding relatedMemberId.
+      // e.g. user viewing their profile picks "Child" to add a child →
+      // stored as (currentUser, child, 'child').
+      // From currentUser's perspective, the relationship is already correct:
+      // the listed person IS their child.
+      // From the child's perspective, we need to invert: the listed person
+      // (the parent) is their "parent", not their "child".
+      if (link && link.relatedMemberId === memberId) {
+        relationship = invertRelationship(relationship);
+      }
 
       familyMembers.push({
         id: m.id,
@@ -76,7 +113,7 @@ export async function GET(
         lastName: m.lastName,
         status: m.status,
         memberType: m.memberType ?? 'individual',
-        relationship: link?.relationship ?? 'related',
+        relationship,
         isHOH: m.memberType === 'head-of-household',
       });
     }

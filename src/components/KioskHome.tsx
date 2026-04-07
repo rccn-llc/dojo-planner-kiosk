@@ -1,5 +1,6 @@
 'use client';
 
+import type { ChildMembershipSeed } from './flows/MembershipFlow';
 import type { TrialCheckinMember } from './flows/TrialFlow';
 import { useEffect, useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
@@ -15,6 +16,7 @@ export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
   const [orgName, setOrgName] = useState<string | null>(null);
   const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
+  const [childMembershipSeed, setChildMembershipSeed] = useState<ChildMembershipSeed | null>(null);
 
   useEffect(() => {
     fetch('/api/organization')
@@ -30,12 +32,16 @@ export function KioskHome() {
   const handleFlowComplete = () => {
     setCurrentFlow('home');
     setCheckinPreseededMembers([]);
+    setChildMembershipSeed(null);
   };
 
   const handleFlowChange = (newFlow: FlowType) => {
     setCurrentFlow(newFlow);
     if (newFlow !== 'checkin') {
       setCheckinPreseededMembers([]);
+    }
+    if (newFlow !== 'membership') {
+      setChildMembershipSeed(null);
     }
   };
 
@@ -63,11 +69,26 @@ export function KioskHome() {
   }
 
   if (currentFlow === 'membership') {
-    return <MembershipFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return (
+      <MembershipFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        initialMemberData={childMembershipSeed ?? undefined}
+      />
+    );
   }
 
   if (currentFlow === 'memberArea') {
-    return <MemberAreaFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return (
+      <MemberAreaFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        onAssignChildMembership={(seed) => {
+          setChildMembershipSeed(seed);
+          setCurrentFlow('membership');
+        }}
+      />
+    );
   }
 
   if (currentFlow === 'store') {

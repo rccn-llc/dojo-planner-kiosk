@@ -37,6 +37,9 @@ export async function POST(request: Request) {
 
     const db = getDatabase();
     const phoneWithCountry = `+1${rawPhone}`;
+    const phoneFormatted = rawPhone.length === 10
+      ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`
+      : rawPhone;
 
     const members = await db
       .select({
@@ -53,6 +56,7 @@ export async function POST(request: Request) {
           or(
             eq(member.phone, rawPhone),
             eq(member.phone, phoneWithCountry),
+            eq(member.phone, phoneFormatted),
           ),
         ),
       )

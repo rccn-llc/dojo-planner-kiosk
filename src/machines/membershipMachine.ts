@@ -183,7 +183,7 @@ export const membershipMachine = createMachine({
           actions: assign({ selectedPlan: ({ event }) => event.plan }),
         },
         SUBMIT_PAYMENT: {
-          target: 'reviewingCommitment',
+          target: 'collectingInfo',
           guard: 'isPlanSelected',
         },
         BACK: 'selectingProgram',
@@ -192,38 +192,7 @@ export const membershipMachine = createMachine({
       },
     },
 
-    // ── Step 3: Commitment / waiver ───────────────────────────────────────────
-    reviewingCommitment: {
-      entry: assign({ hasAgreedToCommitment: false, isLoadingWaiver: true }),
-
-      on: {
-        WAIVER_LOADED: {
-          actions: assign(({ event }) => ({
-            isLoadingWaiver: false,
-            waiverContent: event.content,
-            waiverTemplateName: event.templateName,
-          })),
-        },
-        WAIVER_FAILED: {
-          actions: assign({ isLoadingWaiver: false }),
-        },
-        UPDATE_FIELD: {
-          actions: assign(({ event, context }) => ({
-            ...context,
-            [event.field]: event.value,
-          })),
-        },
-        SUBMIT_COMMITMENT: {
-          target: 'collectingInfo',
-          guard: 'hasAgreedToCommitment',
-        },
-        BACK: 'selectingPlan',
-        TIMEOUT: 'timeout',
-        RESET: 'selectingProgram',
-      },
-    },
-
-    // ── Step 4: Member info form ──────────────────────────────────────────────
+    // ── Step 3: Member info form ──────────────────────────────────────────────
     collectingInfo: {
       entry: assign({ isSubmitting: false, errors: {} as Record<string, string> }),
 
@@ -237,8 +206,27 @@ export const membershipMachine = createMachine({
           }),
         },
         LOOKUP_MEMBER: 'lookingUpMember',
+        // Also accept MEMBER_FOUND here — when multiple results are shown
+        // in an overlay picker, the machine is already back in collectingInfo
+        MEMBER_FOUND: {
+          actions: assign(({ event, context }) => ({
+            firstName: event.member.firstName,
+            lastName: event.member.lastName,
+            email: event.member.email,
+            phoneNumber: event.member.phoneNumber,
+            dateOfBirth: event.member.dateOfBirth ?? context.dateOfBirth,
+            address: event.member.address ?? context.address,
+            city: event.member.city ?? context.city,
+            state: event.member.state ?? context.state,
+            zip: event.member.zip ?? context.zip,
+            memberLookupResult: event.member,
+            existingMemberId: event.member.id,
+            convertingTrialMembershipId: event.member.trialMembershipId ?? null,
+            waiverSignature: event.member.existingSignature ?? context.waiverSignature,
+          })),
+        },
         SUBMIT_CONTACT: 'validatingContact',
-        BACK: 'reviewingCommitment',
+        BACK: 'selectingPlan',
         TIMEOUT: 'timeout',
         RESET: 'selectingProgram',
       },
@@ -263,6 +251,7 @@ export const membershipMachine = createMachine({
             memberLookupResult: event.member,
             existingMemberId: event.member.id,
             convertingTrialMembershipId: event.member.trialMembershipId ?? null,
+            waiverSignature: event.member.existingSignature ?? context.waiverSignature,
           })),
         },
         MEMBER_NOT_FOUND: {
@@ -276,7 +265,7 @@ export const membershipMachine = createMachine({
       entry: assign({ isSubmitting: true }),
 
       always: [
-        { target: 'collectingPayment', guard: 'isContactInfoValid' },
+        { target: 'reviewingCommitment', guard: 'isContactInfoValid' },
         {
           target: 'collectingInfo',
           actions: assign(({ context }) => ({
@@ -285,6 +274,37 @@ export const membershipMachine = createMachine({
           })),
         },
       ],
+    },
+
+    // ── Step 4: Commitment / waiver ───────────────────────────────────────────
+    reviewingCommitment: {
+      entry: assign({ hasAgreedToCommitment: false, isLoadingWaiver: true }),
+
+      on: {
+        WAIVER_LOADED: {
+          actions: assign(({ event }) => ({
+            isLoadingWaiver: false,
+            waiverContent: event.content,
+            waiverTemplateName: event.templateName,
+          })),
+        },
+        WAIVER_FAILED: {
+          actions: assign({ isLoadingWaiver: false }),
+        },
+        UPDATE_FIELD: {
+          actions: assign(({ event, context }) => ({
+            ...context,
+            [event.field]: event.value,
+          })),
+        },
+        SUBMIT_COMMITMENT: {
+          target: 'collectingPayment',
+          guard: 'hasAgreedToCommitment',
+        },
+        BACK: 'collectingInfo',
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
+      },
     },
 
     collectingPayment: {

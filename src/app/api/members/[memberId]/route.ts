@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
@@ -8,6 +8,7 @@ import {
   attendance,
   classScheduleInstance,
   dojoClass,
+  familyMember,
   member,
   memberMembership,
   membershipPlan,
@@ -56,6 +57,7 @@ export async function GET(
         planPrice: membershipPlan.price,
         planFrequency: membershipPlan.frequency,
         planContractLength: membershipPlan.contractLength,
+        isTrial: membershipPlan.isTrial,
       })
       .from(memberMembership)
       .innerJoin(membershipPlan, eq(memberMembership.membershipPlanId, membershipPlan.id))
@@ -72,10 +74,57 @@ export async function GET(
       .where(eq(signedWaiver.memberId, memberId))
       .orderBy(desc(signedWaiver.signedAt));
 
+    // For HOH members, also include family members' transactions
+    const isHOH = m.memberType === 'head-of-household';
+    const familyMemberIds: string[] = [];
+    const familyNameMap = new Map<string, string>();
+
+    if (isHOH) {
+      const links = await db
+        .select()
+        .from(familyMember)
+        .where(
+          or(
+            eq(familyMember.memberId, memberId),
+            eq(familyMember.relatedMemberId, memberId),
+          ),
+        );
+
+      const relatedIds = new Set<string>();
+      for (const link of links) {
+        if (link.memberId !== memberId) {
+          relatedIds.add(link.memberId);
+        }
+        if (link.relatedMemberId !== memberId) {
+          relatedIds.add(link.relatedMemberId);
+        }
+      }
+
+      if (relatedIds.size > 0) {
+        for (const relId of relatedIds) {
+          familyMemberIds.push(relId);
+          const fmRows = await db
+            .select({ firstName: member.firstName, lastName: member.lastName })
+            .from(member)
+            .where(eq(member.id, relId))
+            .limit(1);
+          const fm = fmRows[0];
+          if (fm) {
+            familyNameMap.set(relId, `${fm.firstName} ${fm.lastName}`);
+          }
+        }
+      }
+    }
+
+    const allTransactionMemberIds = [memberId, ...familyMemberIds];
     const transactions = await db
       .select()
       .from(transaction)
-      .where(eq(transaction.memberId, memberId))
+      .where(
+        allTransactionMemberIds.length > 1
+          ? inArray(transaction.memberId, allTransactionMemberIds)
+          : eq(transaction.memberId, memberId),
+      )
       .orderBy(desc(transaction.createdAt))
       .limit(50);
 
@@ -130,6 +179,7 @@ export async function GET(
         planPrice: ms.planPrice,
         planFrequency: ms.planFrequency,
         planContractLength: ms.planContractLength,
+        isTrial: ms.isTrial ?? false,
       })),
       waivers: waivers.map(w => ({
         id: w.id,
@@ -146,6 +196,9 @@ export async function GET(
         description: t.description,
         processedAt: t.processedAt?.toISOString() ?? null,
         createdAt: t.createdAt?.toISOString() ?? null,
+        memberName: t.memberId !== memberId
+          ? familyNameMap.get(t.memberId) ?? null
+          : null,
       })),
       attendance: attendanceRecords.map(a => ({
         id: a.id,

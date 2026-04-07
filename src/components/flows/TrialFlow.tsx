@@ -153,6 +153,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         city: isYouth ? ctx.parentCity : ctx.city,
         state: isYouth ? ctx.parentState : ctx.state,
         zip: isYouth ? ctx.parentZip : ctx.zip,
+        dateOfBirth: (isYouth ? ctx.parentDateOfBirth : ctx.dateOfBirth) || undefined,
       },
       children: isYouth
         ? [...ctx.children, ...(ctx.currentChildFirstName
@@ -446,6 +447,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 {state.context.errors?.parentZip && <p className="mt-1 text-base text-red-600">{state.context.errors.parentZip}</p>}
               </div>
 
+              <TouchDatePicker
+                value={state.context.parentDateOfBirth || ''}
+                onChange={v => handleInputChange('parentDateOfBirth', v)}
+                label="Date of Birth"
+                error={state.context.errors?.parentDateOfBirth}
+                placeholder="Select date of birth"
+              />
+
             </div>
             <div className="mt-8 flex items-center justify-between">
               <button
@@ -460,7 +469,18 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_PARENT' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.parentFirstName?.trim()
+                  || !state.context.parentLastName?.trim()
+                  || !state.context.parentEmail?.trim()
+                  || !state.context.parentPhone?.trim()
+                  || !state.context.parentAddress?.trim()
+                  || !state.context.parentCity?.trim()
+                  || !state.context.parentState?.trim()
+                  || !state.context.parentZip?.trim()
+                  || !state.context.parentDateOfBirth?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -525,19 +545,13 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 {state.context.errors?.currentChildLastName && <p className="mt-1 text-base text-red-600">{state.context.errors.currentChildLastName}</p>}
               </div>
 
-              <div className="col-span-2">
-                <span className={labelClass}>
-                  Date of Birth
-                  <span className="text-red-500">*</span>
-                </span>
-                <TouchDatePicker
-                  value={state.context.currentChildDateOfBirth || ''}
-                  onChange={v => handleInputChange('currentChildDateOfBirth', v)}
-                  label="Child's Date of Birth"
-                  error={state.context.errors?.currentChildDateOfBirth}
-                  placeholder="Select date of birth"
-                />
-              </div>
+              <TouchDatePicker
+                value={state.context.currentChildDateOfBirth || ''}
+                onChange={v => handleInputChange('currentChildDateOfBirth', v)}
+                label="Child's Date of Birth"
+                error={state.context.errors?.currentChildDateOfBirth}
+                placeholder="Select date of birth"
+              />
             </div>
 
             <div className="mt-8 flex items-center justify-between">
@@ -553,7 +567,12 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_CHILD' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.currentChildFirstName?.trim()
+                  || !state.context.currentChildLastName?.trim()
+                  || !state.context.currentChildDateOfBirth?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -761,6 +780,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 )}
               </div>
 
+              <TouchDatePicker
+                value={state.context.dateOfBirth || ''}
+                onChange={v => handleInputChange('dateOfBirth', v)}
+                label="Date of Birth"
+                error={state.context.errors?.dateOfBirth}
+                placeholder="Select date of birth"
+              />
+
             </div>
 
             <div className="mt-8 flex items-center justify-between">
@@ -776,7 +803,18 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.firstName?.trim()
+                  || !state.context.lastName?.trim()
+                  || !state.context.email?.trim()
+                  || !state.context.phoneNumber?.trim()
+                  || !state.context.dateOfBirth?.trim()
+                  || !state.context.address?.trim()
+                  || !state.context.city?.trim()
+                  || !state.context.state?.trim()
+                  || !state.context.zip?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -863,7 +901,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_WAIVER' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.waiverAgreed
+                  || !state.context.signature?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
               >
                 Continue Signup →

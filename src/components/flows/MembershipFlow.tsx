@@ -86,10 +86,28 @@ function nextBillingDate(plan: MembershipPlan): string {
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+export interface ChildMembershipSeed {
+  childMemberId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  dateOfBirth: string;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  convertingTrialMembershipId: string | null;
+  guardianFirstName: string;
+  guardianLastName: string;
+  guardianEmail: string;
+}
+
 interface MembershipFlowProps {
   onComplete: () => void;
   onBack: () => void;
   onCheckIn?: () => void;
+  initialMemberData?: ChildMembershipSeed;
 }
 
 interface LookupResult {
@@ -106,14 +124,17 @@ interface LookupResult {
   state: string | null;
   zip: string | null;
   trialMembershipId: string | null;
+  existingSignature: string | null;
 }
 
-export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlowProps) {
+export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberData }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
   const [planPage, setPlanPage] = useState(0);
   const [successCountdown, setSuccessCountdown] = useState(60);
   const [lookupResults, setLookupResults] = useState<LookupResult[]>([]);
   const [showLookupPicker, setShowLookupPicker] = useState(false);
+  const preseededRef = useRef(false);
+  const [wantsNewSignature, setWantsNewSignature] = useState(false);
 
   // Determine if member is a minor
   const memberIsMinor = (() => {
@@ -196,6 +217,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         state: m.state ?? undefined,
         zip: m.zip ?? undefined,
         trialMembershipId: m.trialMembershipId,
+        existingSignature: m.existingSignature ?? undefined,
       },
     });
   };
@@ -212,7 +234,6 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
       body: JSON.stringify({
         phone,
         selectedPlanId: state.context.selectedPlan?.id,
-        convertOnly: true,
       }),
     })
       .then(r => r.json())
@@ -271,6 +292,60 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
         }
       })
       .catch(() => send({ type: 'WAIVER_FAILED' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Pre-fill guardian info when entering commitment/waiver step (for child membership assignment)
+  useEffect(() => {
+    if (!state.matches('reviewingCommitment') || !initialMemberData) {
+      return;
+    }
+    if (initialMemberData.guardianFirstName) {
+      send({ type: 'UPDATE_FIELD', field: 'guardianFirstName', value: initialMemberData.guardianFirstName });
+    }
+    if (initialMemberData.guardianLastName) {
+      send({ type: 'UPDATE_FIELD', field: 'guardianLastName', value: initialMemberData.guardianLastName });
+    }
+    if (initialMemberData.guardianEmail) {
+      send({ type: 'UPDATE_FIELD', field: 'guardianEmail', value: initialMemberData.guardianEmail });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Pre-fill child's contact info when entering collectingInfo (for child membership assignment)
+  useEffect(() => {
+    if (!state.matches('collectingInfo') || !initialMemberData || preseededRef.current) {
+      return;
+    }
+    preseededRef.current = true;
+    const d = initialMemberData;
+    send({ type: 'UPDATE_FIELD', field: 'firstName', value: d.firstName });
+    send({ type: 'UPDATE_FIELD', field: 'lastName', value: d.lastName });
+    send({ type: 'UPDATE_FIELD', field: 'email', value: d.email });
+    if (d.phone) {
+      send({ type: 'UPDATE_FIELD', field: 'phoneNumber', value: formatPhoneForDisplay(sanitizePhoneInput(d.phone)) });
+    }
+    if (d.dateOfBirth) {
+      send({ type: 'UPDATE_FIELD', field: 'dateOfBirth', value: d.dateOfBirth });
+    }
+    if (d.address) {
+      send({ type: 'UPDATE_FIELD', field: 'address', value: d.address });
+    }
+    if (d.city) {
+      send({ type: 'UPDATE_FIELD', field: 'city', value: d.city });
+    }
+    if (d.state) {
+      send({ type: 'UPDATE_FIELD', field: 'state', value: d.state });
+    }
+    if (d.zip) {
+      send({ type: 'UPDATE_FIELD', field: 'zip', value: d.zip });
+    }
+    // Set existing member ID and trial conversion ID so the payment route
+    // updates this member instead of creating a new one
+    send({ type: 'UPDATE_FIELD', field: 'existingMemberId', value: d.childMemberId });
+    if (d.convertingTrialMembershipId) {
+      send({ type: 'UPDATE_FIELD', field: 'convertingTrialMembershipId', value: d.convertingTrialMembershipId });
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
@@ -575,7 +650,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
           </div>
         )}
 
-        {/* ── Step 3: Commitment / waiver ─────────────────────────────────────── */}
+        {/* ── Step 4: Commitment / waiver ─────────────────────────────────────── */}
         {state.matches('reviewingCommitment') && (
           <div className="w-full max-w-3xl">
             {state.context.selectedProgram && state.context.selectedPlan && (
@@ -709,14 +784,43 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
               </span>
             </div>
 
-            {/* Signature capture */}
+            {/* Signature: show existing or capture new */}
             <div className="mt-4 mb-2">
-              <SignatureCapture
-                label={memberIsMinor ? 'Parent/Guardian Signature' : 'Signature'}
-                onSignatureChange={(dataUrl) => {
-                  handleInputChange('waiverSignature', dataUrl ?? '');
-                }}
-              />
+              {state.context.waiverSignature?.startsWith('data:image/') && !wantsNewSignature
+                ? (
+                    <div>
+                      <p className="mb-2 text-lg font-semibold text-black">Signature on File</p>
+                      <div className="rounded-2xl border-2 border-gray-300 bg-white p-2">
+                        <div
+                          role="img"
+                          aria-label="Existing signature"
+                          className="h-32 w-full bg-contain bg-center bg-no-repeat sm:h-40"
+                          style={{ backgroundImage: `url(${state.context.waiverSignature})` }}
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <p className="text-sm text-gray-400">Using signature from previous waiver</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWantsNewSignature(true);
+                            handleInputChange('waiverSignature', '');
+                          }}
+                          className="cursor-pointer text-sm font-semibold text-black transition-colors hover:text-gray-600"
+                        >
+                          Sign Again
+                        </button>
+                      </div>
+                    </div>
+                  )
+                : (
+                    <SignatureCapture
+                      label={memberIsMinor ? 'Parent/Guardian Signature' : 'Signature'}
+                      onSignatureChange={(dataUrl) => {
+                        handleInputChange('waiverSignature', dataUrl ?? '');
+                      }}
+                    />
+                  )}
             </div>
 
             <div className="mt-6 flex items-center justify-between">
@@ -742,41 +846,58 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 Next →
               </button>
             </div>
-            <StepIndicator current={1} total={4} />
+            <StepIndicator current={2} total={4} />
           </div>
         )}
 
-        {/* ── Step 4: Member info + order summary ─────────────────────────────── */}
+        {/* ── Step 3: Member info + order summary ─────────────────────────────── */}
         {(state.matches('collectingInfo') || state.matches('validatingContact') || state.matches('lookingUpMember')) && (
           <div className="w-full max-w-6xl">
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
 
               {/* Left: form */}
               <div className="lg:col-span-3">
-                {/* Member lookup */}
-                <div className="mb-8 rounded-2xl border border-gray-200 bg-gray-50 p-5">
-                  <p className="mb-3 text-base font-semibold tracking-wide text-gray-500 uppercase">
-                    Already a member or have a trial?
-                  </p>
-                  <div className="flex gap-3">
-                    <input
-                      type="tel"
-                      value={state.context.memberLookupPhone || ''}
-                      onChange={e => handleInputChange('memberLookupPhone', e.target.value)}
-                      placeholder="Phone number"
-                      className="flex-1 rounded-xl border-2 border-gray-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:outline-none"
-                    />
-                    <button
-                      type="button"
-
-                      onClick={() => send({ type: 'LOOKUP_MEMBER' })}
-                      disabled={state.matches('lookingUpMember') || !(state.context.memberLookupPhone?.replace(/\D/g, '').length >= 10)}
-                      className="cursor-pointer rounded-xl border-2 border-black bg-black px-6 py-4 text-base font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {state.matches('lookingUpMember') ? 'Looking up…' : 'Look Up'}
-                    </button>
+                {/* Pre-seeded child membership banner */}
+                {initialMemberData && (
+                  <div className="mb-8 rounded-2xl border-2 border-amber-200 bg-amber-50 p-5">
+                    <p className="text-lg font-semibold text-amber-900">
+                      Assigning membership for
+                      {' '}
+                      {initialMemberData.firstName}
+                      {' '}
+                      {initialMemberData.lastName}
+                    </p>
+                    {initialMemberData.convertingTrialMembershipId && (
+                      <p className="mt-1 text-sm text-amber-700">Converting from trial membership</p>
+                    )}
                   </div>
-                </div>
+                )}
+
+                {/* Member lookup (hidden when pre-seeded) */}
+                {!initialMemberData && (
+                  <div className="mb-8 rounded-2xl border border-gray-200 bg-gray-50 p-5">
+                    <p className="mb-3 text-base font-semibold tracking-wide text-gray-500 uppercase">
+                      Already a member, or have a free trial?
+                    </p>
+                    <div className="flex gap-3">
+                      <input
+                        type="tel"
+                        value={state.context.memberLookupPhone || ''}
+                        onChange={e => handleInputChange('memberLookupPhone', e.target.value)}
+                        placeholder="Phone number"
+                        className="flex-1 rounded-xl border-2 border-gray-300 bg-white p-4 text-xl text-black placeholder:text-gray-400 focus:border-black focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => send({ type: 'LOOKUP_MEMBER' })}
+                        disabled={state.matches('lookingUpMember') || !(state.context.memberLookupPhone?.replace(/\D/g, '').length >= 10)}
+                        className="cursor-pointer rounded-xl border-2 border-black bg-black px-6 py-4 text-base font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {state.matches('lookingUpMember') ? 'Looking up…' : 'Look Up'}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Member info form */}
                 <p className="mb-4 text-lg font-semibold text-black">Member Information</p>
@@ -841,19 +962,13 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                     />
                     {state.context.errors?.phoneNumber && <p className="mt-1 text-base text-red-600">{state.context.errors.phoneNumber}</p>}
                   </div>
-                  <div>
-                    <span className={labelClass}>
-                      Date of Birth
-                      <span className="text-red-500">*</span>
-                    </span>
-                    <TouchDatePicker
-                      value={state.context.dateOfBirth || ''}
-                      onChange={v => handleInputChange('dateOfBirth', v)}
-                      label="Date of Birth"
-                      error={state.context.errors?.dateOfBirth}
-                      placeholder="Select date of birth"
-                    />
-                  </div>
+                  <TouchDatePicker
+                    value={state.context.dateOfBirth || ''}
+                    onChange={v => handleInputChange('dateOfBirth', v)}
+                    label="Date of Birth"
+                    error={state.context.errors?.dateOfBirth}
+                    placeholder="Select date of birth"
+                  />
                   <div className="col-span-2">
                     <label className={labelClass} htmlFor="address">
                       Address
@@ -989,13 +1104,25 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn }: MembershipFlow
                 type="button"
 
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
-                disabled={state.context.isSubmitting || state.matches('lookingUpMember')}
+                disabled={
+                  state.context.isSubmitting
+                  || state.matches('lookingUpMember')
+                  || !state.context.firstName?.trim()
+                  || !state.context.lastName?.trim()
+                  || !state.context.email?.trim()
+                  || !state.context.phoneNumber?.trim()
+                  || !state.context.dateOfBirth?.trim()
+                  || !state.context.address?.trim()
+                  || !state.context.city?.trim()
+                  || !state.context.state?.trim()
+                  || !state.context.zip?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {state.context.isSubmitting ? 'Validating…' : 'Next →'}
               </button>
             </div>
-            <StepIndicator current={2} total={4} />
+            <StepIndicator current={1} total={4} />
           </div>
         )}
 

@@ -83,6 +83,7 @@ function ScrollColumn({
 export function TouchDatePicker({
   value,
   onChange,
+  label,
   error,
   placeholder = 'Select date',
   minYear = 1920,
@@ -177,6 +178,9 @@ export function TouchDatePicker({
 
   return (
     <div>
+      {label && (
+        <p className="mb-2 block text-lg font-semibold text-black">{label}</p>
+      )}
       {/* Trigger button */}
       <button
         type="button"

@@ -1,8 +1,8 @@
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { address, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
+import { address, member, memberMembership, membershipPlan, signedWaiver } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -28,8 +28,11 @@ export async function POST(request: Request) {
 
     const db = getDatabase();
 
-    // Search both bare digits and +1 prefixed formats
+    // Search all common phone storage formats
     const phoneWithCountry = `+1${rawPhone}`;
+    const phoneFormatted = rawPhone.length === 10
+      ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`
+      : rawPhone;
 
     const members = await db
       .select({
@@ -49,6 +52,7 @@ export async function POST(request: Request) {
           or(
             eq(member.phone, rawPhone),
             eq(member.phone, phoneWithCountry),
+            eq(member.phone, phoneFormatted),
           ),
         ),
       );
@@ -60,6 +64,7 @@ export async function POST(request: Request) {
       memberMembershipId: string;
       memberId: string;
       planId: string;
+      membershipStatus: string;
       isTrial: boolean | null;
     }
     const membershipsByMember = new Map<string, MemberMembershipInfo[]>();
@@ -70,6 +75,7 @@ export async function POST(request: Request) {
           memberMembershipId: memberMembership.id,
           memberId: memberMembership.memberId,
           planId: memberMembership.membershipPlanId,
+          membershipStatus: memberMembership.status,
           isTrial: membershipPlan.isTrial,
         })
         .from(memberMembership)
@@ -77,7 +83,7 @@ export async function POST(request: Request) {
         .where(
           and(
             inArray(memberMembership.memberId, memberIds),
-            eq(memberMembership.status, 'active'),
+            inArray(memberMembership.status, ['active', 'on_hold', 'canceled']),
           ),
         );
 
@@ -107,23 +113,42 @@ export async function POST(request: Request) {
       }
     }
 
+    // Fetch the most recent signed waiver signature for each member
+    const signatureMap = new Map<string, string>();
+
+    if (memberIds.length > 0) {
+      for (const mId of memberIds) {
+        const waivers = await db
+          .select({ signatureDataUrl: signedWaiver.signatureDataUrl })
+          .from(signedWaiver)
+          .where(eq(signedWaiver.memberId, mId))
+          .orderBy(desc(signedWaiver.signedAt))
+          .limit(1);
+
+        const w = waivers[0];
+        if (w?.signatureDataUrl) {
+          signatureMap.set(mId, w.signatureDataUrl);
+        }
+      }
+    }
+
     // Filter members based on plan matching and trial rules
     const filteredMembers = members.filter((m) => {
       const memberships = membershipsByMember.get(m.memberId) ?? [];
 
       // If they already have an active non-trial membership for the selected plan, exclude
       if (selectedPlanId) {
-        const hasMatchingNonTrial = memberships.some(
-          ms => ms.planId === selectedPlanId && !ms.isTrial,
+        const hasActiveNonTrial = memberships.some(
+          ms => ms.planId === selectedPlanId && !ms.isTrial && ms.membershipStatus === 'active',
         );
-        if (hasMatchingNonTrial) {
+        if (hasActiveNonTrial) {
           return false;
         }
       }
 
       // If convertOnly, only include members who have an active trial
       if (convertOnly) {
-        const hasTrial = memberships.some(ms => ms.isTrial);
+        const hasTrial = memberships.some(ms => ms.isTrial && ms.membershipStatus === 'active');
         if (!hasTrial) {
           return false;
         }
@@ -137,7 +162,7 @@ export async function POST(request: Request) {
       members: filteredMembers.map((m) => {
         const addr = addressMap.get(m.memberId);
         const memberships = membershipsByMember.get(m.memberId) ?? [];
-        const trialMembership = memberships.find(ms => ms.isTrial);
+        const trialMembership = memberships.find(ms => ms.isTrial && ms.membershipStatus === 'active');
 
         return {
           memberId: m.memberId,
@@ -154,6 +179,7 @@ export async function POST(request: Request) {
           state: addr?.state ?? null,
           zip: addr?.zipCode ?? null,
           trialMembershipId: trialMembership?.memberMembershipId ?? null,
+          existingSignature: signatureMap.get(m.memberId) ?? null,
         };
       }),
     });

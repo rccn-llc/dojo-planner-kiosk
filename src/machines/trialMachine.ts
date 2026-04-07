@@ -40,6 +40,9 @@ function validateContactInfo(context: TrialContext): Record<string, string> {
   if (!context.zip?.trim()) {
     errors.zip = 'ZIP code is required';
   }
+  if (!context.dateOfBirth?.trim()) {
+    errors.dateOfBirth = 'Date of birth is required';
+  }
 
   return errors;
 }
@@ -80,6 +83,9 @@ function validateYouthParent(context: TrialContext): Record<string, string> {
   }
   if (!context.parentZip?.trim()) {
     errors.parentZip = 'ZIP code is required';
+  }
+  if (!context.parentDateOfBirth?.trim()) {
+    errors.parentDateOfBirth = 'Date of birth is required';
   }
 
   return errors;
@@ -169,6 +175,7 @@ const emptyContext: TrialContext = {
   lastName: '',
   email: '',
   phoneNumber: '',
+  dateOfBirth: '',
   address: '',
   addressLine2: '',
   city: '',
@@ -183,6 +190,7 @@ const emptyContext: TrialContext = {
   parentCity: '',
   parentState: '',
   parentZip: '',
+  parentDateOfBirth: '',
   currentChildFirstName: '',
   currentChildLastName: '',
   currentChildDateOfBirth: '',
