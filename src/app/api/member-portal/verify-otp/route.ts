@@ -9,25 +9,16 @@ const SESSION_DURATION_SECONDS = 24 * 60 * 60; // 24 hours
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { memberId?: string; code?: string; orgId?: string };
+    const body = await request.json() as { memberId?: string; code?: string };
     const memberId = body.memberId?.trim() ?? '';
     const code = body.code?.trim() ?? '';
-    const orgId = body.orgId?.trim() ?? '';
 
     if (!memberId || !code) {
       return NextResponse.json({ verified: false, error: 'Missing required fields' }, { status: 400 });
     }
 
-    const result = await verifyOTP(memberId, code);
-    if (!result.verified) {
-      return NextResponse.json({
-        verified: false,
-        reason: result.reason,
-        attemptsRemaining: result.attemptsRemaining,
-      });
-    }
-
-    // Fetch member details for session
+    // Fetch member first to verify existence and get org from DB
+    // (never trust client-supplied orgId)
     const db = getDatabase();
     const members = await db
       .select({
@@ -46,13 +37,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ verified: false, error: 'Member not found' }, { status: 404 });
     }
 
-    const sessionOrgId = orgId || m.organizationId;
+    const result = await verifyOTP(memberId, code);
+    if (!result.verified) {
+      return NextResponse.json({
+        verified: false,
+        reason: result.reason,
+        attemptsRemaining: result.attemptsRemaining,
+      });
+    }
 
-    // Create session token
+    // Create session token — orgId always derived from member's DB record
     const token = await createMemberSession(
       {
         memberId: m.id,
-        orgId: sessionOrgId,
+        orgId: m.organizationId,
         firstName: m.firstName,
         lastName: m.lastName,
         email: m.email,
