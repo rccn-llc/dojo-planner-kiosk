@@ -5,8 +5,8 @@ import type { ChildMembershipSeed } from './MembershipFlow';
 import EditIcon from '@mui/icons-material/Edit';
 import EmailIcon from '@mui/icons-material/Email';
 import SaveIcon from '@mui/icons-material/Save';
-import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
-import { useEffect, useState } from 'react';
+
+import { useState } from 'react';
 import { validateMemberEditForm } from '../../lib/validation';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
@@ -152,18 +152,6 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
   });
   const [saving, setSaving] = useState(false);
   const [editErrors, setEditErrors] = useState<MemberEditFormErrors>({});
-
-  // Membership conversion
-  const [isConverting, setIsConverting] = useState(false);
-  const [availablePlans, setAvailablePlans] = useState<Array<{ id: string; name: string; price: number; frequency: string | null; category: string | null }>>([]);
-  const [selectedNewPlanId, setSelectedNewPlanId] = useState('');
-  const [convertLoading, setConvertLoading] = useState(false);
-  const [prorationData, setProrationData] = useState<{
-    currentPlan: { name: string; price: number; frequency: string | null } | null;
-    newPlan: { name: string; price: number; frequency: string | null };
-    proration: { credit: number; daysRemaining: number; totalDaysInPeriod: number; netAmountDue: number; remainingCredit: number };
-  } | null>(null);
-  const [prorationLoading, setProrationLoading] = useState(false);
 
   // Waiver email
   const [sendingWaiverId, setSendingWaiverId] = useState<string | null>(null);
@@ -435,78 +423,29 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setSaving(false);
   };
 
-  // ── Membership conversion ──
+  // ── Membership actions ──
 
-  useEffect(() => {
-    if (!isConverting) {
+  const [membershipActionLoading, setMembershipActionLoading] = useState<'cancel' | 'hold' | 'reactivate' | null>(null);
+
+  const handleMembershipAction = async (action: 'cancel' | 'hold' | 'reactivate', memberMembershipId: string) => {
+    if (!selectedMemberId) {
       return;
     }
-    fetch('/api/programs')
-      .then(r => r.json())
-      .then((data) => {
-        const plans: typeof availablePlans = [];
-        for (const group of Object.values(data.plansByProgram ?? {})) {
-          for (const p of (group as Array<Record<string, unknown>>)) {
-            if (!p.isTrial) {
-              plans.push({
-                id: p.id as string,
-                name: p.name as string,
-                price: p.price as number,
-                frequency: p.frequency as string | null,
-                category: p.category as string | null,
-              });
-            }
-          }
-        }
-        setAvailablePlans(plans);
-      })
-      .catch(() => setError('Failed to load plans'));
-  }, [isConverting]);
-
-  // Fetch proration preview when a new plan is selected
-  useEffect(() => {
-    if (!selectedNewPlanId || !selectedMemberId || !isConverting) {
-      setProrationData(null);
-      return;
-    }
-    setProrationLoading(true);
-    fetch(`/api/members/${selectedMemberId}/membership/proration`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ newPlanId: selectedNewPlanId }),
-    })
-      .then(r => r.json())
-      .then(data => setProrationData(data))
-      .catch(() => setProrationData(null))
-      .finally(() => setProrationLoading(false));
-  }, [selectedNewPlanId, selectedMemberId, isConverting]);
-
-  const convertMembership = async () => {
-    if (!selectedMemberId || !selectedNewPlanId) {
-      return;
-    }
-    setConvertLoading(true);
+    setMembershipActionLoading(action);
     setError('');
     try {
       const res = await fetch(`/api/members/${selectedMemberId}/membership`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          newPlanId: selectedNewPlanId,
-          prorationCredit: prorationData?.proration.credit ?? 0,
-          previousPlanName: prorationData?.currentPlan?.name,
-        }),
+        body: JSON.stringify({ memberMembershipId, action }),
       });
       if (!res.ok) {
-        throw new Error('Conversion failed');
+        throw new Error(`Failed to ${action} membership`);
       }
-      setIsConverting(false);
-      setProrationData(null);
-      setSelectedNewPlanId('');
       await loadMemberDetail(selectedMemberId);
     }
-    catch { setError('Failed to convert membership'); }
-    setConvertLoading(false);
+    catch { setError(`Failed to ${action} membership`); }
+    setMembershipActionLoading(null);
   };
 
   // ── Send waiver email ──
@@ -1029,7 +968,9 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
   if (view === 'memberDetail' && memberDetail) {
     const m = memberDetail.member;
     const defaultAddr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
-    const activeMembership = memberDetail.memberships.find(ms => ms.status === 'active');
+    const activeMembership = memberDetail.memberships.find(ms => ms.status === 'active')
+      ?? memberDetail.memberships.find(ms => ms.status === 'hold')
+      ?? memberDetail.memberships.find(ms => ms.status === 'cancelled');
 
     const tabs: { key: DetailTab; label: string }[] = [
       { key: 'overview', label: 'Overview' },
@@ -1169,212 +1110,105 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                             <span className="text-gray-500">Status</span>
                             <StatusBadge status={activeMembership.status} />
                           </div>
-                          {!isConverting && (
-                            <>
-                              <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
-                                <SwapHorizIcon sx={{ fontSize: 20 }} />
-                                Convert Membership
+                          {/* Membership action buttons */}
+                          {activeMembership.status === 'active' && (
+                            <div className="mt-4 flex gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleMembershipAction('hold', activeMembership.id)}
+                                disabled={membershipActionLoading !== null}
+                                className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-amber-400 bg-amber-50 text-base font-semibold text-amber-700 transition-all hover:bg-amber-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {membershipActionLoading === 'hold' ? 'Placing hold…' : 'Hold'}
                               </button>
-                              {onAssignChildMembership && activeMembership.isTrial && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
-                                    onAssignChildMembership({
-                                      childMemberId: m.id,
-                                      firstName: m.firstName,
-                                      lastName: m.lastName,
-                                      email: m.email,
-                                      phone: m.phone ?? '',
-                                      dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
-                                      address: addr?.street ?? '',
-                                      city: addr?.city ?? '',
-                                      state: addr?.state ?? '',
-                                      zip: addr?.zipCode ?? '',
-                                      convertingTrialMembershipId: activeMembership.id,
-                                      guardianFirstName: parentContext?.firstName ?? '',
-                                      guardianLastName: parentContext?.lastName ?? '',
-                                      guardianEmail: parentContext?.email ?? '',
-                                    });
-                                  }}
-                                  className="mt-2 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
-                                >
-                                  Upgrade to Paid Membership
-                                </button>
-                              )}
-                            </>
-                          )}
-                          {isConverting && (
-                            <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
-                              <KioskSelect
-                                id="convert-plan"
-                                value={selectedNewPlanId}
-                                onChange={setSelectedNewPlanId}
-                                label="Convert to a new plan"
-                                placeholder="Select a plan..."
-                                options={availablePlans.map(p => ({
-                                  value: p.id,
-                                  label: `${p.name} — $${p.price.toFixed(2)}${p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}${p.category ? ` (${p.category})` : ''}`,
-                                }))}
-                              />
-                              {prorationLoading && <p className="text-center text-sm text-gray-400">Calculating proration...</p>}
-                              {prorationData && !prorationLoading && (
-                                <div className="space-y-2 rounded-lg border border-gray-200 bg-white p-3 text-sm">
-                                  {prorationData.currentPlan && (
-                                    <div className="flex justify-between">
-                                      <span className="text-gray-500">Current plan</span>
-                                      <span className="font-medium text-black">
-                                        {prorationData.currentPlan.name}
-                                        {' '}
-                                        ($
-                                        {prorationData.currentPlan.price.toFixed(2)}
-                                        )
-                                      </span>
-                                    </div>
-                                  )}
-                                  {prorationData.proration.credit > 0 && (
-                                    <>
-                                      <div className="flex justify-between">
-                                        <span className="text-gray-500">Days remaining in period</span>
-                                        <span className="text-black">
-                                          {prorationData.proration.daysRemaining}
-                                          {' '}
-                                          of
-                                          {' '}
-                                          {prorationData.proration.totalDaysInPeriod}
-                                        </span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span className="text-gray-500">Pro-rated credit</span>
-                                        <span className="font-medium text-green-600">
-                                          -$
-                                          {prorationData.proration.credit.toFixed(2)}
-                                        </span>
-                                      </div>
-                                    </>
-                                  )}
-                                  <div className="flex justify-between">
-                                    <span className="text-gray-500">New plan price</span>
-                                    <span className="font-medium text-black">
-                                      $
-                                      {prorationData.newPlan.price.toFixed(2)}
-                                      {prorationData.newPlan.frequency && prorationData.newPlan.frequency !== 'None' ? ` / ${prorationData.newPlan.frequency.toLowerCase()}` : ''}
-                                    </span>
-                                  </div>
-                                  <div className="flex justify-between border-t border-gray-200 pt-2">
-                                    <span className="font-semibold text-black">Net amount due</span>
-                                    <span className="font-bold text-black">
-                                      $
-                                      {prorationData.proration.netAmountDue.toFixed(2)}
-                                    </span>
-                                  </div>
-                                  {prorationData.proration.remainingCredit > 0 && (
-                                    <p className="text-xs text-amber-600">
-                                      $
-                                      {prorationData.proration.remainingCredit.toFixed(2)}
-                                      {' '}
-                                      excess credit will not be applied
-                                    </p>
-                                  )}
-                                </div>
-                              )}
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsConverting(false);
-                                    setSelectedNewPlanId('');
-                                    setProrationData(null);
-                                  }}
-                                  className="flex-1 cursor-pointer rounded-lg border border-gray-300 py-2 text-sm font-semibold text-gray-600 hover:bg-white"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={convertMembership}
-                                  disabled={!selectedNewPlanId || convertLoading || prorationLoading}
-                                  className="flex-1 cursor-pointer rounded-lg bg-black py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
-                                >
-                                  {convertLoading ? 'Converting...' : 'Confirm'}
-                                </button>
-                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleMembershipAction('cancel', activeMembership.id)}
+                                disabled={membershipActionLoading !== null}
+                                className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-red-400 bg-red-50 text-base font-semibold text-red-700 transition-all hover:bg-red-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {membershipActionLoading === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                              </button>
                             </div>
+                          )}
+                          {activeMembership.status === 'hold' && (
+                            <div className="mt-4 flex gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleMembershipAction('reactivate', activeMembership.id)}
+                                disabled={membershipActionLoading !== null}
+                                className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-green-400 bg-green-50 text-base font-semibold text-green-700 transition-all hover:bg-green-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {membershipActionLoading === 'reactivate' ? 'Reactivating…' : 'Reactivate'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleMembershipAction('cancel', activeMembership.id)}
+                                disabled={membershipActionLoading !== null}
+                                className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-red-400 bg-red-50 text-base font-semibold text-red-700 transition-all hover:bg-red-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {membershipActionLoading === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                              </button>
+                            </div>
+                          )}
+                          {onAssignChildMembership && activeMembership.isTrial && activeMembership.status === 'active' && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
+                                onAssignChildMembership({
+                                  childMemberId: m.id,
+                                  firstName: m.firstName,
+                                  lastName: m.lastName,
+                                  email: m.email,
+                                  phone: m.phone ?? '',
+                                  dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
+                                  address: addr?.street ?? '',
+                                  city: addr?.city ?? '',
+                                  state: addr?.state ?? '',
+                                  zip: addr?.zipCode ?? '',
+                                  convertingTrialMembershipId: activeMembership.id,
+                                  guardianFirstName: parentContext?.firstName ?? '',
+                                  guardianLastName: parentContext?.lastName ?? '',
+                                  guardianEmail: parentContext?.email ?? '',
+                                });
+                              }}
+                              className="mt-2 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
+                            >
+                              Upgrade to Paid Membership
+                            </button>
                           )}
                         </>
                       )
                     : (
                         <>
                           <p className="text-gray-400">No active membership</p>
-                          {onAssignChildMembership
-                            ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
-                                    onAssignChildMembership({
-                                      childMemberId: m.id,
-                                      firstName: m.firstName,
-                                      lastName: m.lastName,
-                                      email: m.email,
-                                      phone: m.phone ?? '',
-                                      dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
-                                      address: addr?.street ?? '',
-                                      city: addr?.city ?? '',
-                                      state: addr?.state ?? '',
-                                      zip: addr?.zipCode ?? '',
-                                      convertingTrialMembershipId: null,
-                                      guardianFirstName: parentContext?.firstName ?? '',
-                                      guardianLastName: parentContext?.lastName ?? '',
-                                      guardianEmail: parentContext?.email ?? '',
-                                    });
-                                  }}
-                                  className="mt-4 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
-                                >
-                                  Assign Membership
-                                </button>
-                              )
-                            : (
-                                <button type="button" onClick={() => setIsConverting(true)} className="mt-4 flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-gray-200 py-3 text-base font-semibold text-gray-600 transition-all hover:border-black hover:bg-gray-50">
-                                  <SwapHorizIcon sx={{ fontSize: 20 }} />
-                                  Assign Membership
-                                </button>
-                              )}
-                          {isConverting && (
-                            <div className="mt-4 space-y-3 rounded-xl border-2 border-black bg-gray-50 p-4">
-                              <KioskSelect
-                                id="assign-plan"
-                                value={selectedNewPlanId}
-                                onChange={setSelectedNewPlanId}
-                                label="Select a membership plan"
-                                placeholder="Select a plan..."
-                                options={availablePlans.map(p => ({
-                                  value: p.id,
-                                  label: `${p.name} — $${p.price.toFixed(2)}${p.frequency && p.frequency !== 'None' ? ` / ${p.frequency.toLowerCase()}` : ''}`,
-                                }))}
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsConverting(false);
-                                    setSelectedNewPlanId('');
-                                    setProrationData(null);
-                                  }}
-                                  className="flex-1 cursor-pointer rounded-lg border border-gray-300 py-2 text-sm font-semibold text-gray-600 hover:bg-white"
-                                >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={convertMembership}
-                                  disabled={!selectedNewPlanId || convertLoading}
-                                  className="flex-1 cursor-pointer rounded-lg bg-black py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50"
-                                >
-                                  {convertLoading ? 'Assigning...' : 'Confirm'}
-                                </button>
-                              </div>
-                            </div>
+                          {onAssignChildMembership && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
+                                onAssignChildMembership({
+                                  childMemberId: m.id,
+                                  firstName: m.firstName,
+                                  lastName: m.lastName,
+                                  email: m.email,
+                                  phone: m.phone ?? '',
+                                  dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
+                                  address: addr?.street ?? '',
+                                  city: addr?.city ?? '',
+                                  state: addr?.state ?? '',
+                                  zip: addr?.zipCode ?? '',
+                                  convertingTrialMembershipId: null,
+                                  guardianFirstName: parentContext?.firstName ?? '',
+                                  guardianLastName: parentContext?.lastName ?? '',
+                                  guardianEmail: parentContext?.email ?? '',
+                                });
+                              }}
+                              className="mt-4 min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
+                            >
+                              Assign Membership
+                            </button>
                           )}
                         </>
                       )}
@@ -1669,7 +1503,7 @@ function StatusBadge({ status }: { status: string }) {
   };
   return (
     <span className={`rounded-lg px-3 py-1 text-sm font-semibold capitalize ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
-      {status.replace(/_/g, ' ')}
+      {status === 'hold' ? 'On Hold' : status.replace(/_/g, ' ')}
     </span>
   );
 }
