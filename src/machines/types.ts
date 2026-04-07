@@ -73,6 +73,7 @@ export interface TrialContext {
   // Program selection
   selectedProgram: Program | null;
   availablePrograms: Program[];
+  selectedMembershipPlanId: string;
 
   // Waiver
   waiverAgreed: boolean;
@@ -81,6 +82,9 @@ export interface TrialContext {
   waiverTemplateVersion: number;
   waiverContent: string;
   isLoadingWaiver: boolean;
+
+  // Result
+  memberId: string;
 
   // Form validation and state
   errors: Record<string, string>;
@@ -176,10 +180,11 @@ export type TrialEvent
     | { type: 'FINISH_YOUTH' }
     | { type: 'SUBMIT_WAIVER' }
     | { type: 'AGREE_WAIVER'; agreed: boolean }
+    | { type: 'PROGRAMS_LOADED'; selectedMembershipPlanId: string }
     | { type: 'WAIVER_LOADED'; id: string; version: number; content: string }
     | { type: 'WAIVER_FAILED' }
-    | { type: 'TRIAL_CREATED' }
-    | { type: 'TRIAL_FAILED'; error?: string }
+    | { type: 'TRIAL_SUCCESS'; memberId: string }
+    | { type: 'TRIAL_FAILED'; error: string }
     | { type: 'TRY_AGAIN' }
     | { type: 'BACK' }
     | { type: 'TIMEOUT' }

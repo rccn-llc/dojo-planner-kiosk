@@ -2,7 +2,6 @@
 
 import type { TokenizationIframeConfig } from '../../lib/iqpro';
 import type { CartItem, StoreProduct } from '../../machines/types';
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import LocalMallOutlinedIcon from '@mui/icons-material/LocalMallOutlined';
@@ -12,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 
 const US_STATES = [
@@ -441,21 +441,10 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6 md:p-8">
-        <button
-          type="button"
-          onClick={handleBack}
-          className="cursor-pointer text-white transition-colors hover:text-gray-300"
-        >
-          <ArrowBackIcon sx={{ fontSize: 48 }} />
-        </button>
-
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-5xl">
-          {headerTitle()}
-        </h1>
-
-        {showCartButton
+      <KioskFlowHeader
+        title={headerTitle()}
+        onBack={handleBack}
+        rightSlot={showCartButton
           ? (
               <button
                 type="button"
@@ -471,10 +460,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                 )}
               </button>
             )
-          : (
-              <div className="w-12 sm:w-16 md:w-24" />
-            )}
-      </header>
+          : undefined}
+      />
 
       {/* Main content */}
       <main className={`flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8 ${mainBg}`}>

@@ -198,12 +198,14 @@ const emptyContext: TrialContext = {
   isAddingAdditionalChild: false,
   selectedProgram: null,
   availablePrograms: [],
+  selectedMembershipPlanId: '',
   waiverAgreed: false,
   signature: '',
   waiverTemplateId: '',
   waiverTemplateVersion: 0,
   waiverContent: '',
   isLoadingWaiver: false,
+  memberId: '',
   errors: {},
   isSubmitting: false,
   sessionId: '',
@@ -232,6 +234,11 @@ export const trialMachine = createMachine({
       }),
 
       on: {
+        PROGRAMS_LOADED: {
+          actions: assign(({ event }) => ({
+            selectedMembershipPlanId: event.selectedMembershipPlanId,
+          })),
+        },
         SELECT_AGE_GROUP: [
           {
             target: 'collectingInfo',
@@ -506,15 +513,18 @@ export const trialMachine = createMachine({
       entry: assign({ isSubmitting: true }),
 
       on: {
-        TRIAL_CREATED: {
+        TRIAL_SUCCESS: {
           target: 'success',
-          actions: assign({ isSubmitting: false }),
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            memberId: event.memberId,
+          })),
         },
         TRIAL_FAILED: {
           target: 'error',
           actions: assign(({ event }) => ({
             isSubmitting: false,
-            errors: { general: event.error ?? 'Trial signup failed. Please try again.' },
+            errors: { general: event.error },
           })),
         },
         TIMEOUT: 'timeout',
@@ -538,7 +548,10 @@ export const trialMachine = createMachine({
       entry: assign({ isSubmitting: false }),
 
       on: {
-        TRY_AGAIN: 'collectingInfo',
+        TRY_AGAIN: [
+          { target: 'collectingYouthParentInfo', guard: 'isYouthFlow' },
+          { target: 'collectingInfo' },
+        ],
         RESET: 'selectingAge',
       },
     },

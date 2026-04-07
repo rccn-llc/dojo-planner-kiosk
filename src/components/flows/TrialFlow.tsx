@@ -2,9 +2,10 @@
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 import { SignatureCapture } from '../SignatureCapture';
 import { TouchDatePicker } from '../TouchDatePicker';
@@ -118,6 +119,136 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       .catch(() => {});
   }, []);
 
+  // Track session IDs so effects re-run on each new session but not on re-renders
+  const programsLoadedRef = useRef<string>('');
+  const waiverLoadedRef = useRef<string>('');
+  const processingRef = useRef(false);
+
+  // Load programs when entering selectingAge (re-fetches on each new session)
+  useEffect(() => {
+    if (!state.matches('selectingAge')) {
+      return;
+    }
+    if (programsLoadedRef.current === state.context.sessionId) {
+      return;
+    }
+    programsLoadedRef.current = state.context.sessionId;
+    processingRef.current = false;
+
+    fetch('/api/trial/programs')
+      .then(res => res.json())
+      .then((data: { programs: Array<{ id: string; trialPlans: Array<{ id: string }> }> }) => {
+        const firstPlan = data.programs?.[0]?.trialPlans?.[0];
+        send({ type: 'PROGRAMS_LOADED', selectedMembershipPlanId: firstPlan?.id ?? '' });
+      })
+      .catch(() => {
+        // Non-fatal — proceed without a pre-selected plan
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Load waiver content when entering collectingWaiver (once per session)
+  useEffect(() => {
+    if (!state.matches('collectingWaiver')) {
+      return;
+    }
+    if (waiverLoadedRef.current === state.context.sessionId) {
+      return;
+    }
+    waiverLoadedRef.current = state.context.sessionId;
+
+    fetch('/api/trial/waiver')
+      .then(res => res.json())
+      .then((data: { id: string; version: number; content: string }) => {
+        if (data.id) {
+          send({ type: 'WAIVER_LOADED', id: data.id, version: data.version, content: data.content });
+        }
+      })
+      .catch(() => {
+        // Non-fatal — waiver text falls back to hardcoded content
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Submit trial when entering creatingTrial
+  useEffect(() => {
+    if (!state.matches('creatingTrial')) {
+      return;
+    }
+    if (processingRef.current) {
+      return;
+    }
+    processingRef.current = true;
+
+    const ctx = state.context;
+    const isYouth = ctx.ageGroup === 'youth';
+
+    const body = isYouth
+      ? {
+          ageGroup: 'youth' as const,
+          member: {
+            firstName: ctx.parentFirstName,
+            lastName: ctx.parentLastName,
+            email: ctx.parentEmail,
+            phone: ctx.parentPhone,
+            address: ctx.parentAddress,
+            addressLine2: ctx.parentAddressLine2,
+            city: ctx.parentCity,
+            state: ctx.parentState,
+            zip: ctx.parentZip,
+          },
+          children: ctx.children,
+          waiver: {
+            templateId: ctx.waiverTemplateId,
+            templateVersion: ctx.waiverTemplateVersion,
+            renderedContent: ctx.waiverContent,
+            signature: ctx.signature,
+          },
+          membershipPlanId: ctx.selectedMembershipPlanId,
+        }
+      : {
+          ageGroup: 'adult' as const,
+          member: {
+            firstName: ctx.firstName,
+            lastName: ctx.lastName,
+            email: ctx.email,
+            phone: ctx.phoneNumber,
+            address: ctx.address,
+            addressLine2: ctx.addressLine2,
+            city: ctx.city,
+            state: ctx.state,
+            zip: ctx.zip,
+          },
+          waiver: {
+            templateId: ctx.waiverTemplateId,
+            templateVersion: ctx.waiverTemplateVersion,
+            renderedContent: ctx.waiverContent,
+            signature: ctx.signature,
+          },
+          membershipPlanId: ctx.selectedMembershipPlanId,
+        };
+
+    fetch('/api/trial/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          return res.json().then(d => Promise.reject(new Error(d.error ?? 'Submission failed')));
+        }
+        return res.json();
+      })
+      .then((data: { memberId: string }) => {
+        send({ type: 'TRIAL_SUCCESS', memberId: data.memberId });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
+        send({ type: 'TRIAL_FAILED', error: message });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
   const handleInputChange = (field: string, value: string) => {
     if (field === 'phoneNumber') {
       const cleaned = sanitizePhoneInput(value);
@@ -184,7 +315,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         };
         if (r.ok && data.memberId) {
           setCreatedMembers(data.members ?? []);
-          send({ type: 'TRIAL_CREATED' });
+          send({ type: 'TRIAL_SUCCESS', memberId: data.memberId });
         }
         else {
           send({ type: 'TRIAL_FAILED', error: data.error ?? 'Trial signup failed' });
@@ -215,7 +346,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
-  // No auto-redirect on success — user chooses next action
+  // No auto-redirect on success -- user chooses next action
 
   const inputClass = (field: string) =>
     `w-full text-xl p-4 bg-white border-2 rounded-xl text-black placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-gray-400 focus:border-gray-600 ${
@@ -262,20 +393,10 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
   return (
     <div className="flex min-h-screen flex-col bg-white">
-      {/* Header */}
-      <header className="flex items-center justify-between bg-black p-4 sm:p-6">
-        <button
-          type="button"
-          onClick={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
-          className="cursor-pointer text-white transition-colors hover:text-gray-300"
-        >
-          <ArrowBackIcon sx={{ fontSize: 40 }} />
-        </button>
-        <h1 className="flex-1 text-center text-2xl font-bold text-white sm:text-3xl md:text-4xl">
-          {headerTitle()}
-        </h1>
-        <div className="w-10" />
-      </header>
+      <KioskFlowHeader
+        title={headerTitle()}
+        onBack={state.matches('selectingAge') ? onBack : () => send({ type: 'BACK' })}
+      />
 
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
 
