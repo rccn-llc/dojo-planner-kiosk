@@ -292,11 +292,21 @@ export const storeMachine = createMachine({
 
     applyingDiscount: {
       entry: assign({ isSubmitting: true }),
-      after: {
-        // Mock: always returns no discount after 1s
-        1000: {
+      on: {
+        DISCOUNT_APPLIED: {
           target: 'viewingCart',
-          actions: assign({ isSubmitting: false, discountAmount: 0 }),
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            discountAmount: event.discountAmount,
+          })),
+        },
+        DISCOUNT_FAILED: {
+          target: 'viewingCart',
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            discountAmount: 0,
+            errors: { discountCode: event.error } as Record<string, string>,
+          })),
         },
       },
     },
@@ -330,9 +340,18 @@ export const storeMachine = createMachine({
 
     lookingUpMember: {
       entry: assign({ isSubmitting: true }),
-      after: {
-        // Mock: no match after 1s
-        1000: {
+      on: {
+        MEMBER_FOUND: {
+          target: 'checkout',
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            firstName: event.firstName,
+            lastName: event.lastName,
+            email: event.email,
+            phoneNumber: event.phone,
+          })),
+        },
+        MEMBER_NOT_FOUND: {
           target: 'checkout',
           actions: assign({ isSubmitting: false }),
         },

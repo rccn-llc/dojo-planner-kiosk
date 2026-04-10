@@ -1,8 +1,10 @@
 import type { NextRequest } from 'next/server';
+import type { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
+import { sendTrialConfirmation } from '@/lib/email';
 import {
   addressTrialSchema,
   familyMemberTrialSchema,
@@ -10,13 +12,16 @@ import {
   membershipPlanTrialSchema,
   memberTrialSchema,
   signedWaiverTrialSchema,
+  waiverTemplateTrialSchema,
 } from '@/lib/trialSchema';
+import { generatePdfFilename, generateWaiverPdfBuffer } from '@/lib/waiverPdf';
 
 interface MemberInfo {
   firstName: string;
   lastName: string;
   email: string;
   phone: string;
+  dateOfBirth?: string;
   address: string;
   addressLine2?: string;
   city: string;
@@ -43,6 +48,8 @@ interface SubmitTrialRequest {
   children?: ChildInfo[];
   waiver: WaiverInfo;
   membershipPlanId: string;
+  programName?: string;
+  planName?: string;
 }
 
 function calcAge(dob: Date, now: Date): number {
@@ -86,6 +93,46 @@ export async function POST(request: NextRequest) {
 
     const street = [member.address, member.addressLine2].filter(Boolean).join(' ');
 
+    // Fetch the waiver template name (used for the PDF title)
+    const waiverTemplates = await db
+      .select()
+      .from(waiverTemplateTrialSchema)
+      .where(eq(waiverTemplateTrialSchema.id, waiver.templateId))
+      .limit(1);
+    const waiverTemplateName = waiverTemplates[0]?.name ?? 'Trial Waiver';
+
+    const planForPdf = plan;
+    const buildWaiverPdf = async (
+      firstName: string,
+      lastName: string,
+      signedByName: string,
+      signedByRelationship: string | null,
+    ): Promise<{ buffer: Buffer; filename: string } | null> => {
+      if (!waiver.signature || !waiver.renderedContent) {
+        return null;
+      }
+      try {
+        const buffer = await generateWaiverPdfBuffer({
+          memberFirstName: firstName,
+          memberLastName: lastName,
+          signedByName,
+          signedByRelationship,
+          signedAt: now,
+          waiverTemplateName,
+          renderedContent: waiver.renderedContent,
+          signatureDataUrl: waiver.signature,
+          planName: planForPdf.name,
+          planPrice: planForPdf.price,
+          planFrequency: planForPdf.frequency,
+        });
+        return { buffer, filename: generatePdfFilename(lastName, firstName) };
+      }
+      catch (pdfErr) {
+        console.error('[trial/submit] PDF generation error:', pdfErr);
+        return null;
+      }
+    };
+
     if (ageGroup === 'adult') {
       // ── Adult flow: 1 member, 1 address, 1 membership, 1 signed waiver ──
       const memberId = randomUUID();
@@ -100,6 +147,7 @@ export async function POST(request: NextRequest) {
           email: member.email,
           memberType: 'individual',
           phone: member.phone,
+          dateOfBirth: member.dateOfBirth ? new Date(`${member.dateOfBirth}T12:00:00`) : undefined,
           status: 'trial',
           statusChangedAt: now,
           createdAt: now,
@@ -156,7 +204,33 @@ export async function POST(request: NextRequest) {
         });
       });
 
-      return NextResponse.json({ memberId });
+      // Send confirmation email with signed waiver PDF attached (fire-and-forget)
+      if (member.email) {
+        const pdf = await buildWaiverPdf(
+          member.firstName,
+          member.lastName,
+          `${member.firstName} ${member.lastName}`,
+          null,
+        );
+        sendTrialConfirmation({
+          toEmail: member.email,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          programName: body.programName ?? plan.name,
+          planName: body.planName ?? plan.name,
+          waiverPdfBuffer: pdf?.buffer,
+          waiverPdfFilename: pdf?.filename,
+        }).catch(() => {});
+      }
+
+      return NextResponse.json({
+        memberId,
+        members: [{
+          memberId,
+          firstName: member.firstName,
+          lastName: member.lastName,
+        }],
+      });
     }
     else {
       // ── Youth flow: parent (head-of-household) + one member_membership per child ──
@@ -168,7 +242,7 @@ export async function POST(request: NextRequest) {
       }
 
       const parentMemberId = randomUUID();
-      const childResults: Array<{ memberId: string; memberMembershipId: string }> = [];
+      const childResults: Array<{ memberId: string; memberMembershipId: string; firstName: string; lastName: string }> = [];
 
       await db.transaction(async (tx) => {
         // 1. Parent member (head-of-household, no membership)
@@ -180,6 +254,7 @@ export async function POST(request: NextRequest) {
           email: member.email,
           memberType: 'head-of-household',
           phone: member.phone,
+          dateOfBirth: member.dateOfBirth ? new Date(`${member.dateOfBirth}T12:00:00`) : undefined,
           status: 'trial',
           statusChangedAt: now,
           createdAt: now,
@@ -233,7 +308,7 @@ export async function POST(request: NextRequest) {
           await tx.insert(familyMemberTrialSchema).values({
             memberId: parentMemberId,
             relatedMemberId: childMemberId,
-            relationship: 'parent',
+            relationship: 'child',
           });
 
           await tx.insert(signedWaiverTrialSchema).values({
@@ -264,11 +339,45 @@ export async function POST(request: NextRequest) {
             createdAt: now,
           });
 
-          childResults.push({ memberId: childMemberId, memberMembershipId: childMembershipId });
+          childResults.push({
+            memberId: childMemberId,
+            memberMembershipId: childMembershipId,
+            firstName: child.firstName,
+            lastName: child.lastName,
+          });
         }
       });
 
-      return NextResponse.json({ memberId: parentMemberId, children: childResults });
+      // Send confirmation email to the parent with signed waiver PDF attached (fire-and-forget)
+      if (member.email) {
+        const pdf = await buildWaiverPdf(
+          member.firstName,
+          member.lastName,
+          `${member.firstName} ${member.lastName}`,
+          'parent',
+        );
+        sendTrialConfirmation({
+          toEmail: member.email,
+          firstName: member.firstName,
+          lastName: member.lastName,
+          programName: body.programName ?? plan.name,
+          planName: body.planName ?? plan.name,
+          childNames: children.map(c => `${c.firstName} ${c.lastName}`),
+          waiverPdfBuffer: pdf?.buffer,
+          waiverPdfFilename: pdf?.filename,
+        }).catch(() => {});
+      }
+
+      return NextResponse.json({
+        memberId: parentMemberId,
+        children: childResults,
+        // For check-in pre-selection: children are the ones with memberships, not the parent
+        members: childResults.map(c => ({
+          memberId: c.memberId,
+          firstName: c.firstName,
+          lastName: c.lastName,
+        })),
+      });
     }
   }
   catch (error) {

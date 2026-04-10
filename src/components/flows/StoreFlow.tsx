@@ -4,7 +4,6 @@ import type { TokenizationIframeConfig } from '../../lib/iqpro';
 import type { CartItem, StoreProduct } from '../../machines/types';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import LocalMallOutlinedIcon from '@mui/icons-material/LocalMallOutlined';
 import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import Image from 'next/image';
@@ -13,6 +12,7 @@ import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
+import { KioskSelect } from '../KioskSelect';
 
 const US_STATES = [
   'AL',
@@ -216,7 +216,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           discountAmount: ctx.discountAmount,
           amount: total,
           description: 'Kiosk store order',
-          organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? '',
+          organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? process.env.ORGANIZATION_ID ?? '',
           items: ctx.cartItems.map(i => ({
             productName: i.productName,
             variantName: i.variantName,
@@ -264,6 +264,64 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
+  // Validate discount code when entering applyingDiscount state
+  useEffect(() => {
+    if (!state.matches('applyingDiscount')) {
+      return;
+    }
+    const subtotal = state.context.cartItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0,
+    );
+    fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: state.context.discountCode, subtotal }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.valid) {
+          send({ type: 'DISCOUNT_APPLIED', discountAmount: data.discountAmount });
+        }
+        else {
+          send({ type: 'DISCOUNT_FAILED', error: data.error ?? 'Invalid coupon' });
+        }
+      })
+      .catch(() => send({ type: 'DISCOUNT_FAILED', error: 'Failed to validate coupon' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Handle member lookup when entering lookingUpMember state
+  useEffect(() => {
+    if (!state.matches('lookingUpMember')) {
+      return;
+    }
+    const phone = state.context.memberSearchPhone;
+    fetch('/api/members/lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.found && data.members?.length > 0) {
+          const m = data.members[0];
+          send({
+            type: 'MEMBER_FOUND',
+            firstName: m.firstName,
+            lastName: m.lastName,
+            email: '',
+            phone,
+          });
+        }
+        else {
+          send({ type: 'MEMBER_NOT_FOUND' });
+        }
+      })
+      .catch(() => send({ type: 'MEMBER_NOT_FOUND' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
   // Auto-return to home after order success (60s countdown)
   useEffect(() => {
     if (!state.matches('orderSuccess')) {
@@ -277,7 +335,6 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       setSuccessCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          onComplete();
           return 0;
         }
         return prev - 1;
@@ -287,6 +344,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
+
+  // Navigate home once countdown reaches 0
+  useEffect(() => {
+    if (successCountdown === 0 && state.matches('orderSuccess')) {
+      onComplete();
+    }
+  }, [successCountdown, state, onComplete]);
 
   // ── Shared styles (match MembershipFlow exactly) ────────────────────────────
   const labelClass = 'block text-lg font-semibold text-black mb-2';
@@ -488,34 +552,18 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                 )}
                 {state.context.selectedProduct.variants && state.context.selectedProduct.variants.length > 1 && (
                   <div>
-                    <label className={labelClass} htmlFor="variantSelect">Select Option</label>
-                    <div className="relative">
-                      <select
-                        id="variantSelect"
-                        value={state.context.selectedVariantId}
-                        onChange={e => send({ type: 'SELECT_VARIANT', variantId: e.target.value })}
-                        className={`appearance-none pr-10 ${inputClass('selectedVariantId')}`}
-                      >
-                        <option value="">Choose an option</option>
-                        {state.context.selectedProduct.variants.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {v.name}
-                            {' '}
-                            —
-                            {' '}
-                            {formatCurrency(v.price)}
-                          </option>
-                        ))}
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
-                    {state.context.errors?.selectedVariantId && (
-                      <p className="mt-1 text-base text-red-600">
-                        {state.context.errors.selectedVariantId}
-                      </p>
-                    )}
+                    <KioskSelect
+                      id="variantSelect"
+                      value={state.context.selectedVariantId}
+                      onChange={v => send({ type: 'SELECT_VARIANT', variantId: v })}
+                      label="Select Option"
+                      placeholder="Choose an option"
+                      options={state.context.selectedProduct.variants.map(v => ({
+                        value: v.id,
+                        label: `${v.name} — ${formatCurrency(v.price)}`,
+                      }))}
+                      error={state.context.errors?.selectedVariantId}
+                    />
                   </div>
                 )}
 
@@ -835,20 +883,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
                   {/* Country */}
                   <div className="sm:col-span-2">
-                    <label className={labelClass} htmlFor="country">Country</label>
-                    <div className="relative">
-                      <select
-                        id="country"
-                        value={state.context.country}
-                        onChange={e => handleInputChange('country', e.target.value)}
-                        className={`appearance-none pr-10 ${inputClass('country')}`}
-                      >
-                        <option value="United States">United States</option>
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
+                    <KioskSelect
+                      id="country"
+                      value={state.context.country}
+                      onChange={v => handleInputChange('country', v)}
+                      label="Country"
+                      options={[{ value: 'United States', label: 'United States' }]}
+                    />
                   </div>
 
                   {/* Address */}
@@ -898,29 +939,16 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       <p className="mt-1 text-base text-red-600">{state.context.errors.city}</p>
                     )}
                   </div>
-                  <div>
-                    <label className={labelClass} htmlFor="state">
-                      State / Province / Region
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <div className="relative">
-                      <select
-                        id="state"
-                        value={state.context.state}
-                        onChange={e => handleInputChange('state', e.target.value)}
-                        className={`appearance-none pr-10 ${inputClass('state')}`}
-                      >
-                        <option value="">Select state…</option>
-                        {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                        <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                      </span>
-                    </div>
-                    {state.context.errors?.state && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.state}</p>
-                    )}
-                  </div>
+                  <KioskSelect
+                    id="state"
+                    value={state.context.state}
+                    onChange={v => handleInputChange('state', v)}
+                    label="State / Province / Region"
+                    required
+                    options={US_STATES.map(s => ({ value: s, label: s }))}
+                    placeholder="Select state…"
+                    error={state.context.errors?.state}
+                  />
 
                   <div>
                     <label className={labelClass} htmlFor="zip">
@@ -1085,23 +1113,16 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           placeholder="Name on account"
                         />
                       </div>
-                      <div>
-                        <label className={labelClass} htmlFor="achAccountType">Account type</label>
-                        <div className="relative">
-                          <select
-                            id="achAccountType"
-                            value={state.context.achAccountType}
-                            onChange={e => handleInputChange('achAccountType', e.target.value)}
-                            className={`appearance-none pr-10 ${inputClass('achAccountType')}`}
-                          >
-                            <option value="Checking">Checking</option>
-                            <option value="Savings">Savings</option>
-                          </select>
-                          <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-gray-500">
-                            <ExpandMoreIcon sx={{ fontSize: 24 }} />
-                          </span>
-                        </div>
-                      </div>
+                      <KioskSelect
+                        id="achAccountType"
+                        value={state.context.achAccountType}
+                        onChange={v => handleInputChange('achAccountType', v)}
+                        label="Account type"
+                        options={[
+                          { value: 'Checking', label: 'Checking' },
+                          { value: 'Savings', label: 'Savings' },
+                        ]}
+                      />
                       <div>
                         <label className={labelClass} htmlFor="achRoutingNumber">Routing number</label>
                         <input

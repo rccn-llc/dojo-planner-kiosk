@@ -1,5 +1,7 @@
 'use client';
 
+import type { ChildMembershipSeed } from './flows/MembershipFlow';
+import type { TrialCheckinMember } from './flows/TrialFlow';
 import { useEffect, useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
@@ -13,6 +15,8 @@ type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'st
 export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
   const [orgName, setOrgName] = useState<string | null>(null);
+  const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
+  const [childMembershipSeed, setChildMembershipSeed] = useState<ChildMembershipSeed | null>(null);
 
   useEffect(() => {
     fetch('/api/organization')
@@ -27,10 +31,18 @@ export function KioskHome() {
 
   const handleFlowComplete = () => {
     setCurrentFlow('home');
+    setCheckinPreseededMembers([]);
+    setChildMembershipSeed(null);
   };
 
   const handleFlowChange = (newFlow: FlowType) => {
     setCurrentFlow(newFlow);
+    if (newFlow !== 'checkin') {
+      setCheckinPreseededMembers([]);
+    }
+    if (newFlow !== 'membership') {
+      setChildMembershipSeed(null);
+    }
   };
 
   if (currentFlow === 'checkin') {
@@ -38,20 +50,45 @@ export function KioskHome() {
       <CheckinFlow
         onComplete={handleFlowComplete}
         onBack={() => handleFlowChange('home')}
+        preseededMembers={checkinPreseededMembers.length > 0 ? checkinPreseededMembers : undefined}
       />
     );
   }
 
   if (currentFlow === 'trial') {
-    return <TrialFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} onCheckIn={() => handleFlowChange('checkin')} />;
+    return (
+      <TrialFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        onCheckIn={(members) => {
+          setCheckinPreseededMembers(members);
+          setCurrentFlow('checkin');
+        }}
+      />
+    );
   }
 
   if (currentFlow === 'membership') {
-    return <MembershipFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} onCheckIn={() => handleFlowChange('checkin')} />;
+    return (
+      <MembershipFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        initialMemberData={childMembershipSeed ?? undefined}
+      />
+    );
   }
 
   if (currentFlow === 'memberArea') {
-    return <MemberAreaFlow onComplete={handleFlowComplete} onBack={() => handleFlowChange('home')} />;
+    return (
+      <MemberAreaFlow
+        onComplete={handleFlowComplete}
+        onBack={() => handleFlowChange('home')}
+        onAssignChildMembership={(seed) => {
+          setChildMembershipSeed(seed);
+          setCurrentFlow('membership');
+        }}
+      />
+    );
   }
 
   if (currentFlow === 'store') {
@@ -82,9 +119,17 @@ export function KioskHome() {
         <div className="grid w-full max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 md:grid-cols-3">
           <KioskActionButton label="Free Trial" onClick={() => handleFlowChange('trial')} />
           <KioskActionButton label="Membership" onClick={() => handleFlowChange('membership')} />
+          <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
           <KioskActionButton label="Check In" onClick={() => handleFlowChange('checkin')} />
           <KioskActionButton label="Members Area" onClick={() => handleFlowChange('memberArea')} />
-          <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
+          <KioskActionButton
+            label="My Account"
+            variant="dark"
+            onClick={() => {
+              const slug = (orgName ?? 'dojo').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+              window.location.href = `/${slug}`;
+            }}
+          />
         </div>
       </main>
 

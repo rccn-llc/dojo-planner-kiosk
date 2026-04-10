@@ -38,7 +38,10 @@ function validateContactInfo(context: TrialContext): Record<string, string> {
     errors.state = 'State is required';
   }
   if (!context.zip?.trim()) {
-    errors.zip = 'Zip code is required';
+    errors.zip = 'ZIP code is required';
+  }
+  if (!context.dateOfBirth?.trim()) {
+    errors.dateOfBirth = 'Date of birth is required';
   }
 
   return errors;
@@ -79,7 +82,10 @@ function validateYouthParent(context: TrialContext): Record<string, string> {
     errors.parentState = 'State is required';
   }
   if (!context.parentZip?.trim()) {
-    errors.parentZip = 'Zip code is required';
+    errors.parentZip = 'ZIP code is required';
+  }
+  if (!context.parentDateOfBirth?.trim()) {
+    errors.parentDateOfBirth = 'Date of birth is required';
   }
 
   return errors;
@@ -169,6 +175,7 @@ const emptyContext: TrialContext = {
   lastName: '',
   email: '',
   phoneNumber: '',
+  dateOfBirth: '',
   address: '',
   addressLine2: '',
   city: '',
@@ -183,6 +190,7 @@ const emptyContext: TrialContext = {
   parentCity: '',
   parentState: '',
   parentZip: '',
+  parentDateOfBirth: '',
   currentChildFirstName: '',
   currentChildLastName: '',
   currentChildDateOfBirth: '',
@@ -193,9 +201,10 @@ const emptyContext: TrialContext = {
   selectedMembershipPlanId: '',
   waiverAgreed: false,
   signature: '',
-  waiverContent: '',
   waiverTemplateId: '',
   waiverTemplateVersion: 0,
+  waiverContent: '',
+  isLoadingWaiver: false,
   memberId: '',
   errors: {},
   isSubmitting: false,
@@ -411,16 +420,13 @@ export const trialMachine = createMachine({
 
     // Step 3 – Waiver & Agreement (adult) / Step 4 (youth)
     collectingWaiver: {
-      entry: assign({ errors: {} as Record<string, string> }),
+      entry: assign(({ context }) => ({
+        errors: {} as Record<string, string>,
+        // Only fetch if we don't already have content (avoid re-fetch on BACK navigation)
+        isLoadingWaiver: !context.waiverContent,
+      })),
 
       on: {
-        WAIVER_LOADED: {
-          actions: assign(({ event }) => ({
-            waiverContent: event.content,
-            waiverTemplateId: event.id,
-            waiverTemplateVersion: event.version,
-          })),
-        },
         UPDATE_FIELD: {
           actions: assign(({ event, context }) => {
             const { field, value } = event;
@@ -436,6 +442,18 @@ export const trialMachine = createMachine({
             delete newErrors.waiverAgreed;
             return { ...context, waiverAgreed: event.agreed, errors: newErrors };
           }),
+        },
+
+        WAIVER_LOADED: {
+          actions: assign(({ event }) => ({
+            isLoadingWaiver: false,
+            waiverTemplateId: event.id,
+            waiverTemplateVersion: event.version,
+            waiverContent: event.content,
+          })),
+        },
+        WAIVER_FAILED: {
+          actions: assign({ isLoadingWaiver: false }),
         },
 
         SUBMIT_WAIVER: 'validatingWaiver',

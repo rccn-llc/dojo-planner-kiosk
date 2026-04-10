@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemImage, catalogItemVariant } from '@/lib/catalogSchema';
 import { getDatabase } from '@/lib/database';
+import { validateDevice } from '@/lib/deviceAuth';
 
 export interface StoreProductVariant {
   id: string;
@@ -19,13 +20,16 @@ export interface StoreProductResponse {
   priceRange?: { min: number; max: number };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const db = getDatabase();
-    const orgId = process.env.ORGANIZATION_ID;
+
+    // Resolve org ID from device cert (production) or env var (development)
+    const device = await validateDevice(request);
+    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
 
     if (!orgId) {
-      return NextResponse.json({ error: 'ORGANIZATION_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
     }
 
     // Fetch kiosk-visible active items for this org, ordered by sortOrder

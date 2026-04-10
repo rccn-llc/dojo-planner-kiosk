@@ -2,16 +2,24 @@
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
-import { StepIndicator } from '../StepIndicator';
+import { KioskSelect } from '../KioskSelect';
+import { SignatureCapture } from '../SignatureCapture';
+import { TouchDatePicker } from '../TouchDatePicker';
+
+export interface TrialCheckinMember {
+  memberId: string;
+  firstName: string;
+  lastName: string;
+}
 
 interface TrialFlowProps {
   onComplete: () => void;
   onBack: () => void;
-  onCheckIn?: (memberId: string) => void;
+  onCheckIn?: (members: TrialCheckinMember[]) => void;
 }
 
 const US_STATES = [
@@ -67,8 +75,49 @@ const US_STATES = [
   'WY',
 ];
 
+function StepIndicator({ current, total }: { current: number; total: number }) {
+  return (
+    <div className="mt-6 flex items-center justify-center gap-3">
+      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
+        <div
+          key={stepKey}
+          className={`h-3 w-8 rounded-full transition-all ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+interface DefaultTrialSelection {
+  programId: string;
+  programName: string;
+  planId: string;
+  planName: string;
+}
+
 export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const [state, send] = useTrialMachine();
+  const [defaultTrial, setDefaultTrial] = useState<DefaultTrialSelection | null>(null);
+  const [createdMembers, setCreatedMembers] = useState<TrialCheckinMember[]>([]);
+
+  // Load the first available trial program + plan once when the flow mounts
+  useEffect(() => {
+    fetch('/api/trial/programs')
+      .then(r => r.json())
+      .then((data: { programs?: Array<{ id: string; name: string; trialPlans: Array<{ id: string; name: string }> }> }) => {
+        const firstProgram = data.programs?.[0];
+        const firstPlan = firstProgram?.trialPlans?.[0];
+        if (firstProgram && firstPlan) {
+          setDefaultTrial({
+            programId: firstProgram.id,
+            programName: firstProgram.name,
+            planId: firstPlan.id,
+            planName: firstPlan.name,
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Track session IDs so effects re-run on each new session but not on re-renders
   const programsLoadedRef = useRef<string>('');
@@ -211,6 +260,93 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       send({ type: 'UPDATE_FIELD', field, value });
     }
   };
+
+  // Submit trial signup when entering creatingTrial state
+  useEffect(() => {
+    if (!state.matches('creatingTrial')) {
+      return;
+    }
+    if (!defaultTrial) {
+      send({ type: 'TRIAL_FAILED', error: 'No trial plan available. Please contact the front desk.' });
+      return;
+    }
+    const ctx = state.context;
+    const isYouth = ctx.ageGroup === 'youth';
+    const body = {
+      ageGroup: ctx.ageGroup,
+      member: {
+        firstName: isYouth ? ctx.parentFirstName : ctx.firstName,
+        lastName: isYouth ? ctx.parentLastName : ctx.lastName,
+        email: isYouth ? ctx.parentEmail : ctx.email,
+        phone: isYouth ? ctx.parentPhone : ctx.phoneNumber,
+        address: isYouth ? ctx.parentAddress : ctx.address,
+        addressLine2: isYouth ? ctx.parentAddressLine2 : ctx.addressLine2,
+        city: isYouth ? ctx.parentCity : ctx.city,
+        state: isYouth ? ctx.parentState : ctx.state,
+        zip: isYouth ? ctx.parentZip : ctx.zip,
+        dateOfBirth: (isYouth ? ctx.parentDateOfBirth : ctx.dateOfBirth) || undefined,
+      },
+      children: isYouth
+        ? [...ctx.children, ...(ctx.currentChildFirstName
+            ? [{ firstName: ctx.currentChildFirstName, lastName: ctx.currentChildLastName, dateOfBirth: ctx.currentChildDateOfBirth }]
+            : [])]
+        : undefined,
+      waiver: {
+        templateId: ctx.waiverTemplateId,
+        templateVersion: ctx.waiverTemplateVersion,
+        renderedContent: ctx.waiverContent,
+        signature: ctx.signature,
+      },
+      membershipPlanId: defaultTrial.planId,
+      programName: defaultTrial.programName,
+      planName: defaultTrial.planName,
+    };
+
+    fetch('/api/trial/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+      .then(async (r) => {
+        const data = await r.json() as {
+          memberId?: string;
+          members?: TrialCheckinMember[];
+          error?: string;
+        };
+        if (r.ok && data.memberId) {
+          setCreatedMembers(data.members ?? []);
+          send({ type: 'TRIAL_SUCCESS', memberId: data.memberId });
+        }
+        else {
+          send({ type: 'TRIAL_FAILED', error: data.error ?? 'Trial signup failed' });
+        }
+      })
+      .catch((err) => {
+        send({ type: 'TRIAL_FAILED', error: err instanceof Error ? err.message : 'Trial signup failed' });
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // Fetch the trial waiver template when entering collectingWaiver
+  useEffect(() => {
+    if (!state.matches('collectingWaiver') || !state.context.isLoadingWaiver) {
+      return;
+    }
+    fetch('/api/trial/waiver')
+      .then(r => r.json())
+      .then((data: { id?: string; version?: number; content?: string; error?: string }) => {
+        if (data.id && typeof data.version === 'number' && data.content) {
+          send({ type: 'WAIVER_LOADED', id: data.id, version: data.version, content: data.content });
+        }
+        else {
+          send({ type: 'WAIVER_FAILED' });
+        }
+      })
+      .catch(() => send({ type: 'WAIVER_FAILED' }));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value]);
+
+  // No auto-redirect on success -- user chooses next action
 
   const inputClass = (field: string) =>
     `w-full text-xl p-4 bg-white border-2 rounded-xl text-black placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-gray-400 focus:border-gray-600 ${
@@ -405,32 +541,25 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 {state.context.errors?.parentCity && <p className="mt-1 text-base text-red-600">{state.context.errors.parentCity}</p>}
               </div>
 
-              <div>
-                <label className={labelClass} htmlFor="parentState">
-                  State
-                  <span className="text-red-500">*</span>
-                </label>
-                <select
-                  id="parentState"
-                  value={state.context.parentState || ''}
-                  onChange={e => handleInputChange('parentState', e.target.value)}
-                  className={inputClass('parentState')}
-                >
-                  <option value="">Select state…</option>
-                  {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-                {state.context.errors?.parentState && <p className="mt-1 text-base text-red-600">{state.context.errors.parentState}</p>}
-              </div>
+              <KioskSelect
+                id="parentState"
+                value={state.context.parentState || ''}
+                onChange={v => handleInputChange('parentState', v)}
+                label="State"
+                required
+                options={US_STATES.map(s => ({ value: s, label: s }))}
+                placeholder="Select state…"
+                error={state.context.errors?.parentState}
+              />
 
               <div>
                 <label className={labelClass} htmlFor="parentZip">
-                  Zip Code
+                  ZIP Code
                   <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="parentZip"
                   type="text"
-                  inputMode="numeric"
                   value={state.context.parentZip || ''}
                   onChange={e => handleInputChange('parentZip', e.target.value)}
                   className={inputClass('parentZip')}
@@ -438,6 +567,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 />
                 {state.context.errors?.parentZip && <p className="mt-1 text-base text-red-600">{state.context.errors.parentZip}</p>}
               </div>
+
+              <TouchDatePicker
+                value={state.context.parentDateOfBirth || ''}
+                onChange={v => handleInputChange('parentDateOfBirth', v)}
+                label="Date of Birth"
+                error={state.context.errors?.parentDateOfBirth}
+                placeholder="Select date of birth"
+              />
 
             </div>
             <div className="mt-8 flex items-center justify-between">
@@ -453,7 +590,18 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_PARENT' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.parentFirstName?.trim()
+                  || !state.context.parentLastName?.trim()
+                  || !state.context.parentEmail?.trim()
+                  || !state.context.parentPhone?.trim()
+                  || !state.context.parentAddress?.trim()
+                  || !state.context.parentCity?.trim()
+                  || !state.context.parentState?.trim()
+                  || !state.context.parentZip?.trim()
+                  || !state.context.parentDateOfBirth?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -518,20 +666,13 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 {state.context.errors?.currentChildLastName && <p className="mt-1 text-base text-red-600">{state.context.errors.currentChildLastName}</p>}
               </div>
 
-              <div className="col-span-2">
-                <label className={labelClass} htmlFor="currentChildDateOfBirth">
-                  Date of Birth
-                  <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="currentChildDateOfBirth"
-                  type="date"
-                  value={state.context.currentChildDateOfBirth || ''}
-                  onChange={e => handleInputChange('currentChildDateOfBirth', e.target.value)}
-                  className={inputClass('currentChildDateOfBirth')}
-                />
-                {state.context.errors?.currentChildDateOfBirth && <p className="mt-1 text-base text-red-600">{state.context.errors.currentChildDateOfBirth}</p>}
-              </div>
+              <TouchDatePicker
+                value={state.context.currentChildDateOfBirth || ''}
+                onChange={v => handleInputChange('currentChildDateOfBirth', v)}
+                label="Child's Date of Birth"
+                error={state.context.errors?.currentChildDateOfBirth}
+                placeholder="Select date of birth"
+              />
             </div>
 
             <div className="mt-8 flex items-center justify-between">
@@ -547,7 +688,12 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_CHILD' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.currentChildFirstName?.trim()
+                  || !state.context.currentChildLastName?.trim()
+                  || !state.context.currentChildDateOfBirth?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -726,36 +872,25 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 )}
               </div>
 
-              <div>
-                <label className={labelClass} htmlFor="state">
-                  State
-                  <span className="text-red-500">*</span>
-                </label>
-                <select
-                  id="state"
-                  value={state.context.state || ''}
-                  onChange={e => handleInputChange('state', e.target.value)}
-                  className={inputClass('state')}
-                >
-                  <option value="">Select state…</option>
-                  {US_STATES.map(s => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-                {state.context.errors?.state && (
-                  <p className="mt-1 text-base text-red-600">{state.context.errors.state}</p>
-                )}
-              </div>
+              <KioskSelect
+                id="state"
+                value={state.context.state || ''}
+                onChange={v => handleInputChange('state', v)}
+                label="State"
+                required
+                options={US_STATES.map(s => ({ value: s, label: s }))}
+                placeholder="Select state…"
+                error={state.context.errors?.state}
+              />
 
               <div>
                 <label className={labelClass} htmlFor="zip">
-                  Zip Code
+                  ZIP Code
                   <span className="text-red-500">*</span>
                 </label>
                 <input
                   id="zip"
                   type="text"
-                  inputMode="numeric"
                   value={state.context.zip || ''}
                   onChange={e => handleInputChange('zip', e.target.value)}
                   className={inputClass('zip')}
@@ -765,6 +900,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                   <p className="mt-1 text-base text-red-600">{state.context.errors.zip}</p>
                 )}
               </div>
+
+              <TouchDatePicker
+                value={state.context.dateOfBirth || ''}
+                onChange={v => handleInputChange('dateOfBirth', v)}
+                label="Date of Birth"
+                error={state.context.errors?.dateOfBirth}
+                placeholder="Select date of birth"
+              />
 
             </div>
 
@@ -781,7 +924,18 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
-                disabled={state.context.isSubmitting}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.firstName?.trim()
+                  || !state.context.lastName?.trim()
+                  || !state.context.email?.trim()
+                  || !state.context.phoneNumber?.trim()
+                  || !state.context.dateOfBirth?.trim()
+                  || !state.context.address?.trim()
+                  || !state.context.city?.trim()
+                  || !state.context.state?.trim()
+                  || !state.context.zip?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -797,15 +951,18 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             <p className="mb-6 text-center text-xl text-gray-500">Please read and sign the forms below</p>
 
             <div className="mb-6 max-h-72 overflow-y-auto rounded-2xl border-2 border-gray-300 bg-gray-50 p-8 text-base leading-relaxed text-gray-800">
-              {state.context.waiverContent
-                ? (
-                    <div className="whitespace-pre-wrap">{state.context.waiverContent}</div>
-                  )
-                : (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="h-8 w-8 animate-spin rounded-full border-4 border-black border-t-transparent" />
-                    </div>
-                  )}
+              {state.context.isLoadingWaiver
+                ? <p className="text-gray-400">Loading waiver...</p>
+                : state.context.waiverContent
+                  ? state.context.waiverContent.split('\n').map((line, i) => {
+                      const lineKey = `w-${line.slice(0, 40).replace(/\s/g, '-')}-${i}`;
+                      return (
+                        <p key={lineKey} className={line.trim() ? 'mb-3' : 'mb-1'}>
+                          {line}
+                        </p>
+                      );
+                    })
+                  : <p className="text-gray-400">No waiver content available</p>}
             </div>
 
             <div
@@ -841,21 +998,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             )}
 
             <div className="mt-4 mb-2">
-              <label className="mb-2 block text-lg font-medium text-black" htmlFor="signature">
-                Signature
-                {' '}
-                <span className="text-red-500">*</span>
-                <span className="ml-2 text-base font-normal text-gray-500">(Type your full name)</span>
-              </label>
-              <input
-                id="signature"
-                type="text"
-                value={state.context.signature || ''}
-                onChange={e => handleInputChange('signature', e.target.value)}
-                className={`w-full rounded-xl border-2 p-4 font-serif text-2xl text-black italic placeholder:text-gray-400 focus:border-gray-600 focus:ring-4 focus:ring-gray-400 focus:outline-none ${
-                  state.context.errors?.signature ? 'border-red-400' : 'border-gray-300'
-                }`}
-                placeholder="Your full name"
+              <SignatureCapture
+                label={state.context.ageGroup === 'youth' ? 'Parent/Guardian Signature' : 'Signature'}
+                onSignatureChange={(dataUrl) => {
+                  handleInputChange('signature', dataUrl ?? '');
+                }}
               />
               {state.context.errors?.signature && (
                 <p className="mt-1 text-base text-red-600">{state.context.errors.signature}</p>
@@ -875,7 +1022,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_WAIVER' })}
-                disabled={state.context.isSubmitting || !state.context.waiverTemplateId}
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.waiverAgreed
+                  || !state.context.signature?.trim()
+                }
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
               >
                 Continue Signup →
@@ -923,7 +1074,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => onCheckIn?.(state.context.memberId)}
+                  onClick={() => onCheckIn?.(createdMembers)}
                   className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-5 text-xl font-bold text-white transition-colors hover:bg-gray-800"
                 >
                   Check In Now

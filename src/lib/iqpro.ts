@@ -177,6 +177,81 @@ export async function iqproGet<T = Record<string, unknown>>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Make an authenticated PUT request to the IQPro gateway API.
+ */
+export async function iqproPut<T = Record<string, unknown>>(
+  path: string,
+  body: unknown,
+): Promise<T> {
+  const token = await getOAuthToken();
+  const baseUrl = process.env.IQPRO_BASE_URL!;
+
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    throw new Error(`IQPro API PUT ${path} failed: ${res.status} ${errorBody}`);
+  }
+
+  return res.json() as Promise<T>;
+}
+
+// ── Gateway processors ───────────────────────────────────────────────────────
+
+interface GatewayProcessors {
+  cardProcessorId: string | null;
+  achProcessorId: string | null;
+}
+
+let cachedProcessors: GatewayProcessors | null = null;
+
+export async function getGatewayProcessors(): Promise<GatewayProcessors> {
+  if (cachedProcessors) {
+    return cachedProcessors;
+  }
+  if (!isIQProConfigured()) {
+    return { cardProcessorId: null, achProcessorId: null };
+  }
+
+  const token = await getOAuthToken();
+  const baseUrl = process.env.IQPRO_BASE_URL!;
+  const gatewayId = process.env.IQPRO_GATEWAY_ID!;
+
+  const res = await fetch(`${baseUrl}/api/gateway/${gatewayId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Gateway config request failed: ${res.status}`);
+  }
+
+  const json = await res.json() as Record<string, unknown>;
+  const data = json?.data as Record<string, unknown> | undefined;
+  const processors = (data?.processors ?? []) as Array<{
+    processorId: string;
+    isDefaultCard: boolean;
+    isDefaultAch: boolean;
+  }>;
+
+  const defaultCard = processors.find(p => p.isDefaultCard);
+  const defaultAch = processors.find(p => p.isDefaultAch);
+
+  cachedProcessors = {
+    cardProcessorId: defaultCard?.processorId ?? null,
+    achProcessorId: defaultAch?.processorId ?? null,
+  };
+
+  return cachedProcessors;
+}
+
 // ── ACH tokenization ──────────────────────────────────────────────────────────
 
 export async function tokenizeAch(params: TokenizeAchParams): Promise<TokenizeAchResult> {

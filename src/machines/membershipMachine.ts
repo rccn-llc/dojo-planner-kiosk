@@ -1,63 +1,7 @@
-import type { MembershipPlan, Program } from '../lib/types';
 import type { MembershipContext, MembershipEvent } from './types';
 import { assign, createMachine } from 'xstate';
 import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
-
-// ── Hardcoded data ────────────────────────────────────────────────────────────
-
-const PROGRAMS: Program[] = [
-  {
-    id: 'adult-bjj',
-    name: 'Adult Brazilian Jiu Jitsu',
-    description: 'Fundamentals through advanced techniques for all levels',
-    price: 0,
-    isActive: true,
-  },
-  {
-    id: 'kids',
-    name: 'Kids Program',
-    description: 'Ages 4–12, discipline and character development through martial arts',
-    price: 0,
-    isActive: true,
-  },
-  {
-    id: 'competition',
-    name: 'Competition Team',
-    description: 'Advanced training for tournament competitors',
-    price: 0,
-    isActive: true,
-  },
-  {
-    id: 'judo',
-    name: 'Judo Fundamentals',
-    description: 'Traditional Judo throws, sweeps, and groundwork',
-    price: 0,
-    isActive: true,
-  },
-];
-
-const PLANS_BY_PROGRAM: Record<string, MembershipPlan[]> = {
-  'adult-bjj': [
-    { id: 'abjj-1mo', name: '1 Month Enrollment', description: 'Month-to-month flexibility\n• Unlimited classes\n• Open mat access\n• No contract', price: 150, interval: 'monthly', isActive: true },
-    { id: 'abjj-mth', name: 'Month-to-Month', description: 'Ongoing monthly membership\n• Unlimited classes\n• Open mat access\n• Cancel anytime', price: 170, interval: 'monthly', isActive: true },
-    { id: 'abjj-6mo', name: '6 Month Enrollment', description: '6-month commitment, save 10%\n• Unlimited classes\n• Open mat access\n• Priority enrollment', price: 810, interval: 'yearly', isActive: true },
-    { id: 'abjj-annual-fam', name: 'Annual Family', description: '12-month family plan\n• Up to 4 members\n• Unlimited classes\n• Best value', price: 1530, interval: 'yearly', isActive: true },
-  ],
-  'kids': [
-    { id: 'kids-1mo', name: '1 Month Enrollment', description: 'Month-to-month\n• 2 classes/week\n• Character development\n• No contract', price: 110, interval: 'monthly', isActive: true },
-    { id: 'kids-6mo', name: '6 Month Enrollment', description: '6-month commitment\n• 2 classes/week\n• Progress tracking\n• Belt testing included', price: 600, interval: 'yearly', isActive: true },
-    { id: 'kids-annual', name: '12 Month Enrollment', description: 'Best value\n• 2 classes/week\n• Belt testing included\n• Gi included', price: 1080, interval: 'yearly', isActive: true },
-  ],
-  'competition': [
-    { id: 'comp-1mo', name: '1 Month Enrollment', description: 'Monthly access\n• Competition training\n• Live drills\n• Film review', price: 200, interval: 'monthly', isActive: true },
-    { id: 'comp-annual', name: '12 Month Enrollment', description: '12-month commitment\n• Full competition training\n• Tournament coaching\n• Best value', price: 2000, interval: 'yearly', isActive: true },
-  ],
-  'judo': [
-    { id: 'judo-1mo', name: '1 Month Enrollment', description: 'Month-to-month\n• Unlimited classes\n• Traditional Judo\n• No contract', price: 120, interval: 'monthly', isActive: true },
-    { id: 'judo-annual', name: '12 Month Enrollment', description: '12-month commitment\n• Unlimited classes\n• Belt testing included\n• Best value', price: 1200, interval: 'yearly', isActive: true },
-  ],
-};
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -81,6 +25,18 @@ function validateContactInfo(context: MembershipContext): Record<string, string>
   else if (!isValidPhoneNumber(context.phoneNumber)) {
     errors.phoneNumber = 'Please enter a valid 10-digit phone number';
   }
+  if (!context.dateOfBirth?.trim()) {
+    errors.dateOfBirth = 'Date of birth is required';
+  }
+  else {
+    const dob = new Date(context.dateOfBirth);
+    if (Number.isNaN(dob.getTime())) {
+      errors.dateOfBirth = 'Please enter a valid date';
+    }
+    else if (dob > new Date()) {
+      errors.dateOfBirth = 'Date of birth cannot be in the future';
+    }
+  }
   if (!context.address?.trim()) {
     errors.address = 'Address is required';
   }
@@ -99,22 +55,45 @@ function validateContactInfo(context: MembershipContext): Record<string, string>
 // ── Empty context ─────────────────────────────────────────────────────────────
 
 const emptyContext: MembershipContext = {
+  isLoadingPrograms: true,
   selectedProgram: null,
-  programs: PROGRAMS,
+  programs: [],
+  plansByProgram: {},
   selectedPlan: null,
   availablePlans: [],
   firstName: '',
   lastName: '',
   email: '',
   phoneNumber: '',
+  dateOfBirth: '',
+  guardianFirstName: '',
+  guardianLastName: '',
+  guardianEmail: '',
+  guardianRelationship: 'parent',
   address: '',
   addressLine2: '',
   city: '',
   state: '',
   zip: '',
   hasAgreedToCommitment: false,
+  waiverSignature: '',
+  waiverContent: '',
+  waiverTemplateName: '',
+  isLoadingWaiver: false,
   memberLookupPhone: '',
   memberLookupResult: null,
+  convertingTrialMembershipId: null,
+  existingMemberId: null,
+  paymentMethod: 'card' as const,
+  cardholderName: '',
+  cardToken: '',
+  cardFirstSix: '',
+  cardLastFour: '',
+  cardExpiry: '',
+  achAccountHolder: '',
+  achRoutingNumber: '',
+  achAccountNumber: '',
+  achAccountType: 'Checking' as const,
   errors: {} as Record<string, string>,
   isSubmitting: false,
   sessionId: '',
@@ -168,14 +147,27 @@ export const membershipMachine = createMachine({
   states: {
     // ── Step 1: Program selection ─────────────────────────────────────────────
     selectingProgram: {
-      entry: assign({ ...emptyContext, sessionId: () => generateSessionId() }),
+      entry: assign({
+        ...emptyContext,
+        sessionId: () => generateSessionId(),
+      }),
 
       on: {
+        PROGRAMS_LOADED: {
+          actions: assign(({ event }) => ({
+            isLoadingPrograms: false,
+            programs: event.programs,
+            plansByProgram: event.plansByProgram,
+          })),
+        },
+        PROGRAMS_FAILED: {
+          actions: assign({ isLoadingPrograms: false }),
+        },
         SELECT_PROGRAM: {
           target: 'selectingPlan',
-          actions: assign(({ event }) => ({
+          actions: assign(({ event, context }) => ({
             selectedProgram: event.program,
-            availablePlans: PLANS_BY_PROGRAM[event.program.id] ?? [],
+            availablePlans: context.plansByProgram[event.program.id] ?? [],
             selectedPlan: null,
           })),
         },
@@ -191,7 +183,7 @@ export const membershipMachine = createMachine({
           actions: assign({ selectedPlan: ({ event }) => event.plan }),
         },
         SUBMIT_PAYMENT: {
-          target: 'reviewingCommitment',
+          target: 'collectingInfo',
           guard: 'isPlanSelected',
         },
         BACK: 'selectingProgram',
@@ -200,28 +192,7 @@ export const membershipMachine = createMachine({
       },
     },
 
-    // ── Step 3: Commitment / waiver ───────────────────────────────────────────
-    reviewingCommitment: {
-      entry: assign({ hasAgreedToCommitment: false }),
-
-      on: {
-        UPDATE_FIELD: {
-          actions: assign(({ event, context }) => ({
-            ...context,
-            [event.field]: event.value,
-          })),
-        },
-        SUBMIT_COMMITMENT: {
-          target: 'collectingInfo',
-          guard: 'hasAgreedToCommitment',
-        },
-        BACK: 'selectingPlan',
-        TIMEOUT: 'timeout',
-        RESET: 'selectingProgram',
-      },
-    },
-
-    // ── Step 4: Member info form ──────────────────────────────────────────────
+    // ── Step 3: Member info form ──────────────────────────────────────────────
     collectingInfo: {
       entry: assign({ isSubmitting: false, errors: {} as Record<string, string> }),
 
@@ -235,8 +206,27 @@ export const membershipMachine = createMachine({
           }),
         },
         LOOKUP_MEMBER: 'lookingUpMember',
+        // Also accept MEMBER_FOUND here — when multiple results are shown
+        // in an overlay picker, the machine is already back in collectingInfo
+        MEMBER_FOUND: {
+          actions: assign(({ event, context }) => ({
+            firstName: event.member.firstName,
+            lastName: event.member.lastName,
+            email: event.member.email,
+            phoneNumber: event.member.phoneNumber,
+            dateOfBirth: event.member.dateOfBirth ?? context.dateOfBirth,
+            address: event.member.address ?? context.address,
+            city: event.member.city ?? context.city,
+            state: event.member.state ?? context.state,
+            zip: event.member.zip ?? context.zip,
+            memberLookupResult: event.member,
+            existingMemberId: event.member.id,
+            convertingTrialMembershipId: event.member.trialMembershipId ?? null,
+            waiverSignature: event.member.existingSignature ?? context.waiverSignature,
+          })),
+        },
         SUBMIT_CONTACT: 'validatingContact',
-        BACK: 'reviewingCommitment',
+        BACK: 'selectingPlan',
         TIMEOUT: 'timeout',
         RESET: 'selectingProgram',
       },
@@ -244,9 +234,27 @@ export const membershipMachine = createMachine({
 
     lookingUpMember: {
       entry: assign({ isSubmitting: true }),
-      after: {
-        // Mock: always returns no match after 1 second
-        1000: {
+      on: {
+        MEMBER_FOUND: {
+          target: 'collectingInfo',
+          actions: assign(({ event, context }) => ({
+            isSubmitting: false,
+            firstName: event.member.firstName,
+            lastName: event.member.lastName,
+            email: event.member.email,
+            phoneNumber: event.member.phoneNumber,
+            dateOfBirth: event.member.dateOfBirth ?? context.dateOfBirth,
+            address: event.member.address ?? context.address,
+            city: event.member.city ?? context.city,
+            state: event.member.state ?? context.state,
+            zip: event.member.zip ?? context.zip,
+            memberLookupResult: event.member,
+            existingMemberId: event.member.id,
+            convertingTrialMembershipId: event.member.trialMembershipId ?? null,
+            waiverSignature: event.member.existingSignature ?? context.waiverSignature,
+          })),
+        },
+        MEMBER_NOT_FOUND: {
           target: 'collectingInfo',
           actions: assign({ isSubmitting: false }),
         },
@@ -257,7 +265,7 @@ export const membershipMachine = createMachine({
       entry: assign({ isSubmitting: true }),
 
       always: [
-        { target: 'processingPayment', guard: 'isContactInfoValid' },
+        { target: 'reviewingCommitment', guard: 'isContactInfoValid' },
         {
           target: 'collectingInfo',
           actions: assign(({ context }) => ({
@@ -268,42 +276,87 @@ export const membershipMachine = createMachine({
       ],
     },
 
+    // ── Step 4: Commitment / waiver ───────────────────────────────────────────
+    reviewingCommitment: {
+      entry: assign({ hasAgreedToCommitment: false, isLoadingWaiver: true }),
+
+      on: {
+        WAIVER_LOADED: {
+          actions: assign(({ event }) => ({
+            isLoadingWaiver: false,
+            waiverContent: event.content,
+            waiverTemplateName: event.templateName,
+          })),
+        },
+        WAIVER_FAILED: {
+          actions: assign({ isLoadingWaiver: false }),
+        },
+        UPDATE_FIELD: {
+          actions: assign(({ event, context }) => ({
+            ...context,
+            [event.field]: event.value,
+          })),
+        },
+        SUBMIT_COMMITMENT: {
+          target: 'collectingPayment',
+          guard: 'hasAgreedToCommitment',
+        },
+        BACK: 'collectingInfo',
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
+      },
+    },
+
+    collectingPayment: {
+      entry: assign({ isSubmitting: false, errors: {} as Record<string, string> }),
+
+      on: {
+        UPDATE_FIELD: {
+          actions: assign(({ event, context }) => {
+            const { field, value } = event;
+            const newErrors = { ...context.errors };
+            delete newErrors[field as string];
+            return { ...context, [field]: value, errors: newErrors };
+          }),
+        },
+        SUBMIT_PAYMENT: 'processingPayment',
+        BACK: 'collectingInfo',
+        TIMEOUT: 'timeout',
+        RESET: 'selectingProgram',
+      },
+    },
+
     // ── Processing ────────────────────────────────────────────────────────────
     processingPayment: {
-      after: {
-        3000: 'creatingMembership',
-      },
+      entry: assign({ isSubmitting: true }),
       on: {
+        PAYMENT_SUCCESS: {
+          target: 'success',
+          actions: assign({ isSubmitting: false }),
+        },
         PAYMENT_FAILED: {
           target: 'paymentFailed',
-          actions: assign({ errors: { general: 'Payment failed. Please try again.' } as Record<string, string> }),
+          actions: assign(({ event }) => ({
+            isSubmitting: false,
+            errors: { general: event.error ?? 'Payment failed. Please try again.' } as Record<string, string>,
+          })),
         },
         TIMEOUT: 'timeout',
       },
     },
 
-    creatingMembership: {
-      entry: assign({ isSubmitting: true }),
-      after: {
-        2000: {
-          target: 'success',
-          actions: assign({ isSubmitting: false }),
-        },
-      },
-      on: { TIMEOUT: 'timeout' },
-    },
-
     // ── Terminal states ───────────────────────────────────────────────────────
     paymentFailed: {
       on: {
-        TRY_AGAIN: 'selectingPlan',
+        TRY_AGAIN: 'collectingPayment',
         RESET: 'selectingProgram',
       },
     },
 
     success: {
       entry: ['auditMembershipCreation'],
-      after: { 15000: 'selectingProgram' },
+      // 65s safety net — component drives the 60s countdown and calls onComplete
+      after: { 65000: 'selectingProgram' },
       on: { RESET: 'selectingProgram' },
     },
 

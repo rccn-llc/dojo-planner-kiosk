@@ -1,6 +1,5 @@
 import { useMachine } from '@xstate/react';
 import { checkinMachine } from '../machines/checkinMachine';
-import { memberAreaMachine } from '../machines/memberAreaMachine';
 import { membershipMachine } from '../machines/membershipMachine';
 import { storeMachine } from '../machines/storeMachine';
 import { trialMachine } from '../machines/trialMachine';
@@ -18,11 +17,6 @@ export function useTrialMachine() {
 // Hook for membership signup machine
 export function useMembershipMachine() {
   return useMachine(membershipMachine);
-}
-
-// Hook for member area machine
-export function useMemberAreaMachine() {
-  return useMachine(memberAreaMachine);
 }
 
 // Hook for store / checkout machine

@@ -2,15 +2,30 @@
 import type { Member, MembershipPlan, Program } from '../lib/types';
 
 // Member check-in machine context
+export interface CheckinMember {
+  memberId: string;
+  firstName: string;
+  lastName: string;
+  status: string;
+}
+
+export interface CheckinClass {
+  scheduleId: string;
+  classId: string;
+  className: string;
+  startTime: string;
+  endTime: string;
+  room: string | null;
+}
+
 export interface CheckinContext {
   phoneNumber: string;
-  member: Member | null;
+  members: CheckinMember[];
+  selectedMember: CheckinMember | null;
+  classes: CheckinClass[];
+  selectedClass: CheckinClass | null;
   sessionId: string;
   errors: Record<string, string>;
-  upgradeFirstName?: string;
-  upgradeLastName?: string;
-  upgradeEmail?: string;
-  upgradePhoneNumber?: string;
 }
 
 // Trial signup machine context
@@ -23,6 +38,7 @@ export interface TrialContext {
   lastName: string;
   email: string;
   phoneNumber: string;
+  dateOfBirth: string;
 
   // Adult address
   address: string;
@@ -41,6 +57,7 @@ export interface TrialContext {
   parentCity: string;
   parentState: string;
   parentZip: string;
+  parentDateOfBirth: string;
 
   // Youth - current child being entered
   currentChildFirstName: string;
@@ -61,9 +78,10 @@ export interface TrialContext {
   // Waiver
   waiverAgreed: boolean;
   signature: string;
-  waiverContent: string;
   waiverTemplateId: string;
   waiverTemplateVersion: number;
+  waiverContent: string;
+  isLoadingWaiver: boolean;
 
   // Result
   memberId: string;
@@ -77,8 +95,10 @@ export interface TrialContext {
 // Membership signup machine context
 export interface MembershipContext {
   // Program + plan selection
+  isLoadingPrograms: boolean;
   selectedProgram: Program | null;
   programs: Program[];
+  plansByProgram: Record<string, MembershipPlan[]>;
   selectedPlan: MembershipPlan | null;
   availablePlans: MembershipPlan[];
 
@@ -87,6 +107,13 @@ export interface MembershipContext {
   lastName: string;
   email: string;
   phoneNumber: string;
+  dateOfBirth: string; // YYYY-MM-DD
+
+  // Guardian (required if member is under 18)
+  guardianFirstName: string;
+  guardianLastName: string;
+  guardianEmail: string;
+  guardianRelationship: string; // 'parent' | 'guardian' | 'legal_guardian'
 
   // Address
   address: string;
@@ -95,12 +122,32 @@ export interface MembershipContext {
   state: string;
   zip: string;
 
-  // Commitment screen
+  // Commitment / waiver screen
   hasAgreedToCommitment: boolean;
+  waiverSignature: string;
+  waiverContent: string;
+  waiverTemplateName: string;
+  isLoadingWaiver: boolean;
 
   // Member lookup
   memberLookupPhone: string;
   memberLookupResult: Member | null;
+  // If converting a trial membership, this holds the trial member_membership ID to cancel on success
+  convertingTrialMembershipId: string | null;
+  // The existing member's ID (if the lookup matched) — used to skip member creation
+  existingMemberId: string | null;
+
+  // Payment
+  paymentMethod: 'card' | 'ach';
+  cardholderName: string;
+  cardToken: string;
+  cardFirstSix: string;
+  cardLastFour: string;
+  cardExpiry: string;
+  achAccountHolder: string;
+  achRoutingNumber: string;
+  achAccountNumber: string;
+  achAccountType: 'Checking' | 'Savings';
 
   // Form validation and state
   errors: Record<string, string>;
@@ -111,17 +158,17 @@ export interface MembershipContext {
 // Event types
 export type CheckinEvent
   = | { type: 'ENTER_PHONE'; phoneNumber: string }
+    | { type: 'MEMBERS_FOUND'; members: CheckinMember[] }
+    | { type: 'NO_ACTIVE_MEMBERSHIP'; message: string }
+    | { type: 'MEMBER_NOT_FOUND' }
+    | { type: 'SELECT_MEMBER'; member: CheckinMember }
+    | { type: 'CLASSES_LOADED'; classes: CheckinClass[] }
+    | { type: 'SELECT_CLASS'; classItem: CheckinClass }
+    | { type: 'CHECKIN_SUCCESS' }
+    | { type: 'CHECKIN_FAILED'; error?: string }
     | { type: 'TRY_AGAIN' }
-    | { type: 'RESET' } | { type: 'GO_TO_TRIAL' } | { type: 'INVALID_PHONE' }
-    | { type: 'CONFIRM_CHECKIN' }
-    | { type: 'CONTINUE_TO_UPGRADE' }
-    | { type: 'SELECT_PROGRAM'; program: Program }
-    | { type: 'SELECT_PLAN'; plan: MembershipPlan }
-    | { type: 'CONTINUE' }
-    | { type: 'UPDATE_INFO'; firstName?: string; lastName?: string; email?: string; phoneNumber?: string }
-    | { type: 'SUBMIT_UPGRADE' }
-    | { type: 'SKIP_UPGRADE' }
-    | { type: 'BACK' };
+    | { type: 'BACK' }
+    | { type: 'RESET' };
 export type TrialEvent
   = | { type: 'SELECT_AGE_GROUP'; ageGroup: 'adult' | 'youth' }
     | { type: 'UPDATE_FIELD'; field: string; value: string }
@@ -135,6 +182,7 @@ export type TrialEvent
     | { type: 'AGREE_WAIVER'; agreed: boolean }
     | { type: 'PROGRAMS_LOADED'; selectedMembershipPlanId: string }
     | { type: 'WAIVER_LOADED'; id: string; version: number; content: string }
+    | { type: 'WAIVER_FAILED' }
     | { type: 'TRIAL_SUCCESS'; memberId: string }
     | { type: 'TRIAL_FAILED'; error: string }
     | { type: 'TRY_AGAIN' }
@@ -146,38 +194,32 @@ export type MembershipEvent
   = | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
     | { type: 'SELECT_PROGRAM'; program: Program }
     | { type: 'SELECT_PLAN'; plan: MembershipPlan }
+    | { type: 'PROGRAMS_LOADED'; programs: Program[]; plansByProgram: Record<string, MembershipPlan[]> }
+    | { type: 'PROGRAMS_FAILED' }
+    | { type: 'WAIVER_LOADED'; content: string; templateName: string }
+    | { type: 'WAIVER_FAILED' }
     | { type: 'SUBMIT_CONTACT' }
     | { type: 'SUBMIT_PAYMENT' }
     | { type: 'SUBMIT_COMMITMENT' }
     | { type: 'LOOKUP_MEMBER' }
+    | {
+      type: 'MEMBER_FOUND';
+      member: Member & {
+        dateOfBirth?: string;
+        address?: string;
+        city?: string;
+        state?: string;
+        zip?: string;
+        trialMembershipId?: string | null;
+        existingSignature?: string;
+      };
+    }
+    | { type: 'MEMBER_NOT_FOUND' }
+    | { type: 'PAYMENT_SUCCESS' }
     | { type: 'PAYMENT_FAILED'; error?: string }
     | { type: 'TRY_AGAIN' }
     | { type: 'BACK' }
     | { type: 'TIMEOUT' }
-    | { type: 'RESET' };
-
-// Member Area types
-export interface MemberAreaContext {
-  selectedProgram: Program | null;
-  selectedPlan: MembershipPlan | null;
-  firstName: string;
-  lastName: string;
-  email: string;
-  phoneNumber: string;
-  password: string;
-  sessionId: string;
-  errors: Record<string, string>;
-  isSubmitting: boolean;
-}
-
-export type MemberAreaEvent
-  = | { type: 'SELECT_PROGRAM'; program: Program }
-    | { type: 'SELECT_PLAN'; plan: MembershipPlan }
-    | { type: 'CONTINUE' }
-    | { type: 'UPDATE_INFO'; firstName?: string; lastName?: string; email?: string; phoneNumber?: string; password?: string }
-    | { type: 'SUBMIT' }
-    | { type: 'INVALID_INFO' }
-    | { type: 'BACK' }
     | { type: 'RESET' };
 
 // ── Store types ───────────────────────────────────────────────────────────────
@@ -253,9 +295,13 @@ export type StoreEvent
     | { type: 'VIEW_CART' }
     | { type: 'REMOVE_ITEM'; productId: string; variantId?: string }
     | { type: 'APPLY_DISCOUNT' }
+    | { type: 'DISCOUNT_APPLIED'; discountAmount: number }
+    | { type: 'DISCOUNT_FAILED'; error: string }
     | { type: 'PROCEED_TO_CHECKOUT' }
     | { type: 'BACK_TO_CART' }
     | { type: 'LOOKUP_MEMBER' }
+    | { type: 'MEMBER_FOUND'; firstName: string; lastName: string; email: string; phone: string }
+    | { type: 'MEMBER_NOT_FOUND' }
     | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
     | { type: 'PLACE_ORDER' }
     | { type: 'PAYMENT_SUCCESS' }
