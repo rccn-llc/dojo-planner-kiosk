@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "run-p db-server dev:next",
     "dev:next": "next dev",
-    "db-server": "pglite-server --db=../dojo-planner/local.db",
+    "db-server": "bash scripts/db-server.sh ../dojo-planner/local.db",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
