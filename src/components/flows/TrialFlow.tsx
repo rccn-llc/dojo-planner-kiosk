@@ -266,10 +266,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
     if (!state.matches('creatingTrial')) {
       return;
     }
+    if (processingRef.current) {
+      return;
+    }
     if (!defaultTrial) {
       send({ type: 'TRIAL_FAILED', error: 'No trial plan available. Please contact the front desk.' });
       return;
     }
+    processingRef.current = true;
     const ctx = state.context;
     const isYouth = ctx.ageGroup === 'youth';
     const body = {
