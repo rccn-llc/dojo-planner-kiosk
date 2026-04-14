@@ -130,6 +130,14 @@ export async function getTokenizationConfig(clientOrigin: string): Promise<Token
 
 // ── Direct API helpers (no SDK needed) ────────────────────────────────────────
 
+const isDev = process.env.NODE_ENV === 'development';
+
+function devLog(...args: unknown[]) {
+  if (isDev) {
+    console.warn(...args);
+  }
+}
+
 /**
  * Make an authenticated POST request to the IQPro gateway API.
  */
@@ -139,6 +147,9 @@ export async function iqproPost<T = Record<string, unknown>>(
 ): Promise<T> {
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
+
+  devLog('[IQPro] POST', path);
+  devLog('[IQPro] POST request body:', JSON.stringify(body, null, 2));
 
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
@@ -151,10 +162,14 @@ export async function iqproPost<T = Record<string, unknown>>(
 
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
+    console.error(`[IQPro] POST ${path} FAILED (${res.status}):`, errorBody);
     throw new Error(`IQPro API ${path} failed: ${res.status} ${errorBody}`);
   }
 
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  const json = text ? JSON.parse(text) as T : {} as T;
+  devLog(`[IQPro] POST ${path} response (${res.status}):`, text || '(empty body)');
+  return json;
 }
 
 /**
@@ -166,15 +181,22 @@ export async function iqproGet<T = Record<string, unknown>>(
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
 
+  devLog('[IQPro] GET', path);
+
   const res = await fetch(`${baseUrl}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {
+    const errorBody = await res.text().catch(() => '');
+    console.error(`[IQPro] GET ${path} FAILED (${res.status}):`, errorBody);
     throw new Error(`IQPro API GET ${path} failed: ${res.status}`);
   }
 
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  const json = text ? JSON.parse(text) as T : {} as T;
+  devLog(`[IQPro] GET ${path} response (${res.status}):`, text || '(empty body)');
+  return json;
 }
 
 /**
@@ -187,6 +209,9 @@ export async function iqproPut<T = Record<string, unknown>>(
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
 
+  devLog('[IQPro] PUT', path);
+  devLog('[IQPro] PUT request body:', JSON.stringify(body, null, 2));
+
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'PUT',
     headers: {
@@ -198,10 +223,14 @@ export async function iqproPut<T = Record<string, unknown>>(
 
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
+    console.error(`[IQPro] PUT ${path} FAILED (${res.status}):`, errorBody);
     throw new Error(`IQPro API PUT ${path} failed: ${res.status} ${errorBody}`);
   }
 
-  return res.json() as Promise<T>;
+  const text = await res.text();
+  const json = text ? JSON.parse(text) as T : {} as T;
+  devLog(`[IQPro] PUT ${path} response (${res.status}):`, text || '(empty body)');
+  return json;
 }
 
 // ── Gateway processors ───────────────────────────────────────────────────────

@@ -1,15 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { iqproGet, iqproPut, isIQProConfigured } from '@/lib/iqpro';
-import { member, memberMembership } from '@/lib/memberSchema';
-
-// IQPro subscription status IDs
-const IQPRO_STATUS_ACTIVE = 1;
-const IQPRO_STATUS_CANCELLED = 3;
-// Note: IQPRO_STATUS_SUSPENDED (2) exists but IQPro won't accept it for
-// Draft/Scheduled subscriptions. Hold is implemented via isAutoCharged=false.
+import { sendCancellationConfirmation } from '@/lib/email';
+import { iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
+import { member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 export async function PATCH(
   request: Request,
@@ -35,14 +31,15 @@ export async function PATCH(
     const db = getDatabase();
     const now = new Date();
 
-    // Verify the member belongs to this org
+    // Fetch the member (verify org + get details for email/IQPro)
     const members = await db
-      .select({ id: member.id })
+      .select()
       .from(member)
       .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)))
       .limit(1);
 
-    if (!members[0]) {
+    const m = members[0];
+    if (!m) {
       return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
@@ -63,57 +60,149 @@ export async function PATCH(
       return NextResponse.json({ error: 'Membership not found' }, { status: 404 });
     }
 
+    // Fetch the plan to check for cancellation fee
+    let plan: { name: string; cancellationFee: number } | undefined;
+    try {
+      const plans = await db
+        .select({
+          name: membershipPlan.name,
+          cancellationFee: membershipPlan.cancellationFee,
+        })
+        .from(membershipPlan)
+        .where(eq(membershipPlan.id, membership.membershipPlanId))
+        .limit(1);
+      plan = plans[0];
+    }
+    catch {
+      const plans = await db
+        .select({ name: membershipPlan.name })
+        .from(membershipPlan)
+        .where(eq(membershipPlan.id, membership.membershipPlanId))
+        .limit(1);
+      plan = plans[0] ? { name: plans[0].name, cancellationFee: 0 } : undefined;
+    }
+
     const gatewayId = process.env.IQPRO_GATEWAY_ID;
 
-    // Update IQPro subscription if one exists
+    // ── IQPro operations ─────────────────────────────────────────────────────
+    let cancellationFeeCharged = 0;
+    let cancellationTxId: string | undefined;
+
     if (membership.iqproSubscriptionId && isIQProConfigured() && gatewayId) {
-      try {
-        // Fetch full existing subscription so we can echo back all required
-        // fields — IQPro's PUT replaces the entire resource and returns 400/500
-        // if required fields are missing.
-        const subPath = `/api/gateway/${gatewayId}/subscription/${membership.iqproSubscriptionId}`;
-        const subRes = await iqproGet<{ data?: Record<string, unknown> }>(subPath);
-        const existing = (subRes.data ?? subRes) as Record<string, unknown>;
+      // 1. GET the subscription
+      const subPath = `/api/gateway/${gatewayId}/subscription/${membership.iqproSubscriptionId}`;
+      const subRes = await iqproGet<{ data?: Record<string, unknown> }>(subPath);
+      const sub = (subRes.data ?? subRes) as Record<string, unknown>;
+      const recurrence = sub.recurrence as Record<string, unknown> | undefined;
 
-        // Build a minimal update payload with only the writable fields.
-        const sub = existing as Record<string, unknown>;
-        const recurrence = sub.recurrence as Record<string, unknown> | undefined;
+      // 2. Charge cancellation fee if applicable
+      if (body.action === 'cancel' && plan && plan.cancellationFee > 0 && m.iqproCustomerId) {
+        const subPM = sub.paymentMethod as Record<string, unknown> | undefined;
+        const custPM = subPM?.customerPaymentMethod as Record<string, unknown> | undefined;
+        const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? m.iqproCustomerId) as string;
+        const pmId = (custPM?.paymentMethodId ?? '') as string;
+        const amount = Math.round(plan.cancellationFee * 100) / 100;
 
-        // IQPro won't let you suspend a Draft/Scheduled subscription.
-        // For hold: disable auto-renewal to stop payments.
-        // For reactivate: re-enable auto-renewal.
-        // For cancel: set status Cancelled.
-        // We omit paymentMethod entirely — IQPro preserves the existing one.
-        const isHoldAction = body.action === 'hold';
-        const isReactivate = body.action === 'reactivate';
+        if (pmId) {
+          const feeTxPayload = {
+            type: 'Sale',
+            remit: {
+              baseAmount: amount,
+              totalAmount: amount,
+              currencyCode: 'USD',
+            },
+            paymentMethod: {
+              customer: {
+                customerId,
+                customerPaymentMethodId: pmId,
+              },
+            },
+            caption: 'Cancellation fee',
+          };
+          try {
+            const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
+              `/api/gateway/${gatewayId}/transaction`,
+              feeTxPayload,
+            );
+            const txRaw = txRes.data ?? txRes;
+            const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
+            cancellationTxId = (txData.transactionId ?? txData.id ?? '') as string;
+            cancellationFeeCharged = amount;
 
-        await iqproPut(subPath, {
-          subscriptionStatusId: body.action === 'cancel'
-            ? IQPRO_STATUS_CANCELLED
-            : (sub.status as Record<string, unknown>)?.subscriptionStatusId ?? IQPRO_STATUS_ACTIVE,
+            await db.insert(transaction).values({
+              id: randomUUID(),
+              organizationId: orgId,
+              memberId,
+              memberMembershipId: body.memberMembershipId,
+              transactionType: 'cancellation_fee',
+              amount,
+              status: 'paid',
+              paymentMethod: custPM?.card ? 'card' : 'ach',
+              description: `Cancellation fee — ${plan.name}`,
+              iqproTransactionId: cancellationTxId,
+              processedAt: now,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+          catch (feeErr) {
+            console.error('[membership] Cancellation fee charge failed:', feeErr);
+          }
+        }
+      }
+
+      // 3. Update the subscription in IQPro
+      const isHoldAction = body.action === 'hold';
+      const isReactivate = body.action === 'reactivate';
+      const isCancel = body.action === 'cancel';
+
+      if (isCancel) {
+        // Use the dedicated cancel endpoint: POST /subscription/{id}/cancel
+        try {
+          await iqproPost(
+            `${subPath}/cancel`,
+            {
+              cancel: {
+                now: true,
+                endOfBillingPeriod: false,
+              },
+            },
+          );
+        }
+        catch (cancelErr) {
+          console.error('[membership] IQPro subscription cancel failed:', cancelErr);
+        }
+      }
+      else {
+        // Hold or reactivate: update recurrence via PUT
+        const putPayload: Record<string, unknown> = {
           name: sub.name,
           prefix: sub.prefix,
-          recurrence: recurrence
-            ? {
-                termStartDate: recurrence.termStartDate,
-                billingStartDate: recurrence.billingStartDate,
-                isAutoRenewed: isHoldAction ? false : isReactivate ? true : recurrence.isAutoRenewed,
-                allowProration: recurrence.allowProration,
-                trialLengthInDays: recurrence.trialLengthInDays,
-                invoiceLengthInDays: recurrence.invoiceLengthInDays,
-                billingPeriodId: (recurrence.billingPeriod as Record<string, unknown> | undefined)?.billingPeriodId,
-                schedule: recurrence.schedule,
-              }
-            : undefined,
-        });
-      }
-      catch (iqErr) {
-        console.error('[membership] IQPro subscription update failed:', iqErr);
-        // Continue with local update even if IQPro fails
+        };
+
+        if (recurrence) {
+          putPayload.recurrence = {
+            termStartDate: recurrence.termStartDate,
+            billingStartDate: recurrence.billingStartDate,
+            isAutoRenewed: isHoldAction ? false : isReactivate ? true : recurrence.isAutoRenewed,
+            allowProration: recurrence.allowProration,
+            trialLengthInDays: recurrence.trialLengthInDays,
+            invoiceLengthInDays: recurrence.invoiceLengthInDays,
+            billingPeriodId: (recurrence.billingPeriod as Record<string, unknown> | undefined)?.billingPeriodId,
+            schedule: recurrence.schedule,
+          };
+        }
+
+        try {
+          await iqproPut<Record<string, unknown>>(subPath, putPayload);
+        }
+        catch (putErr) {
+          console.error('[membership] IQPro subscription update failed:', putErr);
+        }
       }
     }
 
-    // Update local membership record
+    // ── Update local records ─────────────────────────────────────────────────
     let newStatus: string;
     if (body.action === 'cancel') {
       newStatus = 'cancelled';
@@ -138,7 +227,6 @@ export async function PATCH(
       .set(updateFields)
       .where(eq(memberMembership.id, body.memberMembershipId));
 
-    // Update the member's status to reflect the membership change
     let memberStatus: string;
     if (body.action === 'cancel') {
       memberStatus = 'inactive';
@@ -154,9 +242,23 @@ export async function PATCH(
       .set({ status: memberStatus, statusChangedAt: now, updatedAt: now })
       .where(eq(member.id, memberId));
 
+    // ── Send cancellation email ──────────────────────────────────────────────
+    if (body.action === 'cancel' && m.email) {
+      sendCancellationConfirmation({
+        toEmail: m.email,
+        firstName: m.firstName,
+        lastName: m.lastName,
+        planName: plan?.name ?? 'Membership',
+        cancelledAt: now,
+        cancellationFee: cancellationFeeCharged > 0 ? cancellationFeeCharged : undefined,
+        cancellationTxId,
+      }).catch(() => {});
+    }
+
     return NextResponse.json({
       success: true,
       status: newStatus,
+      cancellationFeeCharged,
     });
   }
   catch (error) {

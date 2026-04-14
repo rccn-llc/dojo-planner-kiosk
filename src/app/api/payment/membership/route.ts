@@ -85,7 +85,15 @@ export async function POST(request: Request) {
 
     // Fetch the plan from the database
     const plans = await db
-      .select()
+      .select({
+        id: membershipPlan.id,
+        name: membershipPlan.name,
+        price: membershipPlan.price,
+        signupFee: membershipPlan.signupFee,
+        frequency: membershipPlan.frequency,
+        contractLength: membershipPlan.contractLength,
+        isTrial: membershipPlan.isTrial,
+      })
       .from(membershipPlan)
       .where(eq(membershipPlan.id, body.planId))
       .limit(1);
