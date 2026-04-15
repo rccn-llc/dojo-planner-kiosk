@@ -29,7 +29,18 @@ export async function GET(request: Request) {
 
     // Fetch all active, non-trial membership plans for this org
     const plans = await db
-      .select()
+      .select({
+        id: membershipPlan.id,
+        organizationId: membershipPlan.organizationId,
+        programId: membershipPlan.programId,
+        name: membershipPlan.name,
+        category: membershipPlan.category,
+        price: membershipPlan.price,
+        frequency: membershipPlan.frequency,
+        description: membershipPlan.description,
+        isTrial: membershipPlan.isTrial,
+        isActive: membershipPlan.isActive,
+      })
       .from(membershipPlan)
       .where(
         and(

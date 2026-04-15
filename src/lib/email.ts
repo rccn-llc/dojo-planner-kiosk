@@ -287,6 +287,116 @@ export async function sendTrialConfirmation(params: TrialConfirmationParams): Pr
   }
 }
 
+// ── Cancellation confirmation email ──────────────────────────────────────────
+
+interface CancellationConfirmationParams {
+  toEmail: string;
+  firstName: string;
+  lastName: string;
+  planName: string;
+  cancelledAt: Date;
+  cancellationFee?: number;
+  cancellationTxId?: string;
+}
+
+export async function sendCancellationConfirmation(params: CancellationConfirmationParams): Promise<boolean> {
+  if (!resend) {
+    console.warn('[Email] Cancellation confirmation skipped — RESEND_API_KEY not configured');
+    return false;
+  }
+
+  try {
+    const dateStr = params.cancelledAt.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+
+    const feeRow = params.cancellationFee && params.cancellationFee > 0
+      ? `
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Cancellation Fee</p>
+              <p style="margin: 0; color: #111827; font-size: 20px; font-weight: 700;">$${params.cancellationFee.toFixed(2)}</p>
+              ${params.cancellationTxId ? `<p style="margin: 4px 0 0; color: #9ca3af; font-size: 12px;">Transaction: ${params.cancellationTxId}</p>` : ''}
+            </td>
+          </tr>`
+      : '';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f9fafb;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 600px; margin: 0 auto; background-color: #ffffff;">
+    <tr>
+      <td style="padding: 40px 32px;">
+
+        <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Membership Cancelled</h1>
+        <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
+          Hi ${params.firstName}, your membership has been cancelled.
+        </p>
+
+        <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+          <tr>
+            <td style="padding: 16px; background-color: #f9fafb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Cancelled On</p>
+              <p style="margin: 0; color: #111827; font-size: 16px;">${dateStr}</p>
+            </td>
+          </tr>
+          ${feeRow}
+        </table>
+
+        ${params.cancellationFee && params.cancellationFee > 0
+          ? '<p style="margin: 0 0 24px; color: #6b7280; font-size: 14px;">A cancellation fee has been charged to your payment method on file.</p>'
+          : ''}
+
+        <p style="margin: 0 0 24px; color: #374151; font-size: 15px; line-height: 1.6;">
+          If you have any questions about your cancellation, please contact the front desk.
+        </p>
+
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td style="padding: 24px 0 0; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
+              <p style="margin: 0;">This is an automated confirmation. Please do not reply to this email.</p>
+            </td>
+          </tr>
+        </table>
+
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await resend.emails.send({
+      from: fromEmail,
+      to: params.toEmail,
+      subject: 'Your membership has been cancelled',
+      html,
+    });
+
+    console.warn('[Email] Cancellation confirmation sent', {
+      to: params.toEmail,
+      hasFee: !!params.cancellationFee,
+    });
+    return true;
+  }
+  catch (error) {
+    console.error('[Email] Failed to send cancellation confirmation', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      to: params.toEmail,
+    });
+    return false;
+  }
+}
+
 function formatCurrency(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }

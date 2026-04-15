@@ -1151,6 +1151,35 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                               </button>
                             </div>
                           )}
+                          {activeMembership.status === 'cancelled' && onAssignChildMembership && (
+                            <div className="mt-4">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const addr = memberDetail.addresses.find(a => a.isDefault) ?? memberDetail.addresses[0];
+                                  onAssignChildMembership({
+                                    childMemberId: m.id,
+                                    firstName: m.firstName,
+                                    lastName: m.lastName,
+                                    email: m.email,
+                                    phone: m.phone ?? '',
+                                    dateOfBirth: m.dateOfBirth ? new Date(m.dateOfBirth).toISOString().split('T')[0] ?? '' : '',
+                                    address: addr?.street ?? '',
+                                    city: addr?.city ?? '',
+                                    state: addr?.state ?? '',
+                                    zip: addr?.zipCode ?? '',
+                                    convertingTrialMembershipId: null,
+                                    guardianFirstName: parentContext?.firstName ?? '',
+                                    guardianLastName: parentContext?.lastName ?? '',
+                                    guardianEmail: parentContext?.email ?? '',
+                                  });
+                                }}
+                                className="min-h-12 w-full cursor-pointer rounded-xl bg-black text-base font-semibold text-white transition-all hover:bg-gray-800 active:scale-95"
+                              >
+                                New Membership
+                              </button>
+                            </div>
+                          )}
                           {onAssignChildMembership && activeMembership.isTrial && activeMembership.status === 'active' && (
                             <button
                               type="button"

@@ -121,7 +121,7 @@ export function KioskHome() {
           <KioskActionButton label="Membership" onClick={() => handleFlowChange('membership')} />
           <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
           <KioskActionButton label="Check In" onClick={() => handleFlowChange('checkin')} />
-          <KioskActionButton label="Members Area" onClick={() => handleFlowChange('memberArea')} />
+          <KioskActionButton label="Manage Profiles" onClick={() => handleFlowChange('memberArea')} />
           <KioskActionButton
             label="My Account"
             variant="dark"

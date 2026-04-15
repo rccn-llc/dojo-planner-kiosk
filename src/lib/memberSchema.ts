@@ -106,6 +106,7 @@ export const membershipPlan = pgTable(
     program: text('program').notNull(),
     price: real('price').notNull().default(0),
     signupFee: real('signup_fee').notNull().default(0),
+    cancellationFee: real('cancellation_fee').notNull().default(0),
     frequency: text('frequency').notNull().default('Monthly'),
     contractLength: text('contract_length').notNull(),
     accessLevel: text('access_level').notNull(),
