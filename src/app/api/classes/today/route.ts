@@ -7,6 +7,7 @@ import {
   attendance,
   classScheduleInstance,
   dojoClass,
+  familyMember,
   member,
   memberMembership,
   membershipPlan,
@@ -44,15 +45,18 @@ export async function GET(request: NextRequest) {
         ),
       );
 
+    let effectiveMemberships = activeMemberships;
+
     if (activeMemberships.length === 0) {
-      // Also check member status
       const memberRows = await db
-        .select({ status: member.status })
+        .select({ status: member.status, memberType: member.memberType })
         .from(member)
         .where(eq(member.id, memberId))
         .limit(1);
 
       const memberStatus = memberRows[0]?.status;
+      const memberType = memberRows[0]?.memberType;
+
       if (!memberStatus || memberStatus === 'cancelled' || memberStatus === 'past_due') {
         return NextResponse.json({
           membershipStatus: 'no_membership',
@@ -61,7 +65,6 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      // Member has trial/active status but no membership record -- allow access
       if (memberStatus !== 'active' && memberStatus !== 'trial') {
         return NextResponse.json({
           membershipStatus: 'inactive',
@@ -69,14 +72,41 @@ export async function GET(request: NextRequest) {
           classes: [],
         });
       }
+
+      // Head-of-household parents have no membership of their own —
+      // inherit access from their children's active memberships.
+      if (memberType === 'head-of-household') {
+        const familyLinks = await db
+          .select({ relatedMemberId: familyMember.relatedMemberId })
+          .from(familyMember)
+          .where(eq(familyMember.memberId, memberId));
+
+        const childIds = familyLinks.map(link => link.relatedMemberId);
+
+        if (childIds.length > 0) {
+          effectiveMemberships = await db
+            .select({
+              id: memberMembership.id,
+              status: memberMembership.status,
+              membershipPlanId: memberMembership.membershipPlanId,
+            })
+            .from(memberMembership)
+            .where(
+              and(
+                inArray(memberMembership.memberId, childIds),
+                eq(memberMembership.status, 'active'),
+              ),
+            );
+        }
+      }
     }
 
     // Determine allowed program IDs based on membership plans
     let accessLevel = 'limited';
     const allowedProgramIds: string[] = [];
 
-    if (activeMemberships.length > 0) {
-      const planIds = activeMemberships.map(m => m.membershipPlanId);
+    if (effectiveMemberships.length > 0) {
+      const planIds = effectiveMemberships.map(m => m.membershipPlanId);
 
       const plans = await db
         .select({
