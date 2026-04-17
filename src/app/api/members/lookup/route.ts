@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { address, member, memberMembership, membershipPlan, signedWaiver } from '@/lib/memberSchema';
+import { address, familyMember, member, memberMembership, membershipPlan, signedWaiver } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -56,6 +56,40 @@ export async function POST(request: Request) {
           ),
         ),
       );
+
+    // For head-of-household parents, also fetch their linked children
+    const headOfHouseholdIds = members
+      .filter(m => m.memberType === 'head-of-household')
+      .map(m => m.memberId);
+
+    if (headOfHouseholdIds.length > 0) {
+      const familyLinks = await db
+        .select({ relatedMemberId: familyMember.relatedMemberId })
+        .from(familyMember)
+        .where(inArray(familyMember.memberId, headOfHouseholdIds));
+
+      const childIds = familyLinks.map(link => link.relatedMemberId);
+      const existingIds = new Set(members.map(m => m.memberId));
+      const missingChildIds = childIds.filter(id => !existingIds.has(id));
+
+      if (missingChildIds.length > 0) {
+        const childMembers = await db
+          .select({
+            memberId: member.id,
+            firstName: member.firstName,
+            lastName: member.lastName,
+            email: member.email,
+            phone: member.phone,
+            dateOfBirth: member.dateOfBirth,
+            status: member.status,
+            memberType: member.memberType,
+          })
+          .from(member)
+          .where(inArray(member.id, missingChildIds));
+
+        members.push(...childMembers);
+      }
+    }
 
     const memberIds = members.map(m => m.memberId);
 
