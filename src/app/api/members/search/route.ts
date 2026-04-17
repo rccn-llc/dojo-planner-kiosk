@@ -1,8 +1,8 @@
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { and, eq, ilike, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { member } from '@/lib/memberSchema';
+import { member, memberMembership } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -44,6 +44,18 @@ export async function POST(request: Request) {
       )
       .limit(50);
 
+    const memberIds = members.map(m => m.memberId);
+    const withDirectMembership = new Set<string>();
+    if (memberIds.length > 0) {
+      const directMemberships = await db
+        .select({ memberId: memberMembership.memberId })
+        .from(memberMembership)
+        .where(inArray(memberMembership.memberId, memberIds));
+      for (const row of directMemberships) {
+        withDirectMembership.add(row.memberId);
+      }
+    }
+
     return NextResponse.json({
       found: members.length > 0,
       members: members.map(m => ({
@@ -52,6 +64,7 @@ export async function POST(request: Request) {
         lastName: m.lastName,
         status: m.status,
         memberType: m.memberType ?? 'individual',
+        hasDirectMembership: withDirectMembership.has(m.memberId),
       })),
     });
   }

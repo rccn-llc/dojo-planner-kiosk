@@ -82,7 +82,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
     fetch('/api/members/lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: phoneNumber }),
+      body: JSON.stringify({ phone: phoneNumber, checkinOnly: true }),
     })
       .then(r => r.json())
       .then((data) => {
