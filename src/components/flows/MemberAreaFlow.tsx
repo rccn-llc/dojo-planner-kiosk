@@ -24,6 +24,7 @@ interface MemberResult {
   lastName: string;
   status: string;
   memberType: string;
+  hasDirectMembership?: boolean;
 }
 
 interface AddressData {
@@ -76,6 +77,7 @@ interface FamilyMemberData {
   lastName: string;
   status: string;
   memberType: string;
+  hasDirectMembership?: boolean;
   relationship: string;
   isHOH: boolean;
 }
@@ -732,7 +734,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                   </p>
                   <p className="text-sm text-gray-400 capitalize">{m.memberType.replace(/-/g, ' ')}</p>
                 </div>
-                <StatusBadge status={m.status} />
+                <StatusBadge status={m.status} inheritedFromChild={m.memberType === 'head-of-household' && m.hasDirectMembership === false} />
               </button>
             ))}
           </div>
@@ -1003,7 +1005,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
               <div className="space-y-6">
                 {/* Status + Type + Edit button */}
                 <div className="flex flex-wrap items-center gap-3">
-                  <StatusBadge status={m.status} />
+                  <StatusBadge status={m.status} inheritedFromChild={m.memberType === 'head-of-household' && memberDetail.memberships.length === 0} />
                   <span className="rounded-lg bg-gray-100 px-3 py-1 text-sm font-semibold text-gray-600 capitalize">{(m.memberType ?? 'individual').replace(/-/g, ' ')}</span>
                   {m.createdAt && (
                     <span className="rounded-lg bg-gray-100 px-3 py-1 text-sm text-gray-500">
@@ -1419,7 +1421,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                                 {fm.isHOH ? ' (Head of Household)' : ''}
                               </p>
                             </div>
-                            <StatusBadge status={fm.status} />
+                            <StatusBadge status={fm.status} inheritedFromChild={fm.memberType === 'head-of-household' && fm.hasDirectMembership === false} />
                           </button>
                         ))}
                       </div>
@@ -1517,7 +1519,7 @@ function EditField({ label, value, onChange, type = 'text', error }: {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, inheritedFromChild }: { status: string; inheritedFromChild?: boolean }) {
   const colors: Record<string, string> = {
     active: 'bg-green-100 text-green-700',
     paid: 'bg-green-100 text-green-700',
@@ -1530,9 +1532,12 @@ function StatusBadge({ status }: { status: string }) {
     declined: 'bg-red-100 text-red-700',
     past_due: 'bg-red-100 text-red-700',
   };
+  const label = inheritedFromChild && status === 'trial'
+    ? 'Child with Trial'
+    : status === 'hold' ? 'On Hold' : status.replace(/_/g, ' ');
   return (
     <span className={`rounded-lg px-3 py-1 text-sm font-semibold capitalize ${colors[status] ?? 'bg-gray-100 text-gray-600'}`}>
-      {status === 'hold' ? 'On Hold' : status.replace(/_/g, ' ')}
+      {label}
     </span>
   );
 }

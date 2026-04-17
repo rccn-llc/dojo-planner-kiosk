@@ -1,8 +1,8 @@
-import { eq, or } from 'drizzle-orm';
+import { eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { familyMember, member } from '@/lib/memberSchema';
+import { familyMember, member, memberMembership } from '@/lib/memberSchema';
 
 // Maps a relationship to its inverse.
 // The link stores: relatedMemberId is <relationship> of memberId.
@@ -62,6 +62,14 @@ export async function GET(
       return NextResponse.json({ familyMembers: [] });
     }
 
+    // Look up which related members hold any membership of their own
+    const relatedIdArr = [...relatedIds];
+    const directMemberships = await db
+      .select({ memberId: memberMembership.memberId })
+      .from(memberMembership)
+      .where(inArray(memberMembership.memberId, relatedIdArr));
+    const withDirectMembership = new Set(directMemberships.map(r => r.memberId));
+
     // Fetch member details for all related members
     const familyMembers = [];
     for (const relId of relatedIds) {
@@ -113,6 +121,7 @@ export async function GET(
         lastName: m.lastName,
         status: m.status,
         memberType: m.memberType ?? 'individual',
+        hasDirectMembership: withDirectMembership.has(m.id),
         relationship,
         isHOH: m.memberType === 'head-of-household',
       });

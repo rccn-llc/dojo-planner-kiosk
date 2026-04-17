@@ -17,10 +17,12 @@ export async function POST(request: Request) {
       phone?: string;
       selectedPlanId?: string;
       convertOnly?: boolean;
+      checkinOnly?: boolean;
     };
     const rawPhone = body.phone?.replace(/\D/g, '') ?? '';
     const selectedPlanId = body.selectedPlanId;
     const convertOnly = !!body.convertOnly;
+    const checkinOnly = !!body.checkinOnly;
 
     if (!rawPhone || rawPhone.length !== 10) {
       return NextResponse.json({ found: false, members: [] });
@@ -170,6 +172,18 @@ export async function POST(request: Request) {
     const filteredMembers = members.filter((m) => {
       const memberships = membershipsByMember.get(m.memberId) ?? [];
 
+      // For check-in, exclude members with no membership of their own — a
+      // head-of-household parent whose child holds the only membership should
+      // not appear as a check-in option.
+      if (checkinOnly) {
+        const hasActiveMembership = memberships.some(
+          ms => ms.membershipStatus === 'active' || ms.membershipStatus === 'on_hold',
+        );
+        if (!hasActiveMembership) {
+          return false;
+        }
+      }
+
       // If they already have an active non-trial membership for the selected plan, exclude
       if (selectedPlanId) {
         const hasActiveNonTrial = memberships.some(
@@ -207,6 +221,7 @@ export async function POST(request: Request) {
           dateOfBirth: m.dateOfBirth ? m.dateOfBirth.toISOString().split('T')[0] : null,
           status: m.status,
           memberType: m.memberType ?? 'individual',
+          hasDirectMembership: memberships.length > 0,
           address: addr?.street ?? null,
           addressLine2: null,
           city: addr?.city ?? null,
