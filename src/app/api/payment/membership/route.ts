@@ -1,10 +1,11 @@
 import type { Buffer } from 'node:buffer';
+import type { FeeBreakdown } from '@/lib/types';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
-import { getGatewayProcessors, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
+import { calculateTransactionFees, getGatewayProcessors, getKioskTaxState, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
 import {
   address,
   member,
@@ -44,6 +45,7 @@ interface MembershipPaymentBody {
   planFrequency: string;
   planContractLength?: string;
   billingType: string;
+  feeBreakdown: FeeBreakdown | null;
   programName: string;
   dateOfBirth?: string;
   guardianFirstName?: string;
@@ -249,6 +251,7 @@ export async function POST(request: Request) {
     // Process payment if plan has a price > 0 and IQPro is configured
     let paymentSuccess = true;
     let txId: string | undefined;
+    let chargedFees: Awaited<ReturnType<typeof calculateTransactionFees>> | undefined;
 
     if (plan.price > 0 && isIQProConfigured() && gatewayId) {
       try {
@@ -319,11 +322,12 @@ export async function POST(request: Request) {
           paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? '') as string;
         }
         else {
+          const accountType = body.achAccountType ?? 'Checking';
           const tokenizeResult = await tokenizeAch({
             accountNumber: body.achAccountNumber!,
             routingNumber: body.achRoutingNumber!,
             secCode: 'WEB',
-            achAccountType: body.achAccountType ?? 'Checking',
+            achAccountType: accountType,
           });
 
           const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
@@ -333,7 +337,7 @@ export async function POST(request: Request) {
                 token: tokenizeResult.achToken,
                 secCode: 'WEB',
                 routingNumber: body.achRoutingNumber,
-                accountType: body.achAccountType ?? 'Checking',
+                accountType,
                 checkNumber: null,
                 accountHolderAuth: { dlState: null, dlNumber: null },
               },
@@ -347,7 +351,40 @@ export async function POST(request: Request) {
         // Calculate payment amount (apply coupon discount if any)
         const baseAmount = Math.round(plan.price * 100) / 100;
         const discountAmount = body.couponDiscount ? Math.round(body.couponDiscount * 100) / 100 : 0;
-        const amount = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
+        const discountedBase = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
+
+        // Re-validate fees against IQPro (server-authoritative)
+        const processorId = body.paymentMethod === 'card' ? cardProcessorId : achProcessorId;
+        if (!processorId) {
+          throw new Error(`No ${body.paymentMethod} processor configured`);
+        }
+        const serverFees = await calculateTransactionFees({
+          baseAmount: discountedBase,
+          processorId,
+          state: getKioskTaxState(),
+          paymentMethod: body.paymentMethod,
+          creditCardBin: body.cardFirstSix,
+          token: body.paymentMethod === 'card' ? body.cardToken : undefined,
+        });
+
+        if (body.feeBreakdown && Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
+          console.error('[payment/membership] Fee mismatch — client:', body.feeBreakdown.amount, 'server:', serverFees.amount);
+          throw new Error('Fee breakdown has changed — please refresh and try again');
+        }
+
+        const paymentAdjustments: Array<Record<string, unknown>> = [];
+        if (serverFees.surchargeAmount > 0) {
+          paymentAdjustments.push({ type: 'Surcharge', percentage: null, flatAmount: serverFees.surchargeAmount });
+        }
+        if (serverFees.serviceFeesAmount > 0) {
+          paymentAdjustments.push({ type: 'ServiceFees', percentage: null, flatAmount: serverFees.serviceFeesAmount });
+        }
+        if (serverFees.convenienceFeesAmount > 0) {
+          paymentAdjustments.push({ type: 'ConvenienceFees', percentage: null, flatAmount: serverFees.convenienceFeesAmount });
+        }
+
+        const amount = serverFees.amount;
+        chargedFees = serverFees;
 
         // Build address objects for IQPro (used by both subscription and transaction)
         const country = body.country || 'US';
@@ -375,6 +412,61 @@ export async function POST(request: Request) {
           email: body.email,
           country,
         };
+
+        // Build the per-transaction paymentMethod block.
+        // IQPro rejects the transaction if both `customer` and `card`/`ach` are
+        // sent ("Only one payment method is allowed"). Since we always vault the
+        // card/ACH before charging, the customer reference is enough — IQPro
+        // looks up the card brand + masked number from the vault.
+        const buildTxPaymentMethod = (): Record<string, unknown> => ({
+          customer: {
+            customerId,
+            customerPaymentMethodId: paymentMethodId,
+            ...(customerBillingAddressId && { customerBillingAddressId }),
+          },
+        });
+
+        const txRemit = {
+          baseAmount: serverFees.baseAmount,
+          taxAmount: serverFees.taxAmount,
+          // IQPro requires isTaxExempt=true when calculated tax is 0.
+          isTaxExempt: serverFees.taxAmount <= 0,
+          currencyCode: 'USD',
+          addTaxToTotal: true,
+          ...(paymentAdjustments.length > 0 && { paymentAdjustments }),
+        };
+
+        const txAddress = [
+          {
+            isPhysical: true,
+            isBilling: true,
+            isShipping: false,
+            firstName: body.firstName,
+            lastName: body.lastName,
+            email: body.email,
+            phone: sanitizePhone(body.phone) || null,
+            addressLine1: body.address,
+            addressLine2: body.addressLine2 || null,
+            city: body.city,
+            state: body.state,
+            postalCode: body.zip,
+            country,
+          },
+        ];
+
+        const txLineItems = [
+          {
+            name: plan.name,
+            description: `${plan.frequency} membership`,
+            quantity: 1,
+            unitPrice: baseAmount,
+            discount: discountAmount,
+            freightAmount: 0,
+            unitOfMeasureId: 1,
+            localTaxPercent: 0,
+            nationalTaxPercent: 0,
+          },
+        ];
 
         if (isRecurring) {
           const billingPeriodId = plan.frequency === 'Annual' ? 6 : 4;
@@ -418,11 +510,12 @@ export async function POST(request: Request) {
                   name: plan.name,
                   description: `${plan.frequency} membership payment`,
                   quantity: 1,
-                  unitPrice: amount,
+                  unitPrice: baseAmount,
                   discount: 0,
                   unitOfMeasureId: plan.frequency === 'Annual' ? 4 : 3,
                 },
               ],
+              ...(paymentAdjustments.length > 0 && { paymentAdjustments }),
             },
           );
           const subData = (subRes.data ?? subRes) as Record<string, unknown>;
@@ -436,45 +529,12 @@ export async function POST(request: Request) {
           if (amount > 0) {
             const initTxPayload: Record<string, unknown> = {
               type: 'Sale',
-              remit: {
-                baseAmount: amount,
-                totalAmount: amount,
-                currencyCode: 'USD',
-              },
-              paymentMethod: {
-                customer: {
-                  customerId,
-                  customerPaymentMethodId: paymentMethodId,
-                  ...(customerBillingAddressId && { customerBillingAddressId }),
-                },
-              },
-              address: [
-                {
-                  isPhysical: true,
-                  isBilling: true,
-                  isShipping: false,
-                  firstName: body.firstName,
-                  lastName: body.lastName,
-                  email: body.email,
-                  phone: sanitizePhone(body.phone) || null,
-                  addressLine1: body.address,
-                  addressLine2: body.addressLine2 || null,
-                  city: body.city,
-                  state: body.state,
-                  postalCode: body.zip,
-                  country,
-                },
-              ],
+              remit: txRemit,
+              paymentMethod: buildTxPaymentMethod(),
+              address: txAddress,
+              lineItems: txLineItems,
               caption: `Membership: ${plan.name}`.substring(0, 19),
             };
-
-            if (body.paymentMethod === 'ach') {
-              initTxPayload.ach = {
-                secCode: 'WEB',
-                checkNumber: null,
-                accountHolderAuth: { dlState: null, dlNumber: null },
-              };
-            }
 
             const initTxRes = await iqproPost<{ data?: Record<string, unknown> }>(
               `/api/gateway/${gatewayId}/transaction`,
@@ -491,45 +551,12 @@ export async function POST(request: Request) {
           // One-time charge
           const txPayload: Record<string, unknown> = {
             type: 'Sale',
-            remit: {
-              baseAmount: amount,
-              totalAmount: amount,
-              currencyCode: 'USD',
-            },
-            paymentMethod: {
-              customer: {
-                customerId,
-                customerPaymentMethodId: paymentMethodId,
-                ...(customerBillingAddressId && { customerBillingAddressId }),
-              },
-            },
-            address: [
-              {
-                isPhysical: true,
-                isBilling: true,
-                isShipping: false,
-                firstName: body.firstName,
-                lastName: body.lastName,
-                email: body.email,
-                phone: sanitizePhone(body.phone) || null,
-                addressLine1: body.address,
-                addressLine2: body.addressLine2 || null,
-                city: body.city,
-                state: body.state,
-                postalCode: body.zip,
-                country,
-              },
-            ],
+            remit: txRemit,
+            paymentMethod: buildTxPaymentMethod(),
+            address: txAddress,
+            lineItems: txLineItems,
             caption: `Membership: ${plan.name}`.substring(0, 19),
           };
-
-          if (body.paymentMethod === 'ach') {
-            txPayload.ach = {
-              secCode: 'WEB',
-              checkNumber: null,
-              accountHolderAuth: { dlState: null, dlNumber: null },
-            };
-          }
 
           const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
             `/api/gateway/${gatewayId}/transaction`,
@@ -547,7 +574,7 @@ export async function POST(request: Request) {
           memberId,
           memberMembershipId,
           transactionType: 'membership_payment',
-          amount: plan.price,
+          amount: serverFees.amount,
           status: 'paid',
           paymentMethod: body.paymentMethod,
           description: `${plan.name} membership`,
@@ -626,6 +653,17 @@ export async function POST(request: Request) {
         planContractLength: plan.contractLength,
         waiverPdfBuffer: pdfBuffer,
         waiverPdfFilename: pdfFilename,
+        feeBreakdown: chargedFees
+          ? {
+              baseAmount: chargedFees.baseAmount,
+              surchargeAmount: chargedFees.surchargeAmount,
+              serviceFeesAmount: chargedFees.serviceFeesAmount,
+              convenienceFeesAmount: chargedFees.convenienceFeesAmount,
+              taxAmount: chargedFees.taxAmount,
+              amount: chargedFees.amount,
+            }
+          : undefined,
+        isRecurring,
       }).catch(() => {});
     }
 

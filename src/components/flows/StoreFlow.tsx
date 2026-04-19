@@ -73,16 +73,34 @@ function calculateSubtotal(items: CartItem[]): number {
   return items.reduce((s, i) => s + i.price * i.quantity, 0);
 }
 
-function calculateAdminFee(subtotal: number, rate: number): number {
-  return Math.round(subtotal * rate * 100) / 100;
-}
-
 function formatCurrency(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
 function totalItemCount(items: CartItem[]): number {
   return items.reduce((s, i) => s + i.quantity, 0);
+}
+
+interface FeeRow {
+  label: string;
+  amount: number;
+}
+
+function feeRowsFromBreakdown(fb: { surchargeAmount: number; serviceFeesAmount: number; convenienceFeesAmount: number; taxAmount: number }): FeeRow[] {
+  const rows: FeeRow[] = [];
+  if (fb.surchargeAmount > 0) {
+    rows.push({ label: 'Surcharge', amount: fb.surchargeAmount });
+  }
+  if (fb.serviceFeesAmount > 0) {
+    rows.push({ label: 'Service fee', amount: fb.serviceFeesAmount });
+  }
+  if (fb.convenienceFeesAmount > 0) {
+    rows.push({ label: 'Convenience fee', amount: fb.convenienceFeesAmount });
+  }
+  if (fb.taxAmount > 0) {
+    rows.push({ label: 'Tax', amount: fb.taxAmount });
+  }
+  return rows;
 }
 
 // ── Product image ─────────────────────────────────────────────────────────────
@@ -122,7 +140,6 @@ const TOKENEX_CVV_ID = 'kiosk-tokenex-cvv';
 
 export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [state, send] = useStoreMachine();
-  const [saveAddress, setSaveAddress] = useState(false);
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
 
@@ -158,11 +175,92 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   });
 
   // Track tokenizing state separately (not in machine to avoid complexity)
-  const [isTokenizing, setIsTokenizing] = useState(false);
   const processingRef = useRef(false);
-  // Holds the token captured before transitioning away from checkout
+  // Holds the token captured once the card becomes valid on the checkout screen.
+  // Reused by handlePlaceOrder so we don't tokenize twice.
   const capturedTokenRef = useRef<{ token: string; firstSix: string; lastFour: string } | null>(null);
+  // Tracks whether a fee-calc is in flight for the currently-valid card so we
+  // don't race duplicate tokenize/calc cycles on re-render.
+  const feeCalcInFlightRef = useRef(false);
   const [successCountdown, setSuccessCountdown] = useState(60);
+
+  // When the user completes a valid card entry on the checkout screen, tokenize
+  // to capture the BIN, then calculate fees with the real BIN. The token is
+  // cached so handlePlaceOrder can reuse it without a second tokenize.
+  useEffect(() => {
+    if (!state.matches('checkout')) {
+      return;
+    }
+    if (!isCardPayment || !tokenizationConfig) {
+      return;
+    }
+    if (!iframeLoaded || !iframeValid || !iframeCvvValid) {
+      // Card not yet valid — clear any prior breakdown so stale fees don't show
+      if (capturedTokenRef.current) {
+        capturedTokenRef.current = null;
+      }
+      return;
+    }
+    if (capturedTokenRef.current || feeCalcInFlightRef.current) {
+      return;
+    }
+
+    const subtotal = calculateSubtotal(state.context.cartItems);
+    const baseAmount = Math.max(0, subtotal - state.context.discountAmount);
+    if (baseAmount <= 0) {
+      return;
+    }
+
+    feeCalcInFlightRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await iframeTokenize();
+        if (cancelled) {
+          return;
+        }
+        capturedTokenRef.current = {
+          token: result.token,
+          firstSix: result.firstSix ?? '',
+          lastFour: result.lastFour ?? '',
+        };
+        send({ type: 'CALCULATE_FEES_START' });
+        const res = await fetch('/api/payment/calculate-fees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseAmount,
+            paymentMethod: 'card',
+            creditCardBin: result.firstSix,
+            token: result.token,
+          }),
+        });
+        const data = await res.json() as { success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string };
+        if (cancelled) {
+          return;
+        }
+        if (data.success && data.feeBreakdown) {
+          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
+        }
+        else {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
+        }
+      }
+      catch (err) {
+        if (!cancelled) {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
+        }
+      }
+      finally {
+        feeCalcInFlightRef.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value, isCardPayment, tokenizationConfig, iframeLoaded, iframeValid, iframeCvvValid, state.context.cartItems.length, state.context.discountAmount]);
 
   // Process payment when machine enters processingOrder.
   // Token was already captured in handlePlaceOrder before the state transition,
@@ -184,8 +282,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         const cardLastFour = captured?.lastFour ?? ctx.cardLastFour;
 
         const subtotal = ctx.cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
-        const adminFee = Math.round(subtotal * ctx.adminFeeRate * 100) / 100;
-        const total = subtotal + adminFee - ctx.discountAmount;
+        const discountedSubtotal = Math.max(0, subtotal - ctx.discountAmount);
+
+        if (!ctx.feeBreakdown) {
+          send({ type: 'PAYMENT_FAILED', error: 'Fee calculation missing. Please try again.' });
+          return;
+        }
 
         const body = {
           firstName: ctx.firstName,
@@ -210,11 +312,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           achRoutingNumber: ctx.achRoutingNumber || undefined,
           achAccountNumber: ctx.achAccountNumber || undefined,
           achAccountType: ctx.achAccountType,
-          // Order totals (for receipt email)
+          // Order totals (for receipt email + server validation)
           subtotal,
-          adminFee,
           discountAmount: ctx.discountAmount,
-          amount: total,
+          baseAmount: discountedSubtotal,
+          feeBreakdown: ctx.feeBreakdown,
+          amount: ctx.feeBreakdown.amount,
           description: 'Kiosk store order',
           organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? process.env.ORGANIZATION_ID ?? '',
           items: ctx.cartItems.map(i => ({
@@ -322,6 +425,54 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
+  // Calculate fees on the checkout screen.
+  // ACH: no BIN needed — calculate immediately on entry and on any change.
+  // Card: IQPro requires a BIN to calculate, so we tokenize once the iframe
+  // reports the card as valid (see handleCardValidated below) and calculate
+  // using the real BIN captured from tokenization.
+  useEffect(() => {
+    if (!state.matches('checkout')) {
+      return;
+    }
+    if (state.context.paymentMethod !== 'ach') {
+      return;
+    }
+    const subtotal = calculateSubtotal(state.context.cartItems);
+    const baseAmount = Math.max(0, subtotal - state.context.discountAmount);
+    if (baseAmount <= 0) {
+      return;
+    }
+    let cancelled = false;
+    send({ type: 'CALCULATE_FEES_START' });
+    fetch('/api/payment/calculate-fees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseAmount, paymentMethod: 'ach' }),
+    })
+      .then(r => r.json() as Promise<{ success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        if (data.success && data.feeBreakdown) {
+          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
+        }
+        else {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value, state.context.paymentMethod, state.context.discountAmount, state.context.cartItems.length]);
+
   // Auto-return to home after order success (60s countdown)
   useEffect(() => {
     if (!state.matches('orderSuccess')) {
@@ -428,8 +579,9 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
   // ── Derived pricing ─────────────────────────────────────────────────────────
   const subtotal = calculateSubtotal(state.context.cartItems);
-  const adminFee = calculateAdminFee(subtotal, state.context.adminFeeRate);
-  const total = subtotal + adminFee - state.context.discountAmount;
+  const feeBreakdown = state.context.feeBreakdown;
+  const discountedSubtotal = Math.max(0, subtotal - state.context.discountAmount);
+  const total = feeBreakdown ? feeBreakdown.amount : discountedSubtotal;
   const itemCount = totalItemCount(state.context.cartItems);
   const cartLength = state.context.cartItems.length;
 
@@ -748,11 +900,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     </div>
                     {cartLength > 0 && (
                       <p className="mt-1 text-right text-sm text-gray-400">
-                        includes
-                        {' '}
-                        {formatCurrency(adminFee)}
-                        {' '}
-                        admin fees
+                        Taxes and fees calculated at checkout
                       </p>
                     )}
                   </div>
@@ -969,19 +1117,6 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   </div>
                 </div>
 
-                {/* Address auto-fill toggle (UI hint only, not persisted) */}
-                <label className="flex cursor-pointer items-center gap-3" htmlFor="saveAddress">
-                  <input
-                    id="saveAddress"
-                    type="checkbox"
-                    checked={saveAddress}
-                    onChange={e => setSaveAddress(e.target.checked)}
-                    className="h-5 w-5 accent-black"
-                  />
-                  <span className="text-base text-gray-600">
-                    Save this address for auto-fill data on future checkouts.
-                  </span>
-                </label>
               </div>
 
               {/* Right: payment + order summary */}
@@ -1173,8 +1308,30 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   </div>
 
                   {/* Order total */}
-                  <div className="border-t border-gray-200 pt-4">
-                    <div className="flex items-center justify-between text-xl font-bold text-black">
+                  <div className="space-y-2 border-t border-gray-200 pt-4 text-base">
+                    <div className="flex justify-between text-gray-600">
+                      <span>Subtotal</span>
+                      <span>{formatCurrency(subtotal)}</span>
+                    </div>
+                    {state.context.discountAmount > 0 && (
+                      <div className="flex justify-between text-green-600">
+                        <span>Discount</span>
+                        <span>
+                          -
+                          {formatCurrency(state.context.discountAmount)}
+                        </span>
+                      </div>
+                    )}
+                    {feeBreakdown && feeRowsFromBreakdown(feeBreakdown).map(row => (
+                      <div key={row.label} className="flex justify-between text-gray-600">
+                        <span>{row.label}</span>
+                        <span>{formatCurrency(row.amount)}</span>
+                      </div>
+                    ))}
+                    {state.context.isCalculatingFees && (
+                      <div className="text-right text-sm text-gray-400">Calculating fees…</div>
+                    )}
+                    <div className="flex items-center justify-between border-t border-gray-200 pt-3 text-xl font-bold text-black">
                       <span>
                         Total
                         {' '}
@@ -1188,13 +1345,6 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       </span>
                       <span>{formatCurrency(total)}</span>
                     </div>
-                    <p className="mt-1 text-right text-sm text-gray-400">
-                      includes
-                      {' '}
-                      {formatCurrency(adminFee)}
-                      {' '}
-                      admin fees
-                    </p>
                   </div>
 
                   {/* Place order */}
@@ -1218,29 +1368,19 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                         && !!ctx.achAccountNumber;
 
                     const handlePlaceOrder = async () => {
-                      // For card payments with an active iframe, tokenize NOW while
-                      // the checkout screen (and iframe DOM nodes) are still mounted.
-                      // Storing the result in a ref so the processingOrder effect can
-                      // use it after the UI has transitioned away from checkout.
+                      // Card: token + fee breakdown were already captured when the card
+                      // became valid on this screen (see the auto-tokenize effect above).
+                      // ACH: fees were calculated on entry; no tokenize needed here —
+                      // the server-side /api/payment/process route tokenizes via Vault.
                       if (state.context.paymentMethod === 'card' && tokenizationConfig) {
-                        try {
-                          setIsTokenizing(true);
-                          const result = await iframeTokenize();
-                          capturedTokenRef.current = {
-                            token: result.token,
-                            firstSix: result.firstSix ?? '',
-                            lastFour: result.lastFour ?? '',
-                          };
-                        }
-                        catch (err) {
-                          setIsTokenizing(false);
-                          send({
-                            type: 'PAYMENT_FAILED',
-                            error: err instanceof Error ? err.message : 'Card tokenization failed. Please try again.',
-                          });
+                        if (!capturedTokenRef.current) {
+                          send({ type: 'PAYMENT_FAILED', error: 'Card not ready. Please re-enter your card.' });
                           return;
                         }
-                        setIsTokenizing(false);
+                      }
+                      if (!state.context.feeBreakdown) {
+                        send({ type: 'PAYMENT_FAILED', error: 'Fees still calculating. Please wait a moment and try again.' });
+                        return;
                       }
                       send({ type: 'PLACE_ORDER' });
                     };
@@ -1252,14 +1392,15 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                         disabled={
                           !isBuyerReady
                           || !isPaymentReady
+                          || !state.context.feeBreakdown
+                          || state.context.isCalculatingFees
                           || state.context.isSubmitting
-                          || isTokenizing
                           || state.matches('lookingUpMember')
                         }
                         className="min-h-16 w-full cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {isTokenizing
-                          ? 'Securing card…'
+                        {state.context.isCalculatingFees
+                          ? 'Calculating fees…'
                           : state.context.isSubmitting
                             ? 'Validating…'
                             : 'Place order'}
@@ -1277,7 +1418,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           <div className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-16 w-16 animate-spin rounded-full border-4 border-black border-t-transparent" />
             <h2 className="mb-4 text-3xl font-bold text-black">
-              {isTokenizing ? 'Securing payment…' : 'Processing your order…'}
+              Processing your order…
             </h2>
             <p className="text-xl text-gray-500">Please don't leave this screen</p>
           </div>
@@ -1335,10 +1476,6 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   <span>Subtotal</span>
                   <span>{formatCurrency(subtotal)}</span>
                 </div>
-                <div className="flex justify-between text-base text-gray-500">
-                  <span>Admin fee (4.75%)</span>
-                  <span>{formatCurrency(adminFee)}</span>
-                </div>
                 {state.context.discountAmount > 0 && (
                   <div className="flex justify-between text-base text-green-600">
                     <span>Discount</span>
@@ -1348,6 +1485,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     </span>
                   </div>
                 )}
+                {feeBreakdown && feeRowsFromBreakdown(feeBreakdown).map(row => (
+                  <div key={row.label} className="flex justify-between text-base text-gray-500">
+                    <span>{row.label}</span>
+                    <span>{formatCurrency(row.amount)}</span>
+                  </div>
+                ))}
                 <div className="flex justify-between border-t border-gray-300 pt-2 text-xl font-bold text-black">
                   <span>Total</span>
                   <span>{formatCurrency(total)}</span>

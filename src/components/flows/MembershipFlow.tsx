@@ -159,6 +159,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
   const capturedTokenRef = useRef<{ token: string; firstSix: string; lastFour: string } | null>(null);
+  const feeCalcInFlightRef = useRef(false);
 
   const isCardPayment = state.context.paymentMethod === 'card';
 
@@ -366,6 +367,138 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     }
   }, [state, tokenizationConfig, tokenizationError]);
 
+  // Calculate fees on the payment page.
+  // ACH: no BIN needed — calculate immediately on entry and on any change.
+  // Card: IQPro requires a BIN; we tokenize once the iframe reports the card
+  // as valid (see the card-valid effect below) and calculate with the real BIN.
+  useEffect(() => {
+    if (!state.matches('collectingPayment')) {
+      return;
+    }
+    if (state.context.paymentMethod !== 'ach') {
+      return;
+    }
+    const plan = state.context.selectedPlan;
+    if (!plan) {
+      return;
+    }
+    const baseAmount = Math.round(plan.price * 100) / 100;
+    if (baseAmount <= 0) {
+      return;
+    }
+    let cancelled = false;
+    send({ type: 'CALCULATE_FEES_START' });
+    fetch('/api/payment/calculate-fees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseAmount, paymentMethod: 'ach' }),
+    })
+      .then(r => r.json() as Promise<{ success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string }>)
+      .then((data) => {
+        if (cancelled) {
+          return;
+        }
+        if (data.success && data.feeBreakdown) {
+          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
+        }
+        else {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) {
+          return;
+        }
+        send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value, state.context.paymentMethod, state.context.selectedPlan?.price]);
+
+  // When the user completes a valid card entry on the payment page, tokenize
+  // to capture the BIN, then calculate fees with the real BIN. The token is
+  // cached so the Place Payment button can reuse it without re-tokenizing.
+  useEffect(() => {
+    if (!state.matches('collectingPayment')) {
+      return;
+    }
+    if (!isCardPayment || !tokenizationConfig) {
+      return;
+    }
+    if (!iframeLoaded || !iframeValid || !iframeCvvValid) {
+      if (capturedTokenRef.current) {
+        capturedTokenRef.current = null;
+      }
+      return;
+    }
+    if (capturedTokenRef.current || feeCalcInFlightRef.current) {
+      return;
+    }
+    const plan = state.context.selectedPlan;
+    if (!plan) {
+      return;
+    }
+    const baseAmount = Math.round(plan.price * 100) / 100;
+    if (baseAmount <= 0) {
+      return;
+    }
+
+    feeCalcInFlightRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await iframeTokenize();
+        if (cancelled) {
+          return;
+        }
+        capturedTokenRef.current = {
+          token: result.token,
+          firstSix: result.firstSix ?? '',
+          lastFour: result.lastFour ?? '',
+        };
+        send({ type: 'UPDATE_FIELD', field: 'cardToken', value: result.token });
+        send({ type: 'UPDATE_FIELD', field: 'cardFirstSix', value: result.firstSix ?? '' });
+        send({ type: 'UPDATE_FIELD', field: 'cardLastFour', value: result.lastFour ?? '' });
+        send({ type: 'CALCULATE_FEES_START' });
+        const res = await fetch('/api/payment/calculate-fees', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseAmount,
+            paymentMethod: 'card',
+            creditCardBin: result.firstSix,
+            token: result.token,
+          }),
+        });
+        const data = await res.json() as { success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string };
+        if (cancelled) {
+          return;
+        }
+        if (data.success && data.feeBreakdown) {
+          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
+        }
+        else {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
+        }
+      }
+      catch (err) {
+        if (!cancelled) {
+          send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
+        }
+      }
+      finally {
+        feeCalcInFlightRef.current = false;
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value, isCardPayment, tokenizationConfig, iframeLoaded, iframeValid, iframeCvvValid, state.context.selectedPlan?.price]);
+
   const PLANS_PER_PAGE = 4;
   const totalPlanPages = Math.ceil((state.context.availablePlans?.length ?? 0) / PLANS_PER_PAGE);
   const visiblePlans = state.context.availablePlans.slice(
@@ -417,6 +550,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       planFrequency,
       planContractLength: ctx.selectedPlan?.description?.split('\n')[0] ?? '',
       billingType: isRecurring ? 'autopay' : 'one-time',
+      feeBreakdown: ctx.feeBreakdown,
       programName: ctx.selectedProgram?.name ?? '',
       dateOfBirth: ctx.dateOfBirth || undefined,
       guardianFirstName: ctx.guardianFirstName || undefined,
@@ -1066,10 +1200,13 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                       </div>
                     </div>
 
-                    <div className="mb-6 flex justify-between text-xl font-bold text-black">
-                      <span>Total Due Today</span>
+                    <div className="mb-2 flex justify-between text-xl font-bold text-black">
+                      <span>Plan</span>
                       <span>{formatPlanPrice(state.context.selectedPlan)}</span>
                     </div>
+                    <p className="mb-6 text-right text-sm text-gray-400">
+                      Taxes and fees calculated at checkout
+                    </p>
 
                     {/* Membership agreement snippet */}
                     {state.context.waiverContent && (
@@ -1337,10 +1474,56 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                         </span>
                       </div>
                     </div>
-                    <div className="flex justify-between text-xl font-bold text-black">
-                      <span>Total Due Today</span>
-                      <span>{formatPlanPrice(state.context.selectedPlan)}</span>
-                    </div>
+                    {(() => {
+                      const fb = state.context.feeBreakdown;
+                      const planPrice = state.context.selectedPlan.price;
+                      const rows: Array<{ label: string; amount: number }> = [];
+                      if (fb) {
+                        if (fb.surchargeAmount > 0) {
+                          rows.push({ label: 'Surcharge', amount: fb.surchargeAmount });
+                        }
+                        if (fb.serviceFeesAmount > 0) {
+                          rows.push({ label: 'Service fee', amount: fb.serviceFeesAmount });
+                        }
+                        if (fb.convenienceFeesAmount > 0) {
+                          rows.push({ label: 'Convenience fee', amount: fb.convenienceFeesAmount });
+                        }
+                        if (fb.taxAmount > 0) {
+                          rows.push({ label: 'Tax', amount: fb.taxAmount });
+                        }
+                      }
+                      const total = fb ? fb.amount : planPrice;
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-gray-600">
+                            <span>Base</span>
+                            <span>
+                              $
+                              {planPrice.toFixed(2)}
+                            </span>
+                          </div>
+                          {rows.map(r => (
+                            <div key={r.label} className="flex justify-between text-gray-600">
+                              <span>{r.label}</span>
+                              <span>
+                                $
+                                {r.amount.toFixed(2)}
+                              </span>
+                            </div>
+                          ))}
+                          {state.context.isCalculatingFees && (
+                            <div className="text-right text-sm text-gray-400">Calculating fees…</div>
+                          )}
+                          <div className="flex justify-between border-t border-gray-200 pt-2 text-xl font-bold text-black">
+                            <span>Total Due Today</span>
+                            <span>
+                              $
+                              {total.toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
@@ -1359,26 +1542,18 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
               </button>
               <button
                 type="button"
-                disabled={state.context.isSubmitting || (isCardPayment ? (!tokenizationConfig || !iframeLoaded || !iframeValid || !iframeCvvValid || !state.context.cardholderName || !state.context.cardExpiry) : (!state.context.achAccountHolder || !state.context.achRoutingNumber || !state.context.achAccountNumber))}
-                onClick={async () => {
-                  if (isCardPayment && tokenizationConfig) {
-                    try {
-                      handleInputChange('isSubmitting', true as unknown as string);
-                      const result = await iframeTokenize();
-                      capturedTokenRef.current = {
-                        token: result.token,
-                        firstSix: result.firstSix ?? '',
-                        lastFour: result.lastFour ?? '',
-                      };
-                      send({ type: 'UPDATE_FIELD', field: 'cardToken', value: result.token });
-                      send({ type: 'UPDATE_FIELD', field: 'cardFirstSix', value: result.firstSix ?? '' });
-                      send({ type: 'UPDATE_FIELD', field: 'cardLastFour', value: result.lastFour ?? '' });
-                    }
-                    catch (err) {
-                      handleInputChange('isSubmitting', false as unknown as string);
-                      console.error('Tokenization failed:', err);
-                      return;
-                    }
+                disabled={
+                  state.context.isSubmitting
+                  || !state.context.feeBreakdown
+                  || (isCardPayment
+                    ? (!tokenizationConfig || !iframeLoaded || !iframeValid || !iframeCvvValid || !state.context.cardholderName || !state.context.cardExpiry || !capturedTokenRef.current)
+                    : (!state.context.achAccountHolder || !state.context.achRoutingNumber || !state.context.achAccountNumber))
+                }
+                onClick={() => {
+                  // Card: token + fee breakdown were captured by the card-valid effect above.
+                  // ACH: fees were calculated on entry; server tokenizes via Vault.
+                  if (!state.context.feeBreakdown) {
+                    return;
                   }
                   send({ type: 'SUBMIT_PAYMENT' });
                 }}

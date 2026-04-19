@@ -281,6 +281,87 @@ export async function getGatewayProcessors(): Promise<GatewayProcessors> {
   return cachedProcessors;
 }
 
+// ── Tax state ─────────────────────────────────────────────────────────────────
+
+/**
+ * The state used for sales-tax calculation when calling IQPro's calculatefees
+ * endpoint. Currently sourced from the KIOSK_TAX_STATE env var as a stand-in
+ * for per-organization location lookup — the long-term plan is to derive this
+ * from the organization's primary address (Clerk metadata or a DB field) so a
+ * single kiosk deployment can handle dojos in different states correctly.
+ */
+export function getKioskTaxState(): string {
+  const fromEnv = process.env.KIOSK_TAX_STATE?.trim();
+  if (!fromEnv) {
+    throw new Error('KIOSK_TAX_STATE is not set. Add it to .env.local (e.g. KIOSK_TAX_STATE=CA).');
+  }
+  return fromEnv.toUpperCase();
+}
+
+// ── Fee calculation ───────────────────────────────────────────────────────────
+
+interface CalculateFeesParams {
+  baseAmount: number;
+  processorId: string;
+  state: string;
+  paymentMethod: 'card' | 'ach';
+  creditCardBin?: string;
+  token?: string;
+  paymentAdjustments?: Array<{
+    type: string;
+    percentage?: number | null;
+    flatAmount?: number | null;
+  }>;
+}
+
+interface CalculateFeesResult {
+  isSurchargeable: boolean;
+  isPinCapable: boolean;
+  surchargeRate: number;
+  surchargeAmount: number;
+  serviceFeesAmount: number;
+  convenienceFeesAmount: number;
+  baseAmount: number;
+  amount: number;
+  tip: number;
+  taxAmount: number;
+  cardBrand: string | null;
+  cardType: string | null;
+}
+
+export async function calculateTransactionFees(
+  params: CalculateFeesParams,
+): Promise<CalculateFeesResult> {
+  const gatewayId = process.env.IQPRO_GATEWAY_ID!;
+  const body: Record<string, unknown> = {
+    baseAmount: params.baseAmount,
+    addTaxToTotal: true,
+    taxAmount: 0,
+    processorId: params.processorId,
+    transactionType: 'Sale',
+    state: params.state,
+  };
+  // IQPro accepts exactly one of token or creditCardBin, never both. Prefer
+  // token when available — it identifies the specific card, whereas BIN only
+  // identifies the issuing range.
+  if (params.token) {
+    body.token = params.token;
+  }
+  else if (params.creditCardBin) {
+    body.creditCardBin = params.creditCardBin;
+  }
+  if (params.paymentAdjustments && params.paymentAdjustments.length > 0) {
+    body.paymentAdjustments = params.paymentAdjustments;
+  }
+
+  const res = await iqproPost<{ data?: CalculateFeesResult }>(
+    `/api/gateway/${gatewayId}/transaction/calculatefees`,
+    body,
+  );
+  const data = (res.data ?? res) as CalculateFeesResult;
+  return data;
+}
+
 // ── ACH tokenization ──────────────────────────────────────────────────────────
 
 export async function tokenizeAch(params: TokenizeAchParams): Promise<TokenizeAchResult> {

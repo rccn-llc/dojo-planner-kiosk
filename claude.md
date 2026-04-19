@@ -86,6 +86,9 @@ IQPRO_OAUTH_URL=...
 IQPRO_BASE_URL=...          # e.g. https://sandbox.api.basyspro.com/iqsaas/v1
 IQPRO_GATEWAY_ID=...
 
+# Sales-tax state for IQPro calculatefees calls (stand-in for per-org lookup)
+KIOSK_TAX_STATE=CA
+
 # Email (for receipt sending)
 RESEND_API_KEY=...
 ```

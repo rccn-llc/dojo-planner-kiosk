@@ -1,6 +1,7 @@
+import type { FeeBreakdown } from '@/lib/types';
 import { NextResponse } from 'next/server';
 import { sendStoreOrderReceipt } from '@/lib/email';
-import { iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
+import { calculateTransactionFees, getGatewayProcessors, getKioskTaxState, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -31,11 +32,12 @@ export interface ProcessStoreOrderBody {
   achAccountNumber?: string;
   achAccountType?: 'Checking' | 'Savings';
 
-  // Order
-  amount: number; // total in dollars (includes admin fee, minus discount)
-  subtotal: number; // pre-fee subtotal
-  adminFee: number;
+  // Order totals — all server-authoritative (re-validated)
+  subtotal: number; // pre-discount, pre-fee subtotal
   discountAmount: number;
+  baseAmount: number; // subtotal - discountAmount (amount fees are calculated on)
+  feeBreakdown: FeeBreakdown;
+  amount: number; // final total (should equal feeBreakdown.amount)
   description: string;
   organizationId: string;
   items: Array<{
@@ -131,7 +133,6 @@ export async function POST(request: Request) {
 
     // ── Step 2: Register payment method ──────────────────────────────────────
     let paymentMethodId: string;
-    let achTxData: { achToken: string; accountType: string; routingNumber: string } | undefined;
 
     if (body.paymentMethod === 'card') {
       const first6 = body.cardFirstSix ?? '000000';
@@ -184,26 +185,80 @@ export async function POST(request: Request) {
       const pmData = (pmRes.data ?? pmRes) as Record<string, unknown>;
       paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? pmData.customerPaymentId ?? '') as string;
       console.warn('[payment/process] ACH paymentMethodId:', paymentMethodId);
-      achTxData = { achToken, accountType, routingNumber: body.achRoutingNumber! };
     }
 
-    // ── Step 3: Process one-time charge ──────────────────────────────────────
-    const amount = Math.round(body.amount * 100) / 100;
+    // ── Step 3: Re-validate fee breakdown against IQPro ──────────────────────
+    if (!body.feeBreakdown || typeof body.feeBreakdown.amount !== 'number') {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Missing fee breakdown' },
+        { status: 400 },
+      );
+    }
+
+    const processors = await getGatewayProcessors();
+    const processorId = body.paymentMethod === 'card' ? processors.cardProcessorId : processors.achProcessorId;
+    if (!processorId) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: `No ${body.paymentMethod} processor configured` },
+        { status: 503 },
+      );
+    }
+
+    const serverFees = await calculateTransactionFees({
+      baseAmount: Math.round(body.baseAmount * 100) / 100,
+      processorId,
+      state: getKioskTaxState(),
+      paymentMethod: body.paymentMethod,
+      creditCardBin: body.cardFirstSix,
+      token: body.paymentMethod === 'card' ? body.cardToken : undefined,
+    });
+
+    if (Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
+      console.error('[payment/process] Fee mismatch — client:', body.feeBreakdown.amount, 'server:', serverFees.amount);
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Fee breakdown has changed — please refresh and try again' },
+        { status: 400 },
+      );
+    }
+
+    // ── Step 4: Build paymentAdjustments from server-calculated fees ─────────
+    const paymentAdjustments: Array<Record<string, unknown>> = [];
+    if (serverFees.surchargeAmount > 0) {
+      paymentAdjustments.push({ type: 'Surcharge', percentage: null, flatAmount: serverFees.surchargeAmount });
+    }
+    if (serverFees.serviceFeesAmount > 0) {
+      paymentAdjustments.push({ type: 'ServiceFees', percentage: null, flatAmount: serverFees.serviceFeesAmount });
+    }
+    if (serverFees.convenienceFeesAmount > 0) {
+      paymentAdjustments.push({ type: 'ConvenienceFees', percentage: null, flatAmount: serverFees.convenienceFeesAmount });
+    }
+
+    // ── Step 5: Process one-time charge per canonical IQPro schema ───────────
+    const txPaymentMethod: Record<string, unknown> = {
+      customer: {
+        customerId,
+        customerPaymentMethodId: paymentMethodId,
+        ...(customerBillingAddressId && { customerBillingAddressId }),
+      },
+    };
+    // IQPro rejects the transaction if both `customer` and `card`/`ach` are sent
+    // ("Only one payment method is allowed"). Since we always vault the card/ACH
+    // before charging, the customer reference is enough — IQPro looks up the
+    // card brand + masked number from the vault.
 
     const txPayload: Record<string, unknown> = {
       type: 'Sale',
       remit: {
-        baseAmount: amount,
-        totalAmount: amount,
+        baseAmount: serverFees.baseAmount,
+        taxAmount: serverFees.taxAmount,
+        // IQPro requires isTaxExempt=true when calculated tax is 0; sending false
+        // with zero tax fails validation ("must be true when all line items have zero tax").
+        isTaxExempt: serverFees.taxAmount <= 0,
         currencyCode: 'USD',
+        addTaxToTotal: true,
+        ...(paymentAdjustments.length > 0 && { paymentAdjustments }),
       },
-      paymentMethod: {
-        customer: {
-          customerId,
-          customerPaymentMethodId: paymentMethodId,
-          ...(customerBillingAddressId && { customerBillingAddressId }),
-        },
-      },
+      paymentMethod: txPaymentMethod,
       address: [
         {
           isPhysical: true,
@@ -222,20 +277,19 @@ export async function POST(request: Request) {
           country: (body.country === 'United States' ? 'US' : body.country) || null,
         },
       ],
+      lineItems: body.items.map(item => ({
+        name: item.productName,
+        description: item.variantName ?? item.productName,
+        quantity: item.quantity,
+        unitPrice: item.price,
+        discount: 0,
+        freightAmount: 0,
+        unitOfMeasureId: 1,
+        localTaxPercent: 0,
+        nationalTaxPercent: 0,
+      })),
       ...(body.description && { caption: body.description.substring(0, 19) }),
     };
-
-    // ACH transactions require the ach object in the payload
-    if (body.paymentMethod === 'ach' && achTxData) {
-      txPayload.ach = {
-        achToken: achTxData.achToken,
-        secCode: 'WEB',
-        routingNumber: achTxData.routingNumber,
-        accountType: achTxData.accountType,
-        checkNumber: null,
-        accountHolderAuth: { dlState: null, dlNumber: null },
-      };
-    }
 
     const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
       `/api/gateway/${gatewayId}/transaction`,
@@ -277,10 +331,13 @@ export async function POST(request: Request) {
         firstName: body.firstName,
         lastName: body.lastName,
         items: body.items ?? [],
-        subtotal: body.subtotal ?? body.amount,
-        adminFee: body.adminFee ?? 0,
+        subtotal: body.subtotal,
         discountAmount: body.discountAmount ?? 0,
-        total: body.amount,
+        surchargeAmount: serverFees.surchargeAmount,
+        serviceFeesAmount: serverFees.serviceFeesAmount,
+        convenienceFeesAmount: serverFees.convenienceFeesAmount,
+        taxAmount: serverFees.taxAmount,
+        total: serverFees.amount,
         transactionId: txId || undefined,
       }).catch(() => {
         // Already logged inside sendStoreOrderReceipt — don't let this fail the response

@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
-import { iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
+import { calculateTransactionFees, getGatewayProcessors, getKioskTaxState, iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
 import { member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 export async function PATCH(
@@ -101,25 +101,74 @@ export async function PATCH(
         const custPM = subPM?.customerPaymentMethod as Record<string, unknown> | undefined;
         const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? m.iqproCustomerId) as string;
         const pmId = (custPM?.paymentMethodId ?? '') as string;
-        const amount = Math.round(plan.cancellationFee * 100) / 100;
+        const baseAmount = Math.round(plan.cancellationFee * 100) / 100;
+        const isCardMethod = !!custPM?.card;
+        const paymentMethodName: 'card' | 'ach' = isCardMethod ? 'card' : 'ach';
 
         if (pmId) {
-          const feeTxPayload = {
-            type: 'Sale',
-            remit: {
-              baseAmount: amount,
-              totalAmount: amount,
-              currencyCode: 'USD',
-            },
-            paymentMethod: {
-              customer: {
-                customerId,
-                customerPaymentMethodId: pmId,
-              },
-            },
-            caption: 'Cancellation fee',
-          };
           try {
+            const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
+            const processorId = isCardMethod ? cardProcessorId : achProcessorId;
+            if (!processorId) {
+              throw new Error(`No ${paymentMethodName} processor configured`);
+            }
+
+            const cardInfo = custPM?.card as Record<string, unknown> | undefined;
+            const maskedNumber = (cardInfo?.maskedNumber ?? cardInfo?.maskedCard ?? '') as string;
+            const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : undefined;
+
+            const serverFees = await calculateTransactionFees({
+              baseAmount,
+              processorId,
+              state: getKioskTaxState(),
+              paymentMethod: paymentMethodName,
+              creditCardBin: bin,
+            });
+
+            const paymentAdjustments: Array<Record<string, unknown>> = [];
+            if (serverFees.surchargeAmount > 0) {
+              paymentAdjustments.push({ type: 'Surcharge', percentage: null, flatAmount: serverFees.surchargeAmount });
+            }
+            if (serverFees.serviceFeesAmount > 0) {
+              paymentAdjustments.push({ type: 'ServiceFees', percentage: null, flatAmount: serverFees.serviceFeesAmount });
+            }
+            if (serverFees.convenienceFeesAmount > 0) {
+              paymentAdjustments.push({ type: 'ConvenienceFees', percentage: null, flatAmount: serverFees.convenienceFeesAmount });
+            }
+
+            const feeTxPayload = {
+              type: 'Sale',
+              remit: {
+                baseAmount: serverFees.baseAmount,
+                taxAmount: serverFees.taxAmount,
+                // IQPro requires isTaxExempt=true when calculated tax is 0.
+                isTaxExempt: serverFees.taxAmount <= 0,
+                currencyCode: 'USD',
+                addTaxToTotal: true,
+                ...(paymentAdjustments.length > 0 && { paymentAdjustments }),
+              },
+              paymentMethod: {
+                customer: {
+                  customerId,
+                  customerPaymentMethodId: pmId,
+                },
+              },
+              lineItems: [
+                {
+                  name: 'Cancellation fee',
+                  description: `Cancellation fee — ${plan.name}`,
+                  quantity: 1,
+                  unitPrice: baseAmount,
+                  discount: 0,
+                  freightAmount: 0,
+                  unitOfMeasureId: 1,
+                  localTaxPercent: 0,
+                  nationalTaxPercent: 0,
+                },
+              ],
+              caption: 'Cancellation fee',
+            };
+
             const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
               `/api/gateway/${gatewayId}/transaction`,
               feeTxPayload,
@@ -127,7 +176,7 @@ export async function PATCH(
             const txRaw = txRes.data ?? txRes;
             const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
             cancellationTxId = (txData.transactionId ?? txData.id ?? '') as string;
-            cancellationFeeCharged = amount;
+            cancellationFeeCharged = serverFees.amount;
 
             await db.insert(transaction).values({
               id: randomUUID(),
@@ -135,9 +184,9 @@ export async function PATCH(
               memberId,
               memberMembershipId: body.memberMembershipId,
               transactionType: 'cancellation_fee',
-              amount,
+              amount: serverFees.amount,
               status: 'paid',
-              paymentMethod: custPM?.card ? 'card' : 'ach',
+              paymentMethod: paymentMethodName,
               description: `Cancellation fee — ${plan.name}`,
               iqproTransactionId: cancellationTxId,
               processedAt: now,

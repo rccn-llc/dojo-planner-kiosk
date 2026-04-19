@@ -31,3 +31,15 @@ export interface MembershipPlan {
   trialPeriodDays?: number;
   isActive: boolean;
 }
+
+export interface FeeBreakdown {
+  baseAmount: number;
+  surchargeAmount: number;
+  serviceFeesAmount: number;
+  convenienceFeesAmount: number;
+  taxAmount: number;
+  amount: number;
+  isSurchargeable: boolean;
+  cardBrand: string | null;
+  cardType: string | null;
+}

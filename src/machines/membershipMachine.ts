@@ -94,6 +94,8 @@ const emptyContext: MembershipContext = {
   achRoutingNumber: '',
   achAccountNumber: '',
   achAccountType: 'Checking' as const,
+  feeBreakdown: null,
+  isCalculatingFees: false,
   errors: {} as Record<string, string>,
   isSubmitting: false,
   sessionId: '',
@@ -318,6 +320,22 @@ export const membershipMachine = createMachine({
             delete newErrors[field as string];
             return { ...context, [field]: value, errors: newErrors };
           }),
+        },
+        CALCULATE_FEES_START: {
+          actions: assign({ isCalculatingFees: true, feeBreakdown: null }),
+        },
+        CALCULATE_FEES_SUCCESS: {
+          actions: assign(({ event }) => ({
+            isCalculatingFees: false,
+            feeBreakdown: event.feeBreakdown,
+          })),
+        },
+        CALCULATE_FEES_FAILURE: {
+          actions: assign(({ event, context }) => ({
+            isCalculatingFees: false,
+            feeBreakdown: null,
+            errors: { ...context.errors, fees: event.error } as Record<string, string>,
+          })),
         },
         SUBMIT_PAYMENT: 'processingPayment',
         BACK: 'collectingInfo',

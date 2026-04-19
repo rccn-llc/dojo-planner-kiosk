@@ -118,9 +118,9 @@ export function KioskHome() {
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
         <div className="grid w-full max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 md:grid-cols-3">
           <KioskActionButton label="Free Trial" onClick={() => handleFlowChange('trial')} />
-          <KioskActionButton label="Membership" onClick={() => handleFlowChange('membership')} />
+          <KioskActionButton label="Membership" variant="blue" onClick={() => handleFlowChange('membership')} />
           <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
-          <KioskActionButton label="Check In" onClick={() => handleFlowChange('checkin')} />
+          <KioskActionButton label="Check In" variant="green" onClick={() => handleFlowChange('checkin')} />
           <KioskActionButton label="Manage Profiles" onClick={() => handleFlowChange('memberArea')} />
           <KioskActionButton
             label="My Account"
