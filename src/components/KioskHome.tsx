@@ -117,11 +117,12 @@ export function KioskHome() {
       {/* Main Options */}
       <main className="flex flex-1 items-center justify-center p-4 sm:p-6 md:p-8">
         <div className="grid w-full max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 md:grid-cols-3">
-          <KioskActionButton label="Free Trial" onClick={() => handleFlowChange('trial')} />
+          <KioskActionButton label="Free Trial" variant="lightBlue" onClick={() => handleFlowChange('trial')} />
           <KioskActionButton label="Membership" variant="blue" onClick={() => handleFlowChange('membership')} />
           <KioskActionButton label="Store" onClick={() => handleFlowChange('store')} />
           <KioskActionButton label="Check In" variant="green" onClick={() => handleFlowChange('checkin')} />
           <KioskActionButton label="Manage Profiles" onClick={() => handleFlowChange('memberArea')} />
+          {/* "My Account" hidden for now — restore when member-portal subdomain routing is ready.
           <KioskActionButton
             label="My Account"
             variant="dark"
@@ -130,6 +131,7 @@ export function KioskHome() {
               window.location.href = `/${slug}`;
             }}
           />
+          */}
         </div>
       </main>
 

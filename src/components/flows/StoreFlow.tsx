@@ -86,19 +86,13 @@ interface FeeRow {
   amount: number;
 }
 
-function feeRowsFromBreakdown(fb: { surchargeAmount: number; serviceFeesAmount: number; convenienceFeesAmount: number; taxAmount: number }): FeeRow[] {
+function feeRowsFromBreakdown(fb: { taxAmount: number; taxPct: number; serviceFeeAmount: number; serviceFeePct: number }): FeeRow[] {
   const rows: FeeRow[] = [];
-  if (fb.surchargeAmount > 0) {
-    rows.push({ label: 'Surcharge', amount: fb.surchargeAmount });
-  }
-  if (fb.serviceFeesAmount > 0) {
-    rows.push({ label: 'Service fee', amount: fb.serviceFeesAmount });
-  }
-  if (fb.convenienceFeesAmount > 0) {
-    rows.push({ label: 'Convenience fee', amount: fb.convenienceFeesAmount });
-  }
   if (fb.taxAmount > 0) {
-    rows.push({ label: 'Tax', amount: fb.taxAmount });
+    rows.push({ label: `Tax (${fb.taxPct}%)`, amount: fb.taxAmount });
+  }
+  if (fb.serviceFeeAmount > 0) {
+    rows.push({ label: `Service fee (${fb.serviceFeePct}%)`, amount: fb.serviceFeeAmount });
   }
   return rows;
 }
@@ -185,8 +179,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [successCountdown, setSuccessCountdown] = useState(60);
 
   // When the user completes a valid card entry on the checkout screen, tokenize
-  // to capture the BIN, then calculate fees with the real BIN. The token is
-  // cached so handlePlaceOrder can reuse it without a second tokenize.
+  // the card so handlePlaceOrder has a token ready without a second tokenize.
+  // Fee calculation is decoupled from this (local math, no BIN needed).
   useEffect(() => {
     if (!state.matches('checkout')) {
       return;
@@ -195,19 +189,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       return;
     }
     if (!iframeLoaded || !iframeValid || !iframeCvvValid) {
-      // Card not yet valid — clear any prior breakdown so stale fees don't show
+      // Card not yet valid — clear any prior token so we don't charge a stale one
       if (capturedTokenRef.current) {
         capturedTokenRef.current = null;
       }
       return;
     }
     if (capturedTokenRef.current || feeCalcInFlightRef.current) {
-      return;
-    }
-
-    const subtotal = calculateSubtotal(state.context.cartItems);
-    const baseAmount = Math.max(0, subtotal - state.context.discountAmount);
-    if (baseAmount <= 0) {
       return;
     }
 
@@ -224,32 +212,9 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           firstSix: result.firstSix ?? '',
           lastFour: result.lastFour ?? '',
         };
-        send({ type: 'CALCULATE_FEES_START' });
-        const res = await fetch('/api/payment/calculate-fees', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            baseAmount,
-            paymentMethod: 'card',
-            creditCardBin: result.firstSix,
-            token: result.token,
-          }),
-        });
-        const data = await res.json() as { success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string };
-        if (cancelled) {
-          return;
-        }
-        if (data.success && data.feeBreakdown) {
-          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
-        }
-        else {
-          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
-        }
       }
       catch (err) {
-        if (!cancelled) {
-          send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
-        }
+        console.error('[StoreFlow] Tokenization failed:', err);
       }
       finally {
         feeCalcInFlightRef.current = false;
@@ -260,7 +225,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value, isCardPayment, tokenizationConfig, iframeLoaded, iframeValid, iframeCvvValid, state.context.cartItems.length, state.context.discountAmount]);
+  }, [state.value, isCardPayment, tokenizationConfig, iframeLoaded, iframeValid, iframeCvvValid]);
 
   // Process payment when machine enters processingOrder.
   // Token was already captured in handlePlaceOrder before the state transition,
@@ -425,16 +390,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
-  // Calculate fees on the checkout screen.
-  // ACH: no BIN needed — calculate immediately on entry and on any change.
-  // Card: IQPro requires a BIN to calculate, so we tokenize once the iframe
-  // reports the card as valid (see handleCardValidated below) and calculate
-  // using the real BIN captured from tokenization.
+  // Calculate fees (tax + service fee) on checkout entry and whenever the base
+  // amount, payment method, or captured card token changes. Store items are
+  // taxable. The service-fee flatAmount is authoritative from IQPro, so we
+  // re-run after tokenization with the real card token.
   useEffect(() => {
     if (!state.matches('checkout')) {
-      return;
-    }
-    if (state.context.paymentMethod !== 'ach') {
       return;
     }
     const subtotal = calculateSubtotal(state.context.cartItems);
@@ -447,7 +408,13 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     fetch('/api/payment/calculate-fees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseAmount, paymentMethod: 'ach' }),
+      body: JSON.stringify({
+        baseAmount,
+        isTaxable: true,
+        paymentMethod: state.context.paymentMethod,
+        token: capturedTokenRef.current?.token,
+        creditCardBin: capturedTokenRef.current?.firstSix,
+      }),
     })
       .then(r => r.json() as Promise<{ success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string }>)
       .then((data) => {
@@ -471,7 +438,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value, state.context.paymentMethod, state.context.discountAmount, state.context.cartItems.length]);
+  }, [state.value, state.context.paymentMethod, state.context.discountAmount, state.context.cartItems.length, state.context.cardToken]);
 
   // Auto-return to home after order success (60s countdown)
   useEffect(() => {

@@ -5,7 +5,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
-import { calculateTransactionFees, getGatewayProcessors, getKioskTaxState, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
+import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
 import {
   address,
   member,
@@ -250,8 +250,9 @@ export async function POST(request: Request) {
 
     // Process payment if plan has a price > 0 and IQPro is configured
     let paymentSuccess = true;
+    let paymentError: string | undefined;
     let txId: string | undefined;
-    let chargedFees: Awaited<ReturnType<typeof calculateTransactionFees>> | undefined;
+    let chargedFees: Awaited<ReturnType<typeof computeFeeBreakdown>> | undefined;
 
     if (plan.price > 0 && isIQProConfigured() && gatewayId) {
       try {
@@ -301,18 +302,25 @@ export async function POST(request: Request) {
 
         // Register payment method
         let paymentMethodId: string;
+        let achToken: string | undefined;
+        let achAccountType: 'Checking' | 'Savings' | undefined;
 
         if (body.paymentMethod === 'card') {
-          const first6 = body.cardFirstSix ?? '000000';
-          const last4 = body.cardLastFour ?? '0000';
-          const maskedCard = `${first6}******${last4}`;
+          // The client must have tokenized the card via TokenEx before calling
+          // this endpoint — we never accept a raw PAN. Missing token/BIN/last-four
+          // here means the tokenize step didn't run or was skipped; fail fast
+          // rather than sending placeholder values that the gateway would reject.
+          if (!body.cardToken || !body.cardFirstSix || !body.cardLastFour || !body.cardExpiry) {
+            throw new Error('Card was not tokenized. Please re-enter your card.');
+          }
+          const maskedCard = `${body.cardFirstSix}******${body.cardLastFour}`;
 
           const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
             `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
             {
               card: {
                 token: body.cardToken,
-                expirationDate: body.cardExpiry ?? '',
+                expirationDate: body.cardExpiry,
                 maskedCard,
               },
               isDefault: true,
@@ -322,13 +330,14 @@ export async function POST(request: Request) {
           paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? '') as string;
         }
         else {
-          const accountType = body.achAccountType ?? 'Checking';
+          achAccountType = body.achAccountType ?? 'Checking';
           const tokenizeResult = await tokenizeAch({
             accountNumber: body.achAccountNumber!,
             routingNumber: body.achRoutingNumber!,
             secCode: 'WEB',
-            achAccountType: accountType,
+            achAccountType,
           });
+          achToken = tokenizeResult.achToken;
 
           const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
             `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
@@ -337,7 +346,7 @@ export async function POST(request: Request) {
                 token: tokenizeResult.achToken,
                 secCode: 'WEB',
                 routingNumber: body.achRoutingNumber,
-                accountType,
+                accountType: achAccountType,
                 checkNumber: null,
                 accountHolderAuth: { dlState: null, dlNumber: null },
               },
@@ -348,23 +357,20 @@ export async function POST(request: Request) {
           paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? '') as string;
         }
 
-        // Calculate payment amount (apply coupon discount if any)
+        // Calculate payment amount (apply coupon discount if any).
+        // Memberships are NOT taxed — only the service fee applies.
         const baseAmount = Math.round(plan.price * 100) / 100;
         const discountAmount = body.couponDiscount ? Math.round(body.couponDiscount * 100) / 100 : 0;
         const discountedBase = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
 
-        // Re-validate fees against IQPro (server-authoritative)
         const processorId = body.paymentMethod === 'card' ? cardProcessorId : achProcessorId;
         if (!processorId) {
           throw new Error(`No ${body.paymentMethod} processor configured`);
         }
-        const serverFees = await calculateTransactionFees({
-          baseAmount: discountedBase,
+        const serverFees = await computeFeeBreakdown(discountedBase, /* isTaxable */ false, {
           processorId,
-          state: getKioskTaxState(),
-          paymentMethod: body.paymentMethod,
-          creditCardBin: body.cardFirstSix,
-          token: body.paymentMethod === 'card' ? body.cardToken : undefined,
+          token: body.paymentMethod === 'card' ? body.cardToken : achToken,
+          creditCardBin: body.paymentMethod === 'card' ? body.cardFirstSix : undefined,
         });
 
         if (body.feeBreakdown && Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
@@ -372,16 +378,8 @@ export async function POST(request: Request) {
           throw new Error('Fee breakdown has changed — please refresh and try again');
         }
 
-        const paymentAdjustments: Array<Record<string, unknown>> = [];
-        if (serverFees.surchargeAmount > 0) {
-          paymentAdjustments.push({ type: 'Surcharge', percentage: null, flatAmount: serverFees.surchargeAmount });
-        }
-        if (serverFees.serviceFeesAmount > 0) {
-          paymentAdjustments.push({ type: 'ServiceFees', percentage: null, flatAmount: serverFees.serviceFeesAmount });
-        }
-        if (serverFees.convenienceFeesAmount > 0) {
-          paymentAdjustments.push({ type: 'ConvenienceFees', percentage: null, flatAmount: serverFees.convenienceFeesAmount });
-        }
+        // Service fee adjustment (applied to every transaction).
+        const paymentAdjustments: Array<Record<string, unknown>> = [buildServiceFeeAdjustment(serverFees)];
 
         const amount = serverFees.amount;
         chargedFees = serverFees;
@@ -414,17 +412,34 @@ export async function POST(request: Request) {
         };
 
         // Build the per-transaction paymentMethod block.
-        // IQPro rejects the transaction if both `customer` and `card`/`ach` are
-        // sent ("Only one payment method is allowed"). Since we always vault the
-        // card/ACH before charging, the customer reference is enough — IQPro
-        // looks up the card brand + masked number from the vault.
-        const buildTxPaymentMethod = (): Record<string, unknown> => ({
-          customer: {
-            customerId,
-            customerPaymentMethodId: paymentMethodId,
-            ...(customerBillingAddressId && { customerBillingAddressId }),
-          },
-        });
+        // IQPro rejects any transaction that sends more than one of
+        // card / ach / customer under paymentMethod ("Only one payment method
+        // is allowed").
+        // - CARD: paymentMethod.customer (pulls card details from the vault).
+        // - ACH: paymentMethod.ach (inline per Basys ACH docs). We still vault
+        //   ACH upstream for the customer record, but the charge uses the ACH
+        //   sub-object rather than the vault reference.
+        const buildTxPaymentMethod = (): Record<string, unknown> => {
+          if (body.paymentMethod === 'ach' && achToken && achAccountType) {
+            return {
+              ach: {
+                achToken,
+                secCode: 'WEB',
+                routingNumber: body.achRoutingNumber,
+                accountType: achAccountType,
+                checkNumber: null,
+                accountHolderAuth: { dlState: null, dlNumber: null },
+              },
+            };
+          }
+          return {
+            customer: {
+              customerId,
+              customerPaymentMethodId: paymentMethodId,
+              ...(customerBillingAddressId && { customerBillingAddressId }),
+            },
+          };
+        };
 
         const txRemit = {
           baseAmount: serverFees.baseAmount,
@@ -543,6 +558,7 @@ export async function POST(request: Request) {
             const initTxRaw = initTxRes.data ?? initTxRes;
             const initTxData = ((initTxRaw as Record<string, unknown>).transaction ?? initTxRaw) as Record<string, unknown>;
             txId = (initTxData.transactionId ?? initTxData.id ?? '') as string;
+            assertTransactionApproved(initTxData);
           }
 
           txId = txId ?? subscriptionId;
@@ -565,6 +581,7 @@ export async function POST(request: Request) {
           const txRaw = txRes.data ?? txRes;
           const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
           txId = (txData.transactionId ?? txData.id ?? '') as string;
+          assertTransactionApproved(txData);
         }
 
         // Record transaction
@@ -587,6 +604,7 @@ export async function POST(request: Request) {
       catch (payErr) {
         console.error('[payment/membership] Payment error:', payErr);
         paymentSuccess = false;
+        paymentError = payErr instanceof Error ? payErr.message : undefined;
       }
     }
 
@@ -594,7 +612,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: false,
         status: 'declined',
-        error: 'Payment processing failed. Please try again.',
+        error: paymentError ?? 'Payment processing failed. Please try again.',
       });
     }
 
@@ -656,10 +674,10 @@ export async function POST(request: Request) {
         feeBreakdown: chargedFees
           ? {
               baseAmount: chargedFees.baseAmount,
-              surchargeAmount: chargedFees.surchargeAmount,
-              serviceFeesAmount: chargedFees.serviceFeesAmount,
-              convenienceFeesAmount: chargedFees.convenienceFeesAmount,
               taxAmount: chargedFees.taxAmount,
+              taxPct: chargedFees.taxPct,
+              serviceFeeAmount: chargedFees.serviceFeeAmount,
+              serviceFeePct: chargedFees.serviceFeePct,
               amount: chargedFees.amount,
             }
           : undefined,

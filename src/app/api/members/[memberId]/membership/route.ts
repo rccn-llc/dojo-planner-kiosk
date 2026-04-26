@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
-import { calculateTransactionFees, getGatewayProcessors, getKioskTaxState, iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
+import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
 import { member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 export async function PATCH(
@@ -102,39 +102,27 @@ export async function PATCH(
         const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? m.iqproCustomerId) as string;
         const pmId = (custPM?.paymentMethodId ?? '') as string;
         const baseAmount = Math.round(plan.cancellationFee * 100) / 100;
-        const isCardMethod = !!custPM?.card;
-        const paymentMethodName: 'card' | 'ach' = isCardMethod ? 'card' : 'ach';
+        const paymentMethodName: 'card' | 'ach' = custPM?.card ? 'card' : 'ach';
 
         if (pmId) {
           try {
+            // Cancellation fees are NOT taxable (per Basys guidance on non-store charges).
+            // Need processorId + BIN for IQPro /calculatefees. The vaulted card
+            // exposes its masked number, so we can pull a BIN from there.
             const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
-            const processorId = isCardMethod ? cardProcessorId : achProcessorId;
+            const processorId = paymentMethodName === 'card' ? cardProcessorId : achProcessorId;
             if (!processorId) {
               throw new Error(`No ${paymentMethodName} processor configured`);
             }
-
             const cardInfo = custPM?.card as Record<string, unknown> | undefined;
             const maskedNumber = (cardInfo?.maskedNumber ?? cardInfo?.maskedCard ?? '') as string;
-            const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : undefined;
+            const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : '400000';
 
-            const serverFees = await calculateTransactionFees({
-              baseAmount,
+            const serverFees = await computeFeeBreakdown(baseAmount, /* isTaxable */ false, {
               processorId,
-              state: getKioskTaxState(),
-              paymentMethod: paymentMethodName,
-              creditCardBin: bin,
+              creditCardBin: paymentMethodName === 'card' ? bin : undefined,
             });
-
-            const paymentAdjustments: Array<Record<string, unknown>> = [];
-            if (serverFees.surchargeAmount > 0) {
-              paymentAdjustments.push({ type: 'Surcharge', percentage: null, flatAmount: serverFees.surchargeAmount });
-            }
-            if (serverFees.serviceFeesAmount > 0) {
-              paymentAdjustments.push({ type: 'ServiceFees', percentage: null, flatAmount: serverFees.serviceFeesAmount });
-            }
-            if (serverFees.convenienceFeesAmount > 0) {
-              paymentAdjustments.push({ type: 'ConvenienceFees', percentage: null, flatAmount: serverFees.convenienceFeesAmount });
-            }
+            const paymentAdjustments: Array<Record<string, unknown>> = [buildServiceFeeAdjustment(serverFees)];
 
             const feeTxPayload = {
               type: 'Sale',
@@ -145,7 +133,7 @@ export async function PATCH(
                 isTaxExempt: serverFees.taxAmount <= 0,
                 currencyCode: 'USD',
                 addTaxToTotal: true,
-                ...(paymentAdjustments.length > 0 && { paymentAdjustments }),
+                paymentAdjustments,
               },
               paymentMethod: {
                 customer: {
@@ -175,6 +163,10 @@ export async function PATCH(
             );
             const txRaw = txRes.data ?? txRes;
             const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
+            // Throws if IQPro did not approve. The outer catch logs + swallows
+            // so the cancellation itself still proceeds, but the fee amount
+            // stays 0 and no "paid" DB row / email line is written.
+            assertTransactionApproved(txData);
             cancellationTxId = (txData.transactionId ?? txData.id ?? '') as string;
             cancellationFeeCharged = serverFees.amount;
 

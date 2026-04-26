@@ -34,12 +34,9 @@ export interface MembershipPlan {
 
 export interface FeeBreakdown {
   baseAmount: number;
-  surchargeAmount: number;
-  serviceFeesAmount: number;
-  convenienceFeesAmount: number;
   taxAmount: number;
+  taxPct: number;
+  serviceFeeAmount: number;
+  serviceFeePct: number;
   amount: number;
-  isSurchargeable: boolean;
-  cardBrand: string | null;
-  cardType: string | null;
 }

@@ -18,10 +18,10 @@ interface StoreOrderReceiptParams {
   }>;
   subtotal: number;
   discountAmount: number;
-  surchargeAmount: number;
-  serviceFeesAmount: number;
-  convenienceFeesAmount: number;
   taxAmount: number;
+  taxPct: number;
+  serviceFeeAmount: number;
+  serviceFeePct: number;
   total: number;
   transactionId?: string;
 }
@@ -73,10 +73,10 @@ interface MembershipConfirmationParams {
   waiverPdfFilename?: string;
   feeBreakdown?: {
     baseAmount: number;
-    surchargeAmount: number;
-    serviceFeesAmount: number;
-    convenienceFeesAmount: number;
     taxAmount: number;
+    taxPct: number;
+    serviceFeeAmount: number;
+    serviceFeePct: number;
     amount: number;
   };
   isRecurring?: boolean;
@@ -102,10 +102,8 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
                   <td style="padding: 2px 0; color: #374151; font-size: 14px;">Base</td>
                   <td style="padding: 2px 0; color: #374151; font-size: 14px; text-align: right;">${formatCurrency(fb.baseAmount)}</td>
                 </tr>
-                ${feeRow('Surcharge', fb.surchargeAmount)}
-                ${feeRow('Service fee', fb.serviceFeesAmount)}
-                ${feeRow('Convenience fee', fb.convenienceFeesAmount)}
-                ${feeRow('Tax', fb.taxAmount)}
+                ${feeRow(`Tax (${fb.taxPct}%)`, fb.taxAmount)}
+                ${feeRow(`Service fee (${fb.serviceFeePct}%)`, fb.serviceFeeAmount)}
                 <tr>
                   <td style="padding: 8px 0 0; color: #111827; font-size: 18px; font-weight: 700; border-top: 2px solid #111827;">Total</td>
                   <td style="padding: 8px 0 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right; border-top: 2px solid #111827;">${formatCurrency(fb.amount)}</td>
@@ -510,10 +508,8 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
             <td style="padding: 4px 0; color: #374151; text-align: right;">${formatCurrency(params.subtotal)}</td>
           </tr>
           ${discountRow}
-          ${feeRow('Surcharge', params.surchargeAmount)}
-          ${feeRow('Service fee', params.serviceFeesAmount)}
-          ${feeRow('Convenience fee', params.convenienceFeesAmount)}
-          ${feeRow('Tax', params.taxAmount)}
+          ${feeRow(`Tax (${params.taxPct}%)`, params.taxAmount)}
+          ${feeRow(`Service fee (${params.serviceFeePct}%)`, params.serviceFeeAmount)}
           <tr>
             <td colspan="2" style="padding: 12px 0 0; color: #111827; font-size: 18px; font-weight: 700; border-top: 2px solid #111827;">Total</td>
             <td style="padding: 12px 0 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right; border-top: 2px solid #111827;">${formatCurrency(params.total)}</td>

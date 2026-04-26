@@ -367,15 +367,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     }
   }, [state, tokenizationConfig, tokenizationError]);
 
-  // Calculate fees on the payment page.
-  // ACH: no BIN needed — calculate immediately on entry and on any change.
-  // Card: IQPro requires a BIN; we tokenize once the iframe reports the card
-  // as valid (see the card-valid effect below) and calculate with the real BIN.
+  // Calculate admin fee on the payment page. Memberships are NOT taxed (per
+  // Basys guidance), so we only pass isTaxable: false. Both card and ACH use
+  // the same calculation (local math from env percentages).
   useEffect(() => {
     if (!state.matches('collectingPayment')) {
-      return;
-    }
-    if (state.context.paymentMethod !== 'ach') {
       return;
     }
     const plan = state.context.selectedPlan;
@@ -391,7 +387,13 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     fetch('/api/payment/calculate-fees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseAmount, paymentMethod: 'ach' }),
+      body: JSON.stringify({
+        baseAmount,
+        isTaxable: false,
+        paymentMethod: state.context.paymentMethod,
+        token: capturedTokenRef.current?.token,
+        creditCardBin: capturedTokenRef.current?.firstSix,
+      }),
     })
       .then(r => r.json() as Promise<{ success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string }>)
       .then((data) => {
@@ -415,11 +417,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value, state.context.paymentMethod, state.context.selectedPlan?.price]);
+  }, [state.value, state.context.paymentMethod, state.context.selectedPlan?.price, state.context.cardToken]);
 
   // When the user completes a valid card entry on the payment page, tokenize
-  // to capture the BIN, then calculate fees with the real BIN. The token is
-  // cached so the Place Payment button can reuse it without re-tokenizing.
+  // so the submit button can use the token directly without re-tokenizing.
+  // Fee calculation is decoupled from this.
   useEffect(() => {
     if (!state.matches('collectingPayment')) {
       return;
@@ -434,14 +436,6 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       return;
     }
     if (capturedTokenRef.current || feeCalcInFlightRef.current) {
-      return;
-    }
-    const plan = state.context.selectedPlan;
-    if (!plan) {
-      return;
-    }
-    const baseAmount = Math.round(plan.price * 100) / 100;
-    if (baseAmount <= 0) {
       return;
     }
 
@@ -461,32 +455,9 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
         send({ type: 'UPDATE_FIELD', field: 'cardToken', value: result.token });
         send({ type: 'UPDATE_FIELD', field: 'cardFirstSix', value: result.firstSix ?? '' });
         send({ type: 'UPDATE_FIELD', field: 'cardLastFour', value: result.lastFour ?? '' });
-        send({ type: 'CALCULATE_FEES_START' });
-        const res = await fetch('/api/payment/calculate-fees', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            baseAmount,
-            paymentMethod: 'card',
-            creditCardBin: result.firstSix,
-            token: result.token,
-          }),
-        });
-        const data = await res.json() as { success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string };
-        if (cancelled) {
-          return;
-        }
-        if (data.success && data.feeBreakdown) {
-          send({ type: 'CALCULATE_FEES_SUCCESS', feeBreakdown: data.feeBreakdown });
-        }
-        else {
-          send({ type: 'CALCULATE_FEES_FAILURE', error: data.error ?? 'Fee calculation failed' });
-        }
       }
       catch (err) {
-        if (!cancelled) {
-          send({ type: 'CALCULATE_FEES_FAILURE', error: err instanceof Error ? err.message : 'Fee calculation failed' });
-        }
+        console.error('[MembershipFlow] Tokenization failed:', err);
       }
       finally {
         feeCalcInFlightRef.current = false;
@@ -1479,17 +1450,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                       const planPrice = state.context.selectedPlan.price;
                       const rows: Array<{ label: string; amount: number }> = [];
                       if (fb) {
-                        if (fb.surchargeAmount > 0) {
-                          rows.push({ label: 'Surcharge', amount: fb.surchargeAmount });
-                        }
-                        if (fb.serviceFeesAmount > 0) {
-                          rows.push({ label: 'Service fee', amount: fb.serviceFeesAmount });
-                        }
-                        if (fb.convenienceFeesAmount > 0) {
-                          rows.push({ label: 'Convenience fee', amount: fb.convenienceFeesAmount });
-                        }
                         if (fb.taxAmount > 0) {
-                          rows.push({ label: 'Tax', amount: fb.taxAmount });
+                          rows.push({ label: `Tax (${fb.taxPct}%)`, amount: fb.taxAmount });
+                        }
+                        if (fb.serviceFeeAmount > 0) {
+                          rows.push({ label: `Service fee (${fb.serviceFeePct}%)`, amount: fb.serviceFeeAmount });
                         }
                       }
                       const total = fb ? fb.amount : planPrice;

@@ -3,7 +3,7 @@
 interface KioskActionButtonProps {
   label: string;
   onClick: () => void;
-  variant?: 'default' | 'dark' | 'green' | 'blue';
+  variant?: 'default' | 'dark' | 'green' | 'blue' | 'lightBlue';
 }
 
 export function KioskActionButton({ label, onClick, variant = 'default' }: KioskActionButtonProps) {
@@ -17,12 +17,14 @@ export function KioskActionButton({ label, onClick, variant = 'default' }: Kiosk
         return 'border-[var(--color-green-200)] bg-[var(--color-green-200)] hover:bg-[var(--color-green-300)]';
       case 'blue':
         return 'border-[var(--color-blue-500)] bg-[var(--color-blue-500)] hover:bg-[var(--color-blue-600)]';
+      case 'lightBlue':
+        return 'border-[#99ccff] bg-[#99ccff] hover:bg-[#7ab8f0]';
       default:
         return 'border-black bg-white hover:bg-gray-100';
     }
   })();
 
-  const textClass = (variant === 'default' || variant === 'green')
+  const textClass = (variant === 'default' || variant === 'lightBlue')
     ? 'text-3xl font-bold text-black'
     : 'text-3xl font-bold text-white';
 
