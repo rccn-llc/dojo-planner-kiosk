@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
-import { iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
+import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
 import { member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 export async function PATCH(
@@ -101,33 +101,74 @@ export async function PATCH(
         const custPM = subPM?.customerPaymentMethod as Record<string, unknown> | undefined;
         const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? m.iqproCustomerId) as string;
         const pmId = (custPM?.paymentMethodId ?? '') as string;
-        const amount = Math.round(plan.cancellationFee * 100) / 100;
+        const baseAmount = Math.round(plan.cancellationFee * 100) / 100;
+        const paymentMethodName: 'card' | 'ach' = custPM?.card ? 'card' : 'ach';
 
         if (pmId) {
-          const feeTxPayload = {
-            type: 'Sale',
-            remit: {
-              baseAmount: amount,
-              totalAmount: amount,
-              currencyCode: 'USD',
-            },
-            paymentMethod: {
-              customer: {
-                customerId,
-                customerPaymentMethodId: pmId,
-              },
-            },
-            caption: 'Cancellation fee',
-          };
           try {
+            // Cancellation fees are NOT taxable (per Basys guidance on non-store charges).
+            // Need processorId + BIN for IQPro /calculatefees. The vaulted card
+            // exposes its masked number, so we can pull a BIN from there.
+            const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
+            const processorId = paymentMethodName === 'card' ? cardProcessorId : achProcessorId;
+            if (!processorId) {
+              throw new Error(`No ${paymentMethodName} processor configured`);
+            }
+            const cardInfo = custPM?.card as Record<string, unknown> | undefined;
+            const maskedNumber = (cardInfo?.maskedNumber ?? cardInfo?.maskedCard ?? '') as string;
+            const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : '400000';
+
+            const serverFees = await computeFeeBreakdown(baseAmount, /* isTaxable */ false, {
+              processorId,
+              creditCardBin: paymentMethodName === 'card' ? bin : undefined,
+            });
+            const paymentAdjustments: Array<Record<string, unknown>> = [buildServiceFeeAdjustment(serverFees)];
+
+            const feeTxPayload = {
+              type: 'Sale',
+              remit: {
+                baseAmount: serverFees.baseAmount,
+                taxAmount: serverFees.taxAmount,
+                // IQPro requires isTaxExempt=true when calculated tax is 0.
+                isTaxExempt: serverFees.taxAmount <= 0,
+                currencyCode: 'USD',
+                addTaxToTotal: true,
+                paymentAdjustments,
+              },
+              paymentMethod: {
+                customer: {
+                  customerId,
+                  customerPaymentMethodId: pmId,
+                },
+              },
+              lineItems: [
+                {
+                  name: 'Cancellation fee',
+                  description: `Cancellation fee — ${plan.name}`,
+                  quantity: 1,
+                  unitPrice: baseAmount,
+                  discount: 0,
+                  freightAmount: 0,
+                  unitOfMeasureId: 1,
+                  localTaxPercent: 0,
+                  nationalTaxPercent: 0,
+                },
+              ],
+              caption: 'Cancellation fee',
+            };
+
             const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
               `/api/gateway/${gatewayId}/transaction`,
               feeTxPayload,
             );
             const txRaw = txRes.data ?? txRes;
             const txData = ((txRaw as Record<string, unknown>).transaction ?? txRaw) as Record<string, unknown>;
+            // Throws if IQPro did not approve. The outer catch logs + swallows
+            // so the cancellation itself still proceeds, but the fee amount
+            // stays 0 and no "paid" DB row / email line is written.
+            assertTransactionApproved(txData);
             cancellationTxId = (txData.transactionId ?? txData.id ?? '') as string;
-            cancellationFeeCharged = amount;
+            cancellationFeeCharged = serverFees.amount;
 
             await db.insert(transaction).values({
               id: randomUUID(),
@@ -135,9 +176,9 @@ export async function PATCH(
               memberId,
               memberMembershipId: body.memberMembershipId,
               transactionType: 'cancellation_fee',
-              amount,
+              amount: serverFees.amount,
               status: 'paid',
-              paymentMethod: custPM?.card ? 'card' : 'ach',
+              paymentMethod: paymentMethodName,
               description: `Cancellation fee — ${plan.name}`,
               iqproTransactionId: cancellationTxId,
               processedAt: now,

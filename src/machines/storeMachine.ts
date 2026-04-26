@@ -53,7 +53,8 @@ const emptyContext: StoreContext = {
   cartItems: [],
   discountCode: '',
   discountAmount: 0,
-  adminFeeRate: 0.0475,
+  feeBreakdown: null,
+  isCalculatingFees: false,
   memberSearchPhone: '',
   firstName: '',
   lastName: '',
@@ -329,6 +330,25 @@ export const storeMachine = createMachine({
           }),
         },
         LOOKUP_MEMBER: 'lookingUpMember',
+        CALCULATE_FEES_START: {
+          actions: assign({
+            isCalculatingFees: true,
+            feeBreakdown: null,
+          }),
+        },
+        CALCULATE_FEES_SUCCESS: {
+          actions: assign(({ event }) => ({
+            isCalculatingFees: false,
+            feeBreakdown: event.feeBreakdown,
+          })),
+        },
+        CALCULATE_FEES_FAILURE: {
+          actions: assign(({ event, context }) => ({
+            isCalculatingFees: false,
+            feeBreakdown: null,
+            errors: { ...context.errors, fees: event.error } as Record<string, string>,
+          })),
+        },
         PLACE_ORDER: 'validatingCheckout',
         RESET: {
           target: 'browsing',

@@ -17,8 +17,11 @@ interface StoreOrderReceiptParams {
     price: number;
   }>;
   subtotal: number;
-  adminFee: number;
   discountAmount: number;
+  taxAmount: number;
+  taxPct: number;
+  serviceFeeAmount: number;
+  serviceFeePct: number;
   total: number;
   transactionId?: string;
 }
@@ -68,6 +71,15 @@ interface MembershipConfirmationParams {
   planContractLength?: string;
   waiverPdfBuffer?: Buffer;
   waiverPdfFilename?: string;
+  feeBreakdown?: {
+    baseAmount: number;
+    taxAmount: number;
+    taxPct: number;
+    serviceFeeAmount: number;
+    serviceFeePct: number;
+    amount: number;
+  };
+  isRecurring?: boolean;
 }
 
 export async function sendMembershipConfirmation(params: MembershipConfirmationParams): Promise<boolean> {
@@ -79,6 +91,30 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
   try {
     const priceStr = params.planPrice === 0 ? 'Free' : `$${params.planPrice.toFixed(2)}`;
     const frequencyStr = params.planFrequency === 'None' ? '' : ` / ${params.planFrequency.toLowerCase()}`;
+    const fb = params.feeBreakdown;
+    const dueTodayBlock = fb
+      ? `
+          <tr>
+            <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
+              <p style="margin: 0 0 8px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Due Today</p>
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="padding: 2px 0; color: #374151; font-size: 14px;">Base</td>
+                  <td style="padding: 2px 0; color: #374151; font-size: 14px; text-align: right;">${formatCurrency(fb.baseAmount)}</td>
+                </tr>
+                ${feeRow(`Tax (${fb.taxPct}%)`, fb.taxAmount)}
+                ${feeRow(`Service fee (${fb.serviceFeePct}%)`, fb.serviceFeeAmount)}
+                <tr>
+                  <td style="padding: 8px 0 0; color: #111827; font-size: 18px; font-weight: 700; border-top: 2px solid #111827;">Total</td>
+                  <td style="padding: 8px 0 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right; border-top: 2px solid #111827;">${formatCurrency(fb.amount)}</td>
+                </tr>
+              </table>
+              ${params.isRecurring
+                ? `<p style="margin: 12px 0 0; color: #9ca3af; font-size: 12px;">Future billing cycles will include applicable fees and tax at that time's rate.</p>`
+                : ''}
+            </td>
+          </tr>`
+      : '';
 
     const html = `
 <!DOCTYPE html>
@@ -123,6 +159,7 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
             </td>
           </tr>`
             : ''}
+          ${dueTodayBlock}
         </table>
 
         ${params.waiverPdfBuffer ? '<p style="margin: 0 0 24px; color: #6b7280; font-size: 14px;">Your signed waiver is attached to this email as a PDF.</p>' : ''}
@@ -401,6 +438,16 @@ function formatCurrency(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
+function feeRow(label: string, amount: number): string {
+  if (!amount || amount <= 0) {
+    return '';
+  }
+  return `<tr>
+    <td colspan="2" style="padding: 4px 0; color: #6b7280; font-size: 14px;">${label}</td>
+    <td style="padding: 4px 0; color: #6b7280; font-size: 14px; text-align: right;">${formatCurrency(amount)}</td>
+  </tr>`;
+}
+
 function buildReceiptHtml(params: StoreOrderReceiptParams): string {
   const itemRows = params.items.map(item => `
     <tr>
@@ -460,11 +507,9 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
             <td colspan="2" style="padding: 4px 0; color: #374151;">Subtotal</td>
             <td style="padding: 4px 0; color: #374151; text-align: right;">${formatCurrency(params.subtotal)}</td>
           </tr>
-          <tr>
-            <td colspan="2" style="padding: 4px 0; color: #6b7280; font-size: 14px;">Admin fee (4.75%)</td>
-            <td style="padding: 4px 0; color: #6b7280; font-size: 14px; text-align: right;">${formatCurrency(params.adminFee)}</td>
-          </tr>
           ${discountRow}
+          ${feeRow(`Tax (${params.taxPct}%)`, params.taxAmount)}
+          ${feeRow(`Service fee (${params.serviceFeePct}%)`, params.serviceFeeAmount)}
           <tr>
             <td colspan="2" style="padding: 12px 0 0; color: #111827; font-size: 18px; font-weight: 700; border-top: 2px solid #111827;">Total</td>
             <td style="padding: 12px 0 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right; border-top: 2px solid #111827;">${formatCurrency(params.total)}</td>
