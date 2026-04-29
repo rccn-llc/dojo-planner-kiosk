@@ -1,5 +1,5 @@
 // XState machine types for kiosk user flows
-import type { Member, MembershipPlan, Program } from '../lib/types';
+import type { FeeBreakdown, Member, MembershipPlan, Program } from '../lib/types';
 
 // Member check-in machine context
 export interface CheckinMember {
@@ -149,6 +149,10 @@ export interface MembershipContext {
   achAccountNumber: string;
   achAccountType: 'Checking' | 'Savings';
 
+  // Fee breakdown (computed by IQPro calculatefees before charge)
+  feeBreakdown: FeeBreakdown | null;
+  isCalculatingFees: boolean;
+
   // Form validation and state
   errors: Record<string, string>;
   isSubmitting: boolean;
@@ -215,6 +219,9 @@ export type MembershipEvent
       };
     }
     | { type: 'MEMBER_NOT_FOUND' }
+    | { type: 'CALCULATE_FEES_START' }
+    | { type: 'CALCULATE_FEES_SUCCESS'; feeBreakdown: FeeBreakdown }
+    | { type: 'CALCULATE_FEES_FAILURE'; error: string }
     | { type: 'PAYMENT_SUCCESS' }
     | { type: 'PAYMENT_FAILED'; error?: string }
     | { type: 'TRY_AGAIN' }
@@ -252,7 +259,8 @@ export interface StoreContext {
   cartItems: CartItem[];
   discountCode: string;
   discountAmount: number;
-  adminFeeRate: number; // 0.0475 (4.75%)
+  feeBreakdown: FeeBreakdown | null;
+  isCalculatingFees: boolean;
   // Checkout buyer details
   memberSearchPhone: string;
   firstName: string;
@@ -297,6 +305,9 @@ export type StoreEvent
     | { type: 'APPLY_DISCOUNT' }
     | { type: 'DISCOUNT_APPLIED'; discountAmount: number }
     | { type: 'DISCOUNT_FAILED'; error: string }
+    | { type: 'CALCULATE_FEES_START' }
+    | { type: 'CALCULATE_FEES_SUCCESS'; feeBreakdown: FeeBreakdown }
+    | { type: 'CALCULATE_FEES_FAILURE'; error: string }
     | { type: 'PROCEED_TO_CHECKOUT' }
     | { type: 'BACK_TO_CART' }
     | { type: 'LOOKUP_MEMBER' }

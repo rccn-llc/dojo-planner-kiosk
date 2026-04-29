@@ -86,6 +86,11 @@ IQPRO_OAUTH_URL=...
 IQPRO_BASE_URL=...          # e.g. https://sandbox.api.basyspro.com/iqsaas/v1
 IQPRO_GATEWAY_ID=...
 
+# Sales-tax % applied to store items only (stand-in for per-org DB column)
+KIOSK_TAX_STATE_PCT=3.75
+# Service fee % applied to all transactions; flatAmount computed by IQPro calculatefees
+KIOSK_SERVICE_FEE_PCT=3.75
+
 # Email (for receipt sending)
 RESEND_API_KEY=...
 ```

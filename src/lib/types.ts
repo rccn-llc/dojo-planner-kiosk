@@ -31,3 +31,12 @@ export interface MembershipPlan {
   trialPeriodDays?: number;
   isActive: boolean;
 }
+
+export interface FeeBreakdown {
+  baseAmount: number;
+  taxAmount: number;
+  taxPct: number;
+  serviceFeeAmount: number;
+  serviceFeePct: number;
+  amount: number;
+}
