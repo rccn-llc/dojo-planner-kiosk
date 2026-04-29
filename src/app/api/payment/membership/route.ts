@@ -72,6 +72,10 @@ function sanitizePhone(phone?: string): string | undefined {
   return trimmed.slice(0, 10) || undefined;
 }
 
+function sanitizeForLog(value: unknown): string {
+  return String(value).replace(/[\r\n]+/g, '');
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json() as MembershipPaymentBody;
@@ -374,7 +378,10 @@ export async function POST(request: Request) {
         });
 
         if (body.feeBreakdown && Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
-          console.error('[payment/membership] Fee mismatch — client:', body.feeBreakdown.amount, 'server:', serverFees.amount);
+          const safeClientFeeAmount = Number.isFinite(body.feeBreakdown.amount)
+            ? body.feeBreakdown.amount
+            : 'invalid';
+          console.error('[payment/membership] Fee mismatch — client:', sanitizeForLog(safeClientFeeAmount), 'server:', serverFees.amount);
           throw new Error('Fee breakdown has changed — please refresh and try again');
         }
 

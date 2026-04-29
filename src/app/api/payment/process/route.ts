@@ -65,6 +65,10 @@ function sanitizePhone(phone?: string): string | undefined {
   return trimmed.slice(0, 10) || undefined;
 }
 
+function sanitizeForLog(value: unknown): string {
+  return String(value).replace(/[\r\n]/g, '');
+}
+
 /**
  * POST /api/payment/process
  *
@@ -223,7 +227,12 @@ export async function POST(request: Request) {
     });
 
     if (Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
-      console.error('[payment/process] Fee mismatch — client:', body.feeBreakdown.amount, 'server:', serverFees.amount);
+      console.error(
+        '[payment/process] Fee mismatch — client:',
+        sanitizeForLog(body.feeBreakdown.amount),
+        'server:',
+        sanitizeForLog(serverFees.amount),
+      );
       return NextResponse.json<ProcessStoreOrderResult>(
         { success: false, status: 'declined', error: 'Fee breakdown has changed — please refresh and try again' },
         { status: 400 },
