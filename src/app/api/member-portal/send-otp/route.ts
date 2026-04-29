@@ -60,8 +60,9 @@ export async function POST(request: Request) {
       });
     }
     else {
-      // Development: log OTP to console
-      console.warn(`[OTP] Code for ${m.email}: ${code}`);
+      // Development: log OTP to console (strip CR/LF to prevent log injection)
+      const safeEmail = String(m.email).replace(/[\r\n]+/g, '');
+      console.warn(`[OTP] Code for ${safeEmail}: ${code}`);
     }
 
     // Mask email for response

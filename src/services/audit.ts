@@ -56,7 +56,9 @@ export class KioskAuditService {
 
       // For development, just log to console
       // TODO: Send to API route for proper database logging
-      console.warn('Kiosk Audit:', JSON.stringify(auditEntry, null, 2));
+      // Strip CR/LF from the serialized audit entry to prevent log injection.
+      const safeEntry = JSON.stringify(auditEntry, null, 2).replace(/[\r\n]+/g, ' ');
+      console.warn('Kiosk Audit:', safeEntry);
 
       // In production, this would be:
       // await fetch('/api/audit', {

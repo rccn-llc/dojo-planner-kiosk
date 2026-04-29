@@ -124,7 +124,7 @@ export async function POST(request: Request) {
 
     const customerData = customerRes.data ?? customerRes;
     const customerId = (customerData as Record<string, unknown>).customerId as string;
-    console.warn('[payment/process] Customer created:', customerId);
+    console.warn('[payment/process] Customer created:', sanitizeForLog(customerId));
 
     // Get the customer's billing address ID so the ACH processor can resolve the name
     const customerDetail = await iqproGet<{ data?: Record<string, unknown> }>(
@@ -179,7 +179,7 @@ export async function POST(request: Request) {
         achAccountType,
       });
       achToken = tokenizeResult.achToken;
-      console.warn('[payment/process] ACH tokenization result:', JSON.stringify(tokenizeResult));
+      console.warn('[payment/process] ACH tokenization result:', sanitizeForLog(JSON.stringify(tokenizeResult)));
 
       const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
         `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
@@ -198,7 +198,7 @@ export async function POST(request: Request) {
 
       const pmData = (pmRes.data ?? pmRes) as Record<string, unknown>;
       paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? pmData.customerPaymentId ?? '') as string;
-      console.warn('[payment/process] ACH paymentMethodId:', paymentMethodId);
+      console.warn('[payment/process] ACH paymentMethodId:', sanitizeForLog(paymentMethodId));
     }
 
     // ── Step 3: Re-validate fee breakdown server-side ───────────────────────

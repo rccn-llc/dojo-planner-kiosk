@@ -132,6 +132,11 @@ export async function getTokenizationConfig(clientOrigin: string): Promise<Token
 
 const isDev = process.env.NODE_ENV === 'development';
 
+/** Strip CR/LF to prevent log-injection (CodeQL js/log-injection). */
+function sanitizeForLog(value: unknown): string {
+  return String(value).replace(/[\r\n]+/g, '');
+}
+
 function devLog(...args: unknown[]) {
   if (isDev) {
     console.warn(...args);
@@ -148,8 +153,8 @@ export async function iqproPost<T = Record<string, unknown>>(
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
 
-  devLog('[IQPro] POST', path);
-  devLog('[IQPro] POST request body:', JSON.stringify(body, null, 2));
+  devLog('[IQPro] POST', sanitizeForLog(path));
+  devLog('[IQPro] POST request body:', sanitizeForLog(JSON.stringify(body, null, 2)));
 
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
@@ -162,13 +167,13 @@ export async function iqproPost<T = Record<string, unknown>>(
 
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
-    console.error(`[IQPro] POST ${path} FAILED (${res.status}):`, errorBody);
+    console.error(`[IQPro] POST ${sanitizeForLog(path)} FAILED (${res.status}):`, sanitizeForLog(errorBody));
     throw new Error(`IQPro API ${path} failed: ${res.status} ${errorBody}`);
   }
 
   const text = await res.text();
   const json = text ? JSON.parse(text) as T : {} as T;
-  devLog(`[IQPro] POST ${path} response (${res.status}):`, text || '(empty body)');
+  devLog(`[IQPro] POST ${sanitizeForLog(path)} response (${res.status}):`, sanitizeForLog(text || '(empty body)'));
   return json;
 }
 
@@ -181,7 +186,7 @@ export async function iqproGet<T = Record<string, unknown>>(
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
 
-  devLog('[IQPro] GET', path);
+  devLog('[IQPro] GET', sanitizeForLog(path));
 
   const res = await fetch(`${baseUrl}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -189,13 +194,13 @@ export async function iqproGet<T = Record<string, unknown>>(
 
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
-    console.error(`[IQPro] GET ${path} FAILED (${res.status}):`, errorBody);
+    console.error(`[IQPro] GET ${sanitizeForLog(path)} FAILED (${res.status}):`, sanitizeForLog(errorBody));
     throw new Error(`IQPro API GET ${path} failed: ${res.status}`);
   }
 
   const text = await res.text();
   const json = text ? JSON.parse(text) as T : {} as T;
-  devLog(`[IQPro] GET ${path} response (${res.status}):`, text || '(empty body)');
+  devLog(`[IQPro] GET ${sanitizeForLog(path)} response (${res.status}):`, sanitizeForLog(text || '(empty body)'));
   return json;
 }
 
@@ -209,8 +214,8 @@ export async function iqproPut<T = Record<string, unknown>>(
   const token = await getOAuthToken();
   const baseUrl = process.env.IQPRO_BASE_URL!;
 
-  devLog('[IQPro] PUT', path);
-  devLog('[IQPro] PUT request body:', JSON.stringify(body, null, 2));
+  devLog('[IQPro] PUT', sanitizeForLog(path));
+  devLog('[IQPro] PUT request body:', sanitizeForLog(JSON.stringify(body, null, 2)));
 
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'PUT',
@@ -223,13 +228,13 @@ export async function iqproPut<T = Record<string, unknown>>(
 
   if (!res.ok) {
     const errorBody = await res.text().catch(() => '');
-    console.error(`[IQPro] PUT ${path} FAILED (${res.status}):`, errorBody);
+    console.error(`[IQPro] PUT ${sanitizeForLog(path)} FAILED (${res.status}):`, sanitizeForLog(errorBody));
     throw new Error(`IQPro API PUT ${path} failed: ${res.status} ${errorBody}`);
   }
 
   const text = await res.text();
   const json = text ? JSON.parse(text) as T : {} as T;
-  devLog(`[IQPro] PUT ${path} response (${res.status}):`, text || '(empty body)');
+  devLog(`[IQPro] PUT ${sanitizeForLog(path)} response (${res.status}):`, sanitizeForLog(text || '(empty body)'));
   return json;
 }
 
