@@ -504,7 +504,7 @@ export async function tokenizeAch(params: TokenizeAchParams): Promise<TokenizeAc
     body: JSON.stringify({
       accountNumber: params.accountNumber,
       routingNumber: params.routingNumber,
-      secCode: params.secCode ?? 'WEB',
+      secCode: params.secCode ?? 'PPD',
       achAccountType: params.achAccountType ?? 'Checking',
     }),
   });

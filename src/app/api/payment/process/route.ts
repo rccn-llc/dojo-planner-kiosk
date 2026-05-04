@@ -175,7 +175,6 @@ export async function POST(request: Request) {
       const tokenizeResult = await tokenizeAch({
         accountNumber: body.achAccountNumber!,
         routingNumber: body.achRoutingNumber!,
-        secCode: 'WEB',
         achAccountType,
       });
       achToken = tokenizeResult.achToken;
@@ -186,7 +185,7 @@ export async function POST(request: Request) {
         {
           ach: {
             token: achToken,
-            secCode: 'WEB',
+            secCode: 'PPD',
             routingNumber: body.achRoutingNumber,
             accountType: achAccountType,
             checkNumber: null,
@@ -265,7 +264,7 @@ export async function POST(request: Request) {
       txPaymentMethod = {
         ach: {
           achToken,
-          secCode: 'WEB',
+          secCode: 'PPD',
           routingNumber: body.achRoutingNumber,
           accountType: achAccountType,
           checkNumber: null,
