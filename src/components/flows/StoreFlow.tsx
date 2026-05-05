@@ -254,6 +254,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           return;
         }
 
+        const isSavedMethod = ctx.paymentMethod === 'saved';
+        // The /process endpoint accepts 'card' | 'ach'; for 'saved' it's
+        // ignored when savedPaymentMatchToken is present, but send a placeholder
+        // so the field's contract holds.
+        const wirePaymentMethod: 'card' | 'ach' = ctx.paymentMethod === 'ach' ? 'ach' : 'card';
+
         const body = {
           firstName: ctx.firstName,
           lastName: ctx.lastName,
@@ -265,18 +271,21 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           state: ctx.state,
           zip: ctx.zip,
           country: ctx.country,
-          paymentMethod: ctx.paymentMethod,
-          // Card
-          cardholderName: ctx.cardholderName || undefined,
-          cardToken: cardToken || undefined,
-          cardFirstSix: cardFirstSix || undefined,
-          cardLastFour: cardLastFour || undefined,
-          cardExpiry: ctx.cardExpiry || undefined,
-          // ACH
-          achAccountHolder: ctx.achAccountHolder || undefined,
-          achRoutingNumber: ctx.achRoutingNumber || undefined,
-          achAccountNumber: ctx.achAccountNumber || undefined,
-          achAccountType: ctx.achAccountType,
+          paymentMethod: wirePaymentMethod,
+          // Card (omitted on saved-payment path)
+          cardholderName: isSavedMethod ? undefined : (ctx.cardholderName || undefined),
+          cardToken: isSavedMethod ? undefined : (cardToken || undefined),
+          cardFirstSix: isSavedMethod ? undefined : (cardFirstSix || undefined),
+          cardLastFour: isSavedMethod ? undefined : (cardLastFour || undefined),
+          cardExpiry: isSavedMethod ? undefined : (ctx.cardExpiry || undefined),
+          // ACH (omitted on saved-payment path)
+          achAccountHolder: isSavedMethod ? undefined : (ctx.achAccountHolder || undefined),
+          achRoutingNumber: isSavedMethod ? undefined : (ctx.achRoutingNumber || undefined),
+          achAccountNumber: isSavedMethod ? undefined : (ctx.achAccountNumber || undefined),
+          achAccountType: isSavedMethod ? undefined : ctx.achAccountType,
+          // Vaulted-customer charge — server resolves customerId + paymentMethodId
+          // from this signed token.
+          savedPaymentMatchToken: isSavedMethod ? (ctx.selectedSavedMatchToken ?? undefined) : undefined,
           // Order totals (for receipt email + server validation)
           subtotal,
           discountAmount: ctx.discountAmount,
@@ -359,34 +368,62 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
-  // Handle member lookup when entering lookingUpMember state
+  // Handle member lookup when entering lookingUpMember state.
+  // Runs in parallel:
+  //   1. /api/members/lookup — local DB; fills in buyer details.
+  //   2. /api/payment/saved-payment-method/search — IQPro vault; if matches
+  //      come back, populate savedMatches so the "Saved card / bank" payment
+  //      option renders. The user picks the right customer from the chooser
+  //      that appears under the payment-method buttons.
   useEffect(() => {
     if (!state.matches('lookingUpMember')) {
       return;
     }
-    const phone = state.context.memberSearchPhone;
-    fetch('/api/members/lookup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
-    })
-      .then(r => r.json())
-      .then((data) => {
-        if (data.found && data.members?.length > 0) {
-          const m = data.members[0];
-          send({
-            type: 'MEMBER_FOUND',
-            firstName: m.firstName,
-            lastName: m.lastName,
-            email: '',
-            phone,
-          });
+    const rawPhone = state.context.memberSearchPhone;
+    const phone = sanitizePhoneInput(rawPhone);
+
+    // Track this phone in the saved-search context so a stale prior result
+    // doesn't linger when a new lookup is run.
+    send({ type: 'SAVED_LOOKUP_START', phone });
+
+    Promise.allSettled([
+      fetch('/api/members/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: rawPhone }),
+      }).then(r => r.json()),
+      fetch(`/api/payment/saved-payment-method/search?phone=${encodeURIComponent(phone)}`)
+        .then(r => r.json() as Promise<{ matches?: Array<{ matchToken: string; fullName: string }>; error?: string }>),
+    ])
+      .then(([memberRes, vaultRes]) => {
+        if (memberRes.status === 'fulfilled') {
+          const data = memberRes.value as { found?: boolean; members?: Array<{ firstName: string; lastName: string }> };
+          if (data.found && data.members && data.members.length > 0) {
+            const m = data.members[0];
+            send({
+              type: 'MEMBER_FOUND',
+              firstName: m!.firstName,
+              lastName: m!.lastName,
+              email: '',
+              phone: rawPhone,
+            });
+          }
+          else {
+            send({ type: 'MEMBER_NOT_FOUND' });
+          }
         }
         else {
           send({ type: 'MEMBER_NOT_FOUND' });
         }
-      })
-      .catch(() => send({ type: 'MEMBER_NOT_FOUND' }));
+
+        if (vaultRes.status === 'fulfilled') {
+          const data = vaultRes.value;
+          send({ type: 'SAVED_LOOKUP_RESULT', matches: data.matches ?? [] });
+        }
+        else {
+          send({ type: 'SAVED_LOOKUP_FAILED' });
+        }
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
@@ -405,13 +442,20 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     }
     let cancelled = false;
     send({ type: 'CALCULATE_FEES_START' });
+    // For 'saved' payment method we don't yet know whether the chosen vault
+    // entry is a card or ACH (server holds that). Service fee % is the same
+    // either way, so default to 'card' for the fee preview; the server
+    // re-validates against the actual processor at charge time.
+    const previewPaymentMethod = state.context.paymentMethod === 'saved'
+      ? 'card'
+      : state.context.paymentMethod;
     fetch('/api/payment/calculate-fees', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         baseAmount,
         isTaxable: true,
-        paymentMethod: state.context.paymentMethod,
+        paymentMethod: previewPaymentMethod,
         token: capturedTokenRef.current?.token,
         creditCardBin: capturedTokenRef.current?.firstSix,
       }),
@@ -897,10 +941,14 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
               {/* Left: buyer form */}
               <div className="space-y-6 lg:col-span-3">
-                {/* Member search */}
-                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-5">
-                  <p className="mb-3 text-base font-semibold tracking-wide text-gray-500 uppercase">
-                    Already a member? We'll fill in your details.
+                {/* Member search — looks up a vaulted IQPro customer by
+                    phone. When matches come back, the chooser renders inline
+                    below the search bar. Picking a name selects that vaulted
+                    customer + auto-switches the payment method to "saved",
+                    so no buyer fields need to be filled. */}
+                <div className="space-y-3 rounded-2xl border border-gray-200 bg-gray-50 p-5">
+                  <p className="text-base font-semibold tracking-wide text-gray-500 uppercase">
+                    Already a member?
                   </p>
                   <div className="flex gap-3">
                     <input
@@ -922,181 +970,259 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       {state.matches('lookingUpMember') ? 'Looking up…' : 'Look Up'}
                     </button>
                   </div>
+
+                  {/* No-results alert — shows only after both lookups have
+                      completed (member DB + IQPro vault) and neither found
+                      a match. Tells the user they need to fill out the form. */}
+                  {state.context.savedSearchPerformed
+                    && state.context.savedMatches.length === 0
+                    && state.context.memberLookupNotFound
+                    && !state.context.selectedSavedMatchToken && (
+                    <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-base text-amber-900">
+                      We couldn't find a member with that phone number. Please fill out the form below to continue.
+                    </div>
+                  )}
+
+                  {/* Vault search results — chooser of customers matching the
+                      entered phone. Tapping a name selects that vaulted
+                      customer and auto-switches paymentMethod to 'saved'. */}
+                  {state.context.savedMatches.length > 0 && !state.context.selectedSavedMatchToken && (
+                    <div className="space-y-2 pt-2">
+                      <p className="text-sm font-semibold tracking-wide text-gray-500 uppercase">
+                        Choose the customer
+                      </p>
+                      {state.context.savedMatches.map(m => (
+                        <button
+                          key={m.matchToken}
+                          type="button"
+                          onClick={() => send({
+                            type: 'SAVED_MATCH_SELECTED',
+                            matchToken: m.matchToken,
+                            fullName: m.fullName,
+                          })}
+                          className="min-h-14 w-full cursor-pointer rounded-xl border-2 border-gray-300 bg-white px-4 py-3 text-left text-lg font-bold text-black transition-colors hover:border-black"
+                        >
+                          {m.fullName}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {state.context.selectedSavedMatchToken && (
+                    <div className="flex items-center justify-between gap-3 rounded-xl border-2 border-black bg-black p-4 text-white">
+                      <div>
+                        <p className="text-sm tracking-wide text-gray-300 uppercase">Charging</p>
+                        <p className="text-lg font-bold">{state.context.selectedSavedFullName}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => send({ type: 'SAVED_MATCH_CLEARED' })}
+                        className="cursor-pointer rounded-lg border-2 border-white bg-transparent px-3 py-2 text-base font-bold text-white hover:bg-white hover:text-black"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {/* Buyer details */}
-                <p className="text-xl font-semibold text-black">Buyer Details</p>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className={labelClass} htmlFor="firstName">
-                      First name
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="firstName"
-                      type="text"
-                      value={state.context.firstName}
-                      onChange={e => handleInputChange('firstName', e.target.value)}
-                      className={inputClass('firstName')}
-                      placeholder="First name"
-                    />
-                    {state.context.errors?.firstName && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.firstName}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className={labelClass} htmlFor="lastName">
-                      Last name
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="lastName"
-                      type="text"
-                      value={state.context.lastName}
-                      onChange={e => handleInputChange('lastName', e.target.value)}
-                      className={inputClass('lastName')}
-                      placeholder="Last name"
-                    />
-                    {state.context.errors?.lastName && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.lastName}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className={labelClass} htmlFor="email">
-                      Email address
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="email"
-                      type="email"
-                      value={state.context.email}
-                      onChange={e => handleInputChange('email', e.target.value)}
-                      className={inputClass('email')}
-                      placeholder="email@example.com"
-                    />
-                    {state.context.errors?.email && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.email}</p>
-                    )}
-                  </div>
-                  <div>
-                    <label className={labelClass} htmlFor="phoneNumber">
-                      Phone number
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="phoneNumber"
-                      type="tel"
-                      value={state.context.phoneNumber}
-                      onChange={e => handleInputChange('phoneNumber', e.target.value)}
-                      className={inputClass('phoneNumber')}
-                      placeholder="(555) 123-4567"
-                    />
-                    {state.context.errors?.phoneNumber && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.phoneNumber}</p>
-                    )}
-                  </div>
+                {/* Buyer details — disabled when charging a vaulted customer
+                    (IQPro already has the buyer info linked to the saved PM).
+                    Switching to Credit card or Bank (ACH), or clearing the
+                    saved selection, re-enables the form. */}
+                {(() => {
+                  const buyerDisabled = state.context.paymentMethod === 'saved';
+                  const disabledInputClass = (field: string) =>
+                    `${inputClass(field)} disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500`;
+                  return (
+                    <>
+                      <p className="text-xl font-semibold text-black">Buyer Details</p>
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className={labelClass} htmlFor="firstName">
+                            First name
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="firstName"
+                            type="text"
+                            value={state.context.firstName}
+                            onChange={e => handleInputChange('firstName', e.target.value)}
+                            className={disabledInputClass('firstName')}
+                            placeholder="First name"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.firstName && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.firstName}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className={labelClass} htmlFor="lastName">
+                            Last name
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="lastName"
+                            type="text"
+                            value={state.context.lastName}
+                            onChange={e => handleInputChange('lastName', e.target.value)}
+                            className={disabledInputClass('lastName')}
+                            placeholder="Last name"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.lastName && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.lastName}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className={labelClass} htmlFor="email">
+                            Email address
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="email"
+                            type="email"
+                            value={state.context.email}
+                            onChange={e => handleInputChange('email', e.target.value)}
+                            className={disabledInputClass('email')}
+                            placeholder="email@example.com"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.email && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.email}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className={labelClass} htmlFor="phoneNumber">
+                            Phone number
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="phoneNumber"
+                            type="tel"
+                            value={state.context.phoneNumber}
+                            onChange={e => handleInputChange('phoneNumber', e.target.value)}
+                            className={disabledInputClass('phoneNumber')}
+                            placeholder="(555) 123-4567"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.phoneNumber && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.phoneNumber}</p>
+                          )}
+                        </div>
 
-                  {/* Country */}
-                  <div className="sm:col-span-2">
-                    <KioskSelect
-                      id="country"
-                      value={state.context.country}
-                      onChange={v => handleInputChange('country', v)}
-                      label="Country"
-                      options={[{ value: 'United States', label: 'United States' }]}
-                    />
-                  </div>
+                        {/* Country */}
+                        <div className="sm:col-span-2">
+                          <KioskSelect
+                            id="country"
+                            value={state.context.country}
+                            onChange={v => handleInputChange('country', v)}
+                            label="Country"
+                            options={[{ value: 'United States', label: 'United States' }]}
+                            disabled={buyerDisabled}
+                          />
+                        </div>
 
-                  {/* Address */}
-                  <div className="sm:col-span-2">
-                    <label className={labelClass} htmlFor="address">
-                      Address line 1
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="address"
-                      type="text"
-                      value={state.context.address}
-                      onChange={e => handleInputChange('address', e.target.value)}
-                      className={inputClass('address')}
-                      placeholder="123 Main St"
-                    />
-                    {state.context.errors?.address && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.address}</p>
-                    )}
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className={labelClass} htmlFor="addressLine2">Address line 2</label>
-                    <input
-                      id="addressLine2"
-                      type="text"
-                      value={state.context.addressLine2}
-                      onChange={e => handleInputChange('addressLine2', e.target.value)}
-                      className={inputClass('addressLine2')}
-                      placeholder="Apt, Suite, etc. (optional)"
-                    />
-                  </div>
+                        {/* Address */}
+                        <div className="sm:col-span-2">
+                          <label className={labelClass} htmlFor="address">
+                            Address line 1
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="address"
+                            type="text"
+                            value={state.context.address}
+                            onChange={e => handleInputChange('address', e.target.value)}
+                            className={disabledInputClass('address')}
+                            placeholder="123 Main St"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.address && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.address}</p>
+                          )}
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className={labelClass} htmlFor="addressLine2">Address line 2</label>
+                          <input
+                            id="addressLine2"
+                            type="text"
+                            value={state.context.addressLine2}
+                            onChange={e => handleInputChange('addressLine2', e.target.value)}
+                            className={disabledInputClass('addressLine2')}
+                            placeholder="Apt, Suite, etc. (optional)"
+                            disabled={buyerDisabled}
+                          />
+                        </div>
 
-                  <div>
-                    <label className={labelClass} htmlFor="city">
-                      City
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="city"
-                      type="text"
-                      value={state.context.city}
-                      onChange={e => handleInputChange('city', e.target.value)}
-                      className={inputClass('city')}
-                      placeholder="City"
-                    />
-                    {state.context.errors?.city && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.city}</p>
-                    )}
-                  </div>
-                  <KioskSelect
-                    id="state"
-                    value={state.context.state}
-                    onChange={v => handleInputChange('state', v)}
-                    label="State / Province / Region"
-                    required
-                    options={US_STATES.map(s => ({ value: s, label: s }))}
-                    placeholder="Select state…"
-                    error={state.context.errors?.state}
-                  />
+                        <div>
+                          <label className={labelClass} htmlFor="city">
+                            City
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="city"
+                            type="text"
+                            value={state.context.city}
+                            onChange={e => handleInputChange('city', e.target.value)}
+                            className={disabledInputClass('city')}
+                            placeholder="City"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.city && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.city}</p>
+                          )}
+                        </div>
+                        <KioskSelect
+                          id="state"
+                          value={state.context.state}
+                          onChange={v => handleInputChange('state', v)}
+                          label="State / Province / Region"
+                          required
+                          options={US_STATES.map(s => ({ value: s, label: s }))}
+                          placeholder="Select state…"
+                          error={state.context.errors?.state}
+                          disabled={buyerDisabled}
+                        />
 
-                  <div>
-                    <label className={labelClass} htmlFor="zip">
-                      Postal Code
-                      <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      id="zip"
-                      type="text"
-                      value={state.context.zip}
-                      onChange={e => handleInputChange('zip', e.target.value)}
-                      className={inputClass('zip')}
-                      placeholder="12345"
-                    />
-                    {state.context.errors?.zip && (
-                      <p className="mt-1 text-base text-red-600">{state.context.errors.zip}</p>
-                    )}
-                  </div>
-                </div>
+                        <div>
+                          <label className={labelClass} htmlFor="zip">
+                            Postal Code
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="zip"
+                            type="text"
+                            value={state.context.zip}
+                            onChange={e => handleInputChange('zip', e.target.value)}
+                            className={disabledInputClass('zip')}
+                            placeholder="12345"
+                            disabled={buyerDisabled}
+                          />
+                          {state.context.errors?.zip && (
+                            <p className="mt-1 text-base text-red-600">{state.context.errors.zip}</p>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
 
               </div>
 
               {/* Right: payment + order summary */}
               <div className="lg:col-span-2">
                 <div className="sticky top-4 space-y-5 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
-                  {/* Payment method tabs */}
+                  {/* Payment method buttons — one per row. The "Saved
+                      card / bank" option only appears once the member-lookup
+                      search bar above has surfaced one or more vaulted
+                      customers for the entered phone number. */}
                   <div>
                     <p className={labelClass}>Payment method</p>
-                    <div className="flex gap-3">
+                    <div className="flex flex-col gap-3">
                       <button
                         type="button"
                         onClick={() => handleInputChange('paymentMethod', 'card')}
-                        className={`flex flex-1 items-center justify-center gap-2 rounded-xl border-2 py-3 text-lg font-bold transition-colors ${
+                        className={`flex w-full items-center justify-center gap-2 rounded-xl border-2 py-3 text-lg font-bold transition-colors ${
                           state.context.paymentMethod === 'card'
                             ? 'border-black bg-black text-white'
                             : 'border-gray-300 bg-white text-black hover:border-black'
@@ -1107,7 +1233,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       <button
                         type="button"
                         onClick={() => handleInputChange('paymentMethod', 'ach')}
-                        className={`flex flex-1 items-center justify-center gap-2 rounded-xl border-2 py-3 text-lg font-bold transition-colors ${
+                        className={`flex w-full items-center justify-center gap-2 rounded-xl border-2 py-3 text-lg font-bold transition-colors ${
                           state.context.paymentMethod === 'ach'
                             ? 'border-black bg-black text-white'
                             : 'border-gray-300 bg-white text-black hover:border-black'
@@ -1115,8 +1241,28 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       >
                         Bank (ACH)
                       </button>
+                      {state.context.savedMatches.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => handleInputChange('paymentMethod', 'saved')}
+                          className={`flex w-full items-center justify-center gap-2 rounded-xl border-2 py-3 text-lg font-bold transition-colors ${
+                            state.context.paymentMethod === 'saved'
+                              ? 'border-black bg-black text-white'
+                              : 'border-gray-300 bg-white text-black hover:border-black'
+                          }`}
+                        >
+                          Saved card / bank
+                        </button>
+                      )}
                     </div>
                   </div>
+
+                  {/* When the saved-payment tab is active but no chooser
+                      selection exists yet, surface the validation message
+                      from the machine. */}
+                  {state.context.paymentMethod === 'saved' && state.context.errors.savedPaymentMethod && (
+                    <p className="text-base text-red-600">{state.context.errors.savedPaymentMethod}</p>
+                  )}
 
                   {/* Card payment form */}
                   {state.context.paymentMethod === 'card' && (
@@ -1317,22 +1463,37 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   {/* Place order */}
                   {(() => {
                     const ctx = state.context;
-                    const isBuyerReady = !!ctx.firstName?.trim()
-                      && !!ctx.lastName?.trim()
-                      && !!ctx.email?.trim()
-                      && isValidEmail(ctx.email)
-                      && !!ctx.phoneNumber?.trim()
-                      && isValidPhoneNumber(ctx.phoneNumber)
-                      && !!ctx.address?.trim()
-                      && !!ctx.city?.trim()
-                      && !!ctx.state?.trim()
-                      && !!ctx.zip?.trim();
+                    // Vaulted-customer charges pull buyer info from IQPro,
+                    // so buyer fields aren't required on this path.
+                    const isBuyerReady = ctx.paymentMethod === 'saved'
+                      ? true
+                      : (!!ctx.firstName?.trim()
+                        && !!ctx.lastName?.trim()
+                        && !!ctx.email?.trim()
+                        && isValidEmail(ctx.email)
+                        && !!ctx.phoneNumber?.trim()
+                        && isValidPhoneNumber(ctx.phoneNumber)
+                        && !!ctx.address?.trim()
+                        && !!ctx.city?.trim()
+                        && !!ctx.state?.trim()
+                        && !!ctx.zip?.trim());
 
-                    const isPaymentReady = ctx.paymentMethod === 'card'
-                      ? (!tokenizationConfig || (iframeLoaded && iframeValid && iframeCvvValid)) && !!ctx.cardholderName && !!ctx.cardExpiry
-                      : !!ctx.achAccountHolder
-                        && ctx.achRoutingNumber.length === 9
-                        && !!ctx.achAccountNumber;
+                    let isPaymentReady: boolean;
+                    if (ctx.paymentMethod === 'card') {
+                      isPaymentReady
+                        = (!tokenizationConfig || (iframeLoaded && iframeValid && iframeCvvValid))
+                          && !!ctx.cardholderName
+                          && !!ctx.cardExpiry;
+                    }
+                    else if (ctx.paymentMethod === 'ach') {
+                      isPaymentReady
+                        = !!ctx.achAccountHolder
+                          && ctx.achRoutingNumber.length === 9
+                          && !!ctx.achAccountNumber;
+                    }
+                    else {
+                      isPaymentReady = !!ctx.selectedSavedMatchToken;
+                    }
 
                     const handlePlaceOrder = async () => {
                       // Card: token + fee breakdown were already captured when the card

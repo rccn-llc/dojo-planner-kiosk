@@ -250,6 +250,11 @@ export interface CartItem {
   quantity: number;
 }
 
+export interface SavedPaymentMatch {
+  matchToken: string;
+  fullName: string;
+}
+
 export interface StoreContext {
   products: StoreProduct[];
   isLoadingProducts: boolean;
@@ -275,7 +280,7 @@ export interface StoreContext {
   zip: string;
   hasSalesAgreement: boolean;
   // Payment method
-  paymentMethod: 'card' | 'ach';
+  paymentMethod: 'card' | 'ach' | 'saved';
   // Card fields (populated after TokenEx tokenization)
   cardholderName: string;
   cardToken: string;
@@ -287,6 +292,14 @@ export interface StoreContext {
   achRoutingNumber: string;
   achAccountNumber: string;
   achAccountType: 'Checking' | 'Savings';
+  // Saved-customer (vaulted) fields — populated by phone lookup + chooser
+  savedLookupPhone: string;
+  isSearchingSaved: boolean;
+  savedSearchPerformed: boolean;
+  savedMatches: SavedPaymentMatch[];
+  selectedSavedMatchToken: string | null;
+  selectedSavedFullName: string | null;
+  memberLookupNotFound: boolean;
   errors: Record<string, string>;
   isSubmitting: boolean;
   sessionId: string;
@@ -314,6 +327,11 @@ export type StoreEvent
     | { type: 'MEMBER_FOUND'; firstName: string; lastName: string; email: string; phone: string }
     | { type: 'MEMBER_NOT_FOUND' }
     | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
+    | { type: 'SAVED_LOOKUP_START'; phone: string }
+    | { type: 'SAVED_LOOKUP_RESULT'; matches: SavedPaymentMatch[] }
+    | { type: 'SAVED_LOOKUP_FAILED' }
+    | { type: 'SAVED_MATCH_SELECTED'; matchToken: string; fullName: string }
+    | { type: 'SAVED_MATCH_CLEARED' }
     | { type: 'PLACE_ORDER' }
     | { type: 'PAYMENT_SUCCESS' }
     | { type: 'PAYMENT_FAILED'; error?: string }

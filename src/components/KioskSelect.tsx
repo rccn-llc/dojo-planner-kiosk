@@ -16,6 +16,7 @@ interface KioskSelectProps {
   error?: string;
   label?: string;
   required?: boolean;
+  disabled?: boolean;
 }
 
 export function KioskSelect({
@@ -27,6 +28,7 @@ export function KioskSelect({
   error,
   label,
   required,
+  disabled,
 }: KioskSelectProps) {
   return (
     <div>
@@ -44,7 +46,8 @@ export function KioskSelect({
           id={id}
           value={value}
           onChange={e => onChange(e.target.value)}
-          className={`w-full appearance-none rounded-xl border-2 bg-white p-4 pr-10 text-xl text-black placeholder:text-gray-400 focus:border-gray-600 focus:ring-4 focus:ring-gray-400 focus:outline-none ${
+          disabled={disabled}
+          className={`w-full appearance-none rounded-xl border-2 bg-white p-4 pr-10 text-xl text-black placeholder:text-gray-400 focus:border-gray-600 focus:ring-4 focus:ring-gray-400 focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${
             error ? 'border-red-400 focus:border-red-500 focus:ring-red-300' : 'border-gray-300'
           }`}
         >
