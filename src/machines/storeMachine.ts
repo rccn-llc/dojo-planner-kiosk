@@ -8,6 +8,15 @@ import { KioskAuditService } from '../services/audit';
 function validateCheckout(context: StoreContext): Record<string, string> {
   const errors: Record<string, string> = {};
 
+  // Saved-customer charges pull buyer info from the IQPro vault — we don't
+  // need to re-collect name/email/address. Only require the match selection.
+  if (context.paymentMethod === 'saved') {
+    if (!context.selectedSavedMatchToken) {
+      errors.savedPaymentMethod = 'Please look up and select a saved payment method';
+    }
+    return errors;
+  }
+
   if (!context.firstName?.trim()) {
     errors.firstName = 'First name is required';
   }
@@ -77,6 +86,13 @@ const emptyContext: StoreContext = {
   achRoutingNumber: '',
   achAccountNumber: '',
   achAccountType: 'Checking',
+  savedLookupPhone: '',
+  isSearchingSaved: false,
+  savedSearchPerformed: false,
+  savedMatches: [],
+  selectedSavedMatchToken: null,
+  selectedSavedFullName: null,
+  memberLookupNotFound: false,
   errors: {} as Record<string, string>,
   isSubmitting: false,
   sessionId: '',
@@ -325,11 +341,83 @@ export const storeMachine = createMachine({
           actions: assign(({ event, context }) => {
             const { field, value } = event;
             const newErrors = { ...context.errors };
-            delete newErrors[field as string];
-            return { ...context, [field]: value, errors: newErrors };
+            delete newErrors[field];
+            // Switching payment method clears the saved-method chooser state so
+            // a stale selection can't leak across modes.
+            if (field === 'paymentMethod') {
+              const pm = value as 'card' | 'ach' | 'saved';
+              if (pm !== 'saved') {
+                return {
+                  paymentMethod: pm,
+                  savedLookupPhone: '',
+                  isSearchingSaved: false,
+                  savedSearchPerformed: false,
+                  savedMatches: [],
+                  selectedSavedMatchToken: null,
+                  selectedSavedFullName: null,
+                  errors: newErrors,
+                };
+              }
+              return { paymentMethod: pm, errors: newErrors };
+            }
+            return { ...context, [field as string]: value, errors: newErrors };
           }),
         },
         LOOKUP_MEMBER: 'lookingUpMember',
+        SAVED_LOOKUP_START: {
+          actions: assign(({ event, context }) => ({
+            savedLookupPhone: event.phone,
+            isSearchingSaved: true,
+            savedSearchPerformed: false,
+            savedMatches: [],
+            selectedSavedMatchToken: null,
+            selectedSavedFullName: null,
+            errors: { ...context.errors, savedPaymentMethod: '' } as Record<string, string>,
+          })),
+        },
+        SAVED_LOOKUP_RESULT: {
+          actions: assign(({ event, context }) => ({
+            isSearchingSaved: false,
+            savedSearchPerformed: true,
+            savedMatches: event.matches,
+            // If we were on the saved-payment tab but the new lookup returned
+            // no matches, fall back to card so the user isn't stranded on a
+            // tab whose button just disappeared.
+            paymentMethod: (event.matches.length === 0 && context.paymentMethod === 'saved')
+              ? 'card' as const
+              : context.paymentMethod,
+            // Re-running the lookup invalidates any prior selection.
+            selectedSavedMatchToken: null,
+            selectedSavedFullName: null,
+          })),
+        },
+        SAVED_LOOKUP_FAILED: {
+          actions: assign(({ context }) => ({
+            isSearchingSaved: false,
+            savedSearchPerformed: true,
+            savedMatches: [],
+            errors: { ...context.errors, savedPaymentMethod: 'Lookup failed. Please try again.' } as Record<string, string>,
+          })),
+        },
+        SAVED_MATCH_SELECTED: {
+          actions: assign(({ event, context }) => ({
+            selectedSavedMatchToken: event.matchToken,
+            selectedSavedFullName: event.fullName,
+            // Auto-switch the active payment method to 'saved' so the user
+            // doesn't have to pick the tab manually after choosing a name.
+            paymentMethod: 'saved' as const,
+            errors: { ...context.errors, savedPaymentMethod: '' } as Record<string, string>,
+          })),
+        },
+        SAVED_MATCH_CLEARED: {
+          actions: assign({
+            selectedSavedMatchToken: null,
+            selectedSavedFullName: null,
+            // Falling back to card so the buyer form re-enables and the
+            // user can proceed without a vaulted customer selection.
+            paymentMethod: 'card' as const,
+          }),
+        },
         CALCULATE_FEES_START: {
           actions: assign({
             isCalculatingFees: true,
@@ -359,7 +447,7 @@ export const storeMachine = createMachine({
     },
 
     lookingUpMember: {
-      entry: assign({ isSubmitting: true }),
+      entry: assign({ isSubmitting: true, memberLookupNotFound: false }),
       on: {
         MEMBER_FOUND: {
           target: 'checkout',
@@ -369,11 +457,12 @@ export const storeMachine = createMachine({
             lastName: event.lastName,
             email: event.email,
             phoneNumber: event.phone,
+            memberLookupNotFound: false,
           })),
         },
         MEMBER_NOT_FOUND: {
           target: 'checkout',
-          actions: assign({ isSubmitting: false }),
+          actions: assign({ isSubmitting: false, memberLookupNotFound: true }),
         },
       },
     },

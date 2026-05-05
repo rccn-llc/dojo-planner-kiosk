@@ -3,6 +3,9 @@
  * Mirrors src/libs/IQPro.ts from dojo-planner.
  */
 
+import { Buffer } from 'node:buffer';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface TokenizationIframeConfig {
@@ -522,4 +525,222 @@ export async function tokenizeAch(params: TokenizeAchParams): Promise<TokenizeAc
   }
 
   return { achToken };
+}
+
+// ── Vaulted customer search (by phone) ───────────────────────────────────────
+
+interface VaultedCustomerMatch {
+  customerId: string;
+  customerPaymentMethodId: string;
+  fullName: string;
+  paymentMethodType: 'card' | 'ach';
+  cardMaskedNumber?: string;
+}
+
+function digitsOnly(s: string): string {
+  return s.replace(/\D/g, '');
+}
+
+function pickDefaultPaymentMethod(
+  paymentMethods: Array<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  if (!paymentMethods.length) {
+    return null;
+  }
+  return paymentMethods.find(pm => pm.isDefault === true) ?? paymentMethods[0] ?? null;
+}
+
+function extractFullName(customer: Record<string, unknown>): string {
+  const direct = (customer.name ?? customer.fullName ?? '') as string;
+  if (direct.trim()) {
+    return direct.trim();
+  }
+  const first = (customer.firstName ?? '') as string;
+  const last = (customer.lastName ?? '') as string;
+  const joined = `${first} ${last}`.trim();
+  if (joined) {
+    return joined;
+  }
+  // Fall back to billing address contact name when present.
+  const addresses = (customer.addresses ?? []) as Array<Record<string, unknown>>;
+  const billing = addresses.find(a => a.isBilling) ?? addresses[0];
+  if (billing) {
+    const af = (billing.firstName ?? '') as string;
+    const al = (billing.lastName ?? '') as string;
+    const aj = `${af} ${al}`.trim();
+    if (aj) {
+      return aj;
+    }
+  }
+  return 'Saved customer';
+}
+
+/**
+ * Search the IQPro customer vault by phone number. Returns one entry per
+ * matching customer with a usable default payment method. Customers with no
+ * payment methods are filtered out. Returns [] when nothing matches.
+ */
+export async function searchCustomersByPhone(phone: string): Promise<VaultedCustomerMatch[]> {
+  if (!isIQProConfigured()) {
+    return [];
+  }
+  const cleaned = digitsOnly(phone);
+  if (cleaned.length < 10) {
+    return [];
+  }
+
+  const gatewayId = process.env.IQPRO_GATEWAY_ID!;
+  // IQPro's customer/search expects a full CustomerSearchModel where each
+  // string field is a SearchFilterString ({ operator, value }). We narrow on
+  // phone with IsLike and rely on includeDefaultPayment/includeDefaultAddresses
+  // to return the data we need to build the chooser. paymentType is omitted
+  // (i.e., not filtered) so both vaulted card and ACH customers come back.
+  const res = await iqproPost<{ data?: unknown }>(
+    `/api/gateway/${gatewayId}/customer/search`,
+    {
+      phone: { operator: 'IsLike', value: cleaned },
+      includeDefaultAddresses: true,
+      includeDefaultPayment: true,
+      includeStats: false,
+      // IQPro's offSet is 0-based; sending 1 skips the first row.
+      offSet: 0,
+      limit: 25,
+    },
+  );
+
+  // IQPro search responses may shape results as { data: [...] }, { data: { results: [...] } },
+  // or a bare array. Normalize.
+  const raw = (res as Record<string, unknown>).data ?? res;
+  let customers: Array<Record<string, unknown>> = [];
+  if (Array.isArray(raw)) {
+    customers = raw as Array<Record<string, unknown>>;
+  }
+  else if (raw && typeof raw === 'object') {
+    const maybeResults = (raw as Record<string, unknown>).results
+      ?? (raw as Record<string, unknown>).customers
+      ?? (raw as Record<string, unknown>).items;
+    if (Array.isArray(maybeResults)) {
+      customers = maybeResults as Array<Record<string, unknown>>;
+    }
+  }
+
+  const matches: VaultedCustomerMatch[] = [];
+  for (const customer of customers) {
+    const customerId = (customer.customerId ?? customer.id) as string | undefined;
+    if (!customerId) {
+      continue;
+    }
+    // The search response can return the default PM directly under
+    // `defaultPaymentMethod` (when includeDefaultPayment=true) or the full
+    // list under `paymentMethods`. Prefer the former, fall back to the latter.
+    const defaultPM = customer.defaultPaymentMethod as Record<string, unknown> | undefined;
+    const paymentMethods = (customer.paymentMethods ?? []) as Array<Record<string, unknown>>;
+    const pm = defaultPM ?? pickDefaultPaymentMethod(paymentMethods);
+    if (!pm) {
+      continue;
+    }
+    const customerPaymentMethodId = (pm.paymentMethodId ?? pm.customerPaymentMethodId ?? pm.id) as string | undefined;
+    if (!customerPaymentMethodId) {
+      continue;
+    }
+    const card = pm.card as Record<string, unknown> | undefined;
+    const ach = pm.ach as Record<string, unknown> | undefined;
+    const paymentMethodType: 'card' | 'ach' = card ? 'card' : ach ? 'ach' : 'card';
+    const cardMaskedNumber = card
+      ? ((card.maskedNumber ?? card.maskedCard ?? '') as string) || undefined
+      : undefined;
+
+    matches.push({
+      customerId,
+      customerPaymentMethodId,
+      fullName: extractFullName(customer),
+      paymentMethodType,
+      cardMaskedNumber,
+    });
+  }
+
+  return matches;
+}
+
+// ── Match token (HMAC envelope for vaulted-customer chooser) ─────────────────
+
+interface MatchTokenPayload {
+  customerId: string;
+  customerPaymentMethodId: string;
+  paymentMethodType: 'card' | 'ach';
+  cardMaskedNumber?: string;
+  exp: number;
+}
+
+const MATCH_TOKEN_TTL_MS = 5 * 60 * 1000;
+
+function getMatchTokenSecret(): string {
+  const secret = process.env.KIOSK_MATCH_TOKEN_SECRET ?? process.env.IQPRO_CLIENT_SECRET;
+  if (!secret) {
+    throw new Error('KIOSK_MATCH_TOKEN_SECRET (or IQPRO_CLIENT_SECRET fallback) must be set');
+  }
+  return secret;
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(s: string): Buffer {
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
+}
+
+export function signMatchToken(payload: Omit<MatchTokenPayload, 'exp'>): string {
+  const full: MatchTokenPayload = { ...payload, exp: Date.now() + MATCH_TOKEN_TTL_MS };
+  const body = base64UrlEncode(Buffer.from(JSON.stringify(full), 'utf8'));
+  const sig = base64UrlEncode(createHmac('sha256', getMatchTokenSecret()).update(body).digest());
+  return `${body}.${sig}`;
+}
+
+/**
+ * Verify a signed match token.
+ *
+ * Returns `null` when the input is missing or not a string. Throws on a
+ * present-but-invalid token (bad shape, bad signature, expired, missing
+ * fields). Callers should treat `null` as "no vaulted intent" and a thrown
+ * error as a hard reject of the request.
+ *
+ * Returning null for missing input (rather than gating verification on a
+ * user-controlled `if (body.token)`) keeps the privileged-branch decision
+ * downstream of cryptographic verification — see CWE-807.
+ */
+export function verifyMatchToken(token: unknown): MatchTokenPayload | null {
+  if (typeof token !== 'string' || token.length === 0) {
+    return null;
+  }
+  const parts = token.split('.');
+  if (parts.length !== 2) {
+    throw new Error('Invalid match token');
+  }
+  const body = parts[0];
+  const sig = parts[1];
+  if (!body || !sig) {
+    throw new Error('Invalid match token');
+  }
+  const expected = base64UrlEncode(createHmac('sha256', getMatchTokenSecret()).update(body).digest());
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    throw new Error('Invalid match token signature');
+  }
+  let payload: MatchTokenPayload;
+  try {
+    payload = JSON.parse(base64UrlDecode(body).toString('utf8')) as MatchTokenPayload;
+  }
+  catch {
+    throw new Error('Invalid match token body');
+  }
+  if (typeof payload.exp !== 'number' || Date.now() > payload.exp) {
+    throw new Error('Match token expired');
+  }
+  if (!payload.customerId || !payload.customerPaymentMethodId) {
+    throw new Error('Match token missing required fields');
+  }
+  return payload;
 }
