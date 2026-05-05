@@ -106,33 +106,32 @@ export async function POST(request: Request) {
 
   const gatewayId = process.env.IQPRO_GATEWAY_ID!;
 
-  // When the client supplied a signed match token (vaulted-customer charge),
-  // verify it now and resolve the customerId / paymentMethodId server-side.
-  // Steps 1 (create customer) + 2 (register PM) are skipped in this branch.
-  let vaulted: {
-    customerId: string;
-    customerPaymentMethodId: string;
-    paymentMethodType: 'card' | 'ach';
-    cardMaskedNumber?: string;
-  } | null = null;
-  if (body.savedPaymentMatchToken) {
-    try {
-      const payload = verifyMatchToken(body.savedPaymentMatchToken);
-      vaulted = {
+  // Verify the signed match token unconditionally. The downstream branch
+  // is gated on the *verified payload*, never on the raw request value, so a
+  // tampered or absent token cannot bypass the create-customer + register-PM
+  // steps (CWE-807).
+  //
+  // verifyMatchToken returns null for absent/empty input (→ standard
+  // non-vaulted flow) and throws for any present-but-invalid token (→ 400).
+  let payload;
+  try {
+    payload = verifyMatchToken(body.savedPaymentMatchToken);
+  }
+  catch (err) {
+    const message = err instanceof Error ? err.message : 'Invalid saved payment selection';
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: message },
+      { status: 400 },
+    );
+  }
+  const vaulted = payload
+    ? {
         customerId: payload.customerId,
         customerPaymentMethodId: payload.customerPaymentMethodId,
         paymentMethodType: payload.paymentMethodType,
         cardMaskedNumber: payload.cardMaskedNumber,
-      };
-    }
-    catch (err) {
-      const message = err instanceof Error ? err.message : 'Invalid saved payment selection';
-      return NextResponse.json<ProcessStoreOrderResult>(
-        { success: false, status: 'declined', error: message },
-        { status: 400 },
-      );
-    }
-  }
+      }
+    : null;
 
   try {
     let customerId: string;

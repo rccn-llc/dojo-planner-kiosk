@@ -698,7 +698,22 @@ export function signMatchToken(payload: Omit<MatchTokenPayload, 'exp'>): string 
   return `${body}.${sig}`;
 }
 
-export function verifyMatchToken(token: string): MatchTokenPayload {
+/**
+ * Verify a signed match token.
+ *
+ * Returns `null` when the input is missing or not a string. Throws on a
+ * present-but-invalid token (bad shape, bad signature, expired, missing
+ * fields). Callers should treat `null` as "no vaulted intent" and a thrown
+ * error as a hard reject of the request.
+ *
+ * Returning null for missing input (rather than gating verification on a
+ * user-controlled `if (body.token)`) keeps the privileged-branch decision
+ * downstream of cryptographic verification — see CWE-807.
+ */
+export function verifyMatchToken(token: unknown): MatchTokenPayload | null {
+  if (typeof token !== 'string' || token.length === 0) {
+    return null;
+  }
   const parts = token.split('.');
   if (parts.length !== 2) {
     throw new Error('Invalid match token');
