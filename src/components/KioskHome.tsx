@@ -2,6 +2,7 @@
 
 import type { ChildMembershipSeed } from './flows/MembershipFlow';
 import type { TrialCheckinMember } from './flows/TrialFlow';
+import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
@@ -15,15 +16,19 @@ type FlowType = 'home' | 'checkin' | 'trial' | 'membership' | 'memberArea' | 'st
 export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
   const [orgName, setOrgName] = useState<string | null>(null);
+  const [orgImageUrl, setOrgImageUrl] = useState<string | null>(null);
   const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
   const [childMembershipSeed, setChildMembershipSeed] = useState<ChildMembershipSeed | null>(null);
 
   useEffect(() => {
     fetch('/api/organization')
       .then(r => r.json())
-      .then((data: { name: string | null }) => {
+      .then((data: { name: string | null; imageUrl: string | null }) => {
         if (data.name) {
           setOrgName(data.name);
+        }
+        if (data.imageUrl) {
+          setOrgImageUrl(data.imageUrl);
         }
       })
       .catch(() => {});
@@ -103,13 +108,21 @@ export function KioskHome() {
   return (
     <div className="flex min-h-screen flex-col bg-white">
       {/* Header */}
-      <header className="bg-black p-4 sm:p-6 md:p-8">
-        <h1 className="text-center text-3xl font-bold text-white sm:text-4xl md:text-6xl">
-          Welcome to
-          {' '}
+      <header className="relative bg-black p-4 sm:p-6 md:p-8">
+        {orgImageUrl && (
+          <Image
+            src={orgImageUrl}
+            alt={orgName ? `${orgName} logo` : 'Organization logo'}
+            width={96}
+            height={96}
+            unoptimized
+            className="absolute top-1/2 left-4 h-12 w-12 -translate-y-1/2 rounded-full object-contain sm:left-6 sm:h-16 sm:w-16 md:left-8 md:h-24 md:w-24"
+          />
+        )}
+        <h1 className={`text-center text-3xl font-bold text-white sm:text-4xl md:text-6xl${orgImageUrl ? ' px-20 sm:px-28 md:px-40' : ''}`}>
           {orgName ?? 'Our Dojo'}
         </h1>
-        <p className="mt-4 text-center text-lg text-white sm:text-xl md:text-2xl">
+        <p className={`mt-4 text-center text-lg text-white sm:text-xl md:text-2xl${orgImageUrl ? ' px-20 sm:px-28 md:px-40' : ''}`}>
           Select an option below to get started
         </p>
       </header>
