@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   const clerkSecretKey = process.env.CLERK_SECRET_KEY;
 
   if (!orgId || !clerkSecretKey) {
-    return NextResponse.json({ name: null }, { status: 200 });
+    return NextResponse.json({ name: null, imageUrl: null }, { status: 200 });
   }
 
   try {
@@ -17,13 +17,13 @@ export async function GET(request: Request) {
     });
 
     if (!res.ok) {
-      return NextResponse.json({ name: null }, { status: 200 });
+      return NextResponse.json({ name: null, imageUrl: null }, { status: 200 });
     }
 
-    const org = await res.json() as { name: string };
-    return NextResponse.json({ name: org.name });
+    const org = await res.json() as { name: string; image_url?: string | null; logo_url?: string | null };
+    return NextResponse.json({ name: org.name, imageUrl: org.image_url ?? org.logo_url ?? null });
   }
   catch {
-    return NextResponse.json({ name: null }, { status: 200 });
+    return NextResponse.json({ name: null, imageUrl: null }, { status: 200 });
   }
 }
