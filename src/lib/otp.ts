@@ -6,7 +6,7 @@ interface StoredOTP {
   expiresAt: number;
 }
 
-// Rate-limit tracking: max 3 OTP sends per member per 10 min
+// Rate-limit tracking: max 3 OTP sends per (scope, subject) per 10 min
 interface SendTracker {
   count: number;
   windowStart: number;
@@ -16,6 +16,8 @@ const SEND_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SENDS_PER_WINDOW = 3;
 const MAX_ATTEMPTS = 3;
 const OTP_TTL_MS = 5 * 60 * 1000;
+
+type OtpScope = 'member' | 'staff';
 
 // In-memory store for development; Upstash Redis for production.
 // Stash on globalThis so the store survives Next.js dev HMR and is shared
@@ -44,6 +46,18 @@ function getRedisClient() {
   return null;
 }
 
+function storeKey(scope: OtpScope, subject: string): string {
+  return `${scope}:${subject}`;
+}
+
+function redisKey(scope: OtpScope, subject: string): string {
+  return `otp:${scope}:${subject}`;
+}
+
+function trackerKey(scope: OtpScope, subject: string): string {
+  return `send:${scope}:${subject}`;
+}
+
 /**
  * Generate a 6-digit OTP code.
  */
@@ -52,13 +66,15 @@ export function generateOTP(): string {
 }
 
 /**
- * Store an OTP code for a member. Returns false if rate-limited.
+ * Store an OTP code under a (scope, subject) key. Returns false if rate-limited.
+ *
+ * Scopes have independent rate-limit and attempt buckets — a staff send does
+ * not count against the member's send budget for the same person.
  */
-export async function storeOTP(memberId: string, code: string): Promise<boolean> {
-  // Check rate limit
+export async function storeOTP(scope: OtpScope, subject: string, code: string): Promise<boolean> {
   const now = Date.now();
-  const trackerKey = `send:${memberId}`;
-  const tracker = sendTrackers.get(trackerKey);
+  const tKey = trackerKey(scope, subject);
+  const tracker = sendTrackers.get(tKey);
 
   if (tracker) {
     if (now - tracker.windowStart < SEND_WINDOW_MS) {
@@ -68,11 +84,11 @@ export async function storeOTP(memberId: string, code: string): Promise<boolean>
       tracker.count++;
     }
     else {
-      sendTrackers.set(trackerKey, { count: 1, windowStart: now });
+      sendTrackers.set(tKey, { count: 1, windowStart: now });
     }
   }
   else {
-    sendTrackers.set(trackerKey, { count: 1, windowStart: now });
+    sendTrackers.set(tKey, { count: 1, windowStart: now });
   }
 
   const entry: StoredOTP = {
@@ -84,11 +100,10 @@ export async function storeOTP(memberId: string, code: string): Promise<boolean>
   const redis = getRedisClient();
   if (redis) {
     const client = await redis;
-    const key = `otp:${memberId}`;
-    await client.set(key, JSON.stringify(entry), { ex: Math.ceil(OTP_TTL_MS / 1000) });
+    await client.set(redisKey(scope, subject), JSON.stringify(entry), { ex: Math.ceil(OTP_TTL_MS / 1000) });
   }
   else {
-    memoryStore.set(memberId, entry);
+    memoryStore.set(storeKey(scope, subject), entry);
   }
 
   return true;
@@ -101,23 +116,22 @@ interface VerifyOTPResult {
 }
 
 /**
- * Verify an OTP code for a member.
+ * Verify an OTP code for a (scope, subject) pair.
  * Returns { verified: true } on match, otherwise a reason and remaining attempts.
  */
-export async function verifyOTP(memberId: string, code: string): Promise<VerifyOTPResult> {
+export async function verifyOTP(scope: OtpScope, subject: string, code: string): Promise<VerifyOTPResult> {
   const redis = getRedisClient();
   let entry: StoredOTP | undefined;
 
   if (redis) {
     const client = await redis;
-    const key = `otp:${memberId}`;
-    const raw = await client.get<string>(key);
+    const raw = await client.get<string>(redisKey(scope, subject));
     if (raw) {
       entry = (typeof raw === 'string' ? JSON.parse(raw) : raw) as StoredOTP;
     }
   }
   else {
-    entry = memoryStore.get(memberId);
+    entry = memoryStore.get(storeKey(scope, subject));
   }
 
   if (!entry) {
@@ -128,10 +142,10 @@ export async function verifyOTP(memberId: string, code: string): Promise<VerifyO
     // Expired — clean up
     if (redis) {
       const client = await redis;
-      await client.del(`otp:${memberId}`);
+      await client.del(redisKey(scope, subject));
     }
     else {
-      memoryStore.delete(memberId);
+      memoryStore.delete(storeKey(scope, subject));
     }
     return { verified: false, reason: 'expired' };
   }
@@ -146,10 +160,10 @@ export async function verifyOTP(memberId: string, code: string): Promise<VerifyO
     // Valid — remove the OTP
     if (redis) {
       const client = await redis;
-      await client.del(`otp:${memberId}`);
+      await client.del(redisKey(scope, subject));
     }
     else {
-      memoryStore.delete(memberId);
+      memoryStore.delete(storeKey(scope, subject));
     }
     return { verified: true };
   }
@@ -159,11 +173,11 @@ export async function verifyOTP(memberId: string, code: string): Promise<VerifyO
     const client = await redis;
     const remainingTtl = Math.ceil((entry.expiresAt - Date.now()) / 1000);
     if (remainingTtl > 0) {
-      await client.set(`otp:${memberId}`, JSON.stringify(entry), { ex: remainingTtl });
+      await client.set(redisKey(scope, subject), JSON.stringify(entry), { ex: remainingTtl });
     }
   }
   else {
-    memoryStore.set(memberId, entry);
+    memoryStore.set(storeKey(scope, subject), entry);
   }
 
   const attemptsRemaining = Math.max(0, MAX_ATTEMPTS - entry.attempts);

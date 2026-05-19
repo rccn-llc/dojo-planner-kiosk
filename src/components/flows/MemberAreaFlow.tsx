@@ -115,12 +115,27 @@ interface MemberDetail {
 type View = 'search' | 'results' | 'otpVerify' | 'memberDetail' | 'addFamily' | 'createFamily';
 type DetailTab = 'overview' | 'billing' | 'waivers' | 'attendance' | 'family';
 
+interface StaffEntry {
+  id: string;
+  fullName: string;
+  maskedEmail: string;
+}
+
 export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
   const [view, setView] = useState<View>('search');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
   const [otpMember, setOtpMember] = useState<{ memberId: string; firstName: string; emailHint: string } | null>(null);
+
+  // Staff override (admin TOTP) — alternate path through the otpVerify view.
+  // 'idle' shows the member code screen; 'pick' shows the staff list; 'code'
+  // re-uses the numpad to enter a code that was emailed to the staff member.
+  const [staffMode, setStaffMode] = useState<'idle' | 'pick' | 'code'>('idle');
+  const [staffList, setStaffList] = useState<StaffEntry[]>([]);
+  const [staffListLoading, setStaffListLoading] = useState(false);
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [staffMaskedEmail, setStaffMaskedEmail] = useState('');
   const [searchPhone, setSearchPhone] = useState('');
   const [searchName, setSearchName] = useState('');
   const [results, setResults] = useState<MemberResult[]>([]);
@@ -271,6 +286,9 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setOtpLoading(true);
     setOtpError('');
     setOtpCode('');
+    setStaffMode('idle');
+    setSelectedStaffId('');
+    setStaffMaskedEmail('');
 
     try {
       // Look up member's email hint via the member-portal lookup
@@ -309,10 +327,16 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setOtpError('');
 
     try {
-      const res = await fetch('/api/member-portal/verify-otp', {
+      const endpoint = staffMode === 'code'
+        ? '/api/member-portal/staff-verify-otp'
+        : '/api/member-portal/verify-otp';
+      const payload = staffMode === 'code'
+        ? { memberId: otpMember.memberId, staffClerkUserId: selectedStaffId, code }
+        : { memberId: otpMember.memberId, code, orgSlug: '_kiosk', isKiosk: true };
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId: otpMember.memberId, code, orgSlug: '_kiosk', isKiosk: true }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
 
@@ -347,6 +371,68 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     catch {
       setOtpCode('');
       setOtpError('Verification failed. Please try again.');
+    }
+    setOtpLoading(false);
+  };
+
+  // ── Staff override (admin TOTP) ──
+
+  const openStaffOverride = async () => {
+    setStaffMode('pick');
+    setOtpError('');
+    setOtpCode('');
+    setStaffListLoading(true);
+    try {
+      const res = await fetch('/api/member-portal/staff-list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgSlug: '_kiosk' }),
+      });
+      const data = await res.json() as { staff?: StaffEntry[] };
+      setStaffList(data.staff ?? []);
+    }
+    catch {
+      setStaffList([]);
+    }
+    setStaffListLoading(false);
+  };
+
+  const pickStaff = async (staff: StaffEntry) => {
+    if (!otpMember) {
+      return;
+    }
+    setOtpLoading(true);
+    setOtpError('');
+    setSelectedStaffId(staff.id);
+    try {
+      const res = await fetch('/api/member-portal/staff-send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId: otpMember.memberId,
+          staffClerkUserId: staff.id,
+          orgSlug: '_kiosk',
+        }),
+      });
+
+      if (res.status === 429) {
+        setOtpError('Too many attempts. Please wait a few minutes.');
+        setOtpLoading(false);
+        return;
+      }
+
+      const data = await res.json() as { sent?: boolean; maskedEmail?: string };
+      if (data.sent) {
+        setStaffMaskedEmail(data.maskedEmail ?? staff.maskedEmail);
+        setOtpCode('');
+        setStaffMode('code');
+      }
+      else {
+        setOtpError('Failed to send verification code.');
+      }
+    }
+    catch {
+      setOtpError('Something went wrong. Please try again.');
     }
     setOtpLoading(false);
   };
@@ -587,10 +673,68 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
 
     const otpDigits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'];
 
+    // Staff list view — pick which staff member should receive the admin code.
+    if (staffMode === 'pick') {
+      return (
+        <Shell
+          title="Staff Override"
+          onBack={() => {
+            setStaffMode('idle');
+            setOtpError('');
+            setSelectedStaffId('');
+          }}
+        >
+          <div className="w-full max-w-sm">
+            <h2 className="mb-2 text-center text-2xl font-bold text-black sm:text-3xl">
+              Who's helping?
+            </h2>
+            <p className="mb-8 text-center text-lg text-gray-500">
+              Tap your name to receive a code at your email
+            </p>
+
+            {otpError && <p className="mb-4 text-center text-red-500">{otpError}</p>}
+
+            {staffListLoading
+              ? (
+                  <p className="text-center text-gray-500">Loading staff...</p>
+                )
+              : staffList.length === 0
+                ? (
+                    <p className="text-center text-gray-500">No staff available.</p>
+                  )
+                : (
+                    <div className="flex flex-col gap-3">
+                      {staffList.map(s => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => pickStaff(s)}
+                          disabled={otpLoading}
+                          className="min-h-14 cursor-pointer rounded-2xl border-2 border-gray-200 bg-white px-6 py-4 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-[0.98] disabled:opacity-50"
+                        >
+                          <div className="text-lg font-bold text-black">{s.fullName}</div>
+                          <div className="text-sm text-gray-500">{s.maskedEmail}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+          </div>
+        </Shell>
+      );
+    }
+
+    const isStaffCode = staffMode === 'code';
+
     return (
       <Shell
-        title="Verify Identity"
+        title={isStaffCode ? 'Staff Override' : 'Verify Identity'}
         onBack={() => {
+          if (isStaffCode) {
+            setStaffMode('pick');
+            setOtpCode('');
+            setOtpError('');
+            return;
+          }
           setView('results');
           setOtpCode('');
           setOtpError('');
@@ -602,12 +746,24 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
             Enter Code
           </h2>
           <p className="mb-8 text-center text-lg text-gray-500">
-            Hi
-            {' '}
-            {otpMember.firstName}
-            ! We sent a code to
-            {' '}
-            <span className="font-semibold text-black">{otpMember.emailHint}</span>
+            {isStaffCode
+              ? (
+                  <>
+                    We sent a 6-digit staff code to
+                    {' '}
+                    <span className="font-semibold text-black">{staffMaskedEmail || 'your email'}</span>
+                  </>
+                )
+              : (
+                  <>
+                    Hi
+                    {' '}
+                    {otpMember.firstName}
+                    ! We sent a code to
+                    {' '}
+                    <span className="font-semibold text-black">{otpMember.emailHint}</span>
+                  </>
+                )}
           </p>
 
           {/* Code display */}
@@ -666,6 +822,16 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
               );
             })}
           </div>
+
+          {!isStaffCode && (
+            <button
+              type="button"
+              onClick={openStaffOverride}
+              className="mt-6 flex min-h-16 w-full cursor-pointer items-center justify-center rounded-2xl border-2 border-gray-200 bg-white text-xl font-bold text-black transition-all hover:border-black hover:bg-gray-50 active:scale-95"
+            >
+              Staff override →
+            </button>
+          )}
         </div>
       </Shell>
     );

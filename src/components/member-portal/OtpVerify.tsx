@@ -4,9 +4,18 @@ import { useRouter } from 'next/navigation';
 import { use, useEffect, useState } from 'react';
 import { OrgContext } from '@/lib/useOrgContext';
 
+type Mode = 'member' | 'staff-pick' | 'staff-code';
+
+interface StaffEntry {
+  id: string;
+  fullName: string;
+  maskedEmail: string;
+}
+
 export function OtpVerify() {
   const router = useRouter();
   const org = use(OrgContext);
+  const [mode, setMode] = useState<Mode>('member');
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -14,16 +23,19 @@ export function OtpVerify() {
   const [memberId, setMemberId] = useState('');
   const [orgId, setOrgId] = useState('');
 
+  // Staff override state
+  const [staffList, setStaffList] = useState<StaffEntry[]>([]);
+  const [staffListLoading, setStaffListLoading] = useState(false);
+  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [staffMaskedEmail, setStaffMaskedEmail] = useState('');
+
   useEffect(() => {
     setMaskedEmail(sessionStorage.getItem('mp_maskedEmail') ?? '');
     setMemberId(sessionStorage.getItem('mp_memberId') ?? '');
     setOrgId(sessionStorage.getItem('mp_orgId') ?? '');
   }, []);
 
-  const handleVerify = async (fullCode: string) => {
-    if (fullCode.length !== 6 || !memberId) {
-      return;
-    }
+  const verifyMemberCode = async (fullCode: string) => {
     setLoading(true);
     setError('');
     try {
@@ -35,12 +47,10 @@ export function OtpVerify() {
       const data = await res.json();
 
       if (data.verified) {
-        // Clear session storage
         sessionStorage.removeItem('mp_memberId');
         sessionStorage.removeItem('mp_orgId');
         sessionStorage.removeItem('mp_phone');
         sessionStorage.removeItem('mp_maskedEmail');
-
         router.push(`/${org?.orgSlug ?? ''}/dashboard`);
       }
       else {
@@ -51,6 +61,113 @@ export function OtpVerify() {
     catch {
       setError('Verification failed. Please try again.');
       setCode('');
+    }
+    setLoading(false);
+  };
+
+  const verifyStaffCode = async (fullCode: string) => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/member-portal/staff-verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId, staffClerkUserId: selectedStaffId, code: fullCode }),
+      });
+      const data = await res.json();
+
+      if (data.verified) {
+        sessionStorage.removeItem('mp_memberId');
+        sessionStorage.removeItem('mp_orgId');
+        sessionStorage.removeItem('mp_phone');
+        sessionStorage.removeItem('mp_maskedEmail');
+        router.push(`/${org?.orgSlug ?? ''}/dashboard`);
+      }
+      else {
+        setError(data.error ?? 'Invalid code. Please try again.');
+        setCode('');
+      }
+    }
+    catch {
+      setError('Verification failed. Please try again.');
+      setCode('');
+    }
+    setLoading(false);
+  };
+
+  const handleVerify = async (fullCode: string) => {
+    if (fullCode.length !== 6 || !memberId) {
+      return;
+    }
+    if (mode === 'staff-code') {
+      if (!selectedStaffId) {
+        return;
+      }
+      await verifyStaffCode(fullCode);
+    }
+    else {
+      await verifyMemberCode(fullCode);
+    }
+  };
+
+  const openStaffOverride = async () => {
+    if (!org) {
+      return;
+    }
+    setMode('staff-pick');
+    setError('');
+    setStaffListLoading(true);
+    try {
+      const res = await fetch('/api/member-portal/staff-list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orgSlug: org.orgSlug }),
+      });
+      const data = await res.json() as { staff?: StaffEntry[] };
+      setStaffList(data.staff ?? []);
+    }
+    catch {
+      setStaffList([]);
+    }
+    setStaffListLoading(false);
+  };
+
+  const pickStaff = async (staff: StaffEntry) => {
+    if (!org || !memberId) {
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setSelectedStaffId(staff.id);
+    try {
+      const res = await fetch('/api/member-portal/staff-send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          memberId,
+          staffClerkUserId: staff.id,
+          orgSlug: org.orgSlug,
+        }),
+      });
+
+      if (res.status === 429) {
+        setError('Too many attempts. Please wait a few minutes.');
+        setLoading(false);
+        return;
+      }
+
+      const data = await res.json() as { sent?: boolean; maskedEmail?: string };
+      if (data.sent) {
+        setStaffMaskedEmail(data.maskedEmail ?? staff.maskedEmail);
+        setCode('');
+        setMode('staff-code');
+      }
+      else {
+        setError('Failed to send verification code.');
+      }
+    }
+    catch {
+      setError('Something went wrong. Please try again.');
     }
     setLoading(false);
   };
@@ -74,6 +191,62 @@ export function OtpVerify() {
 
   const numpad = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'];
 
+  if (mode === 'staff-pick') {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-white p-6">
+        <div className="w-full max-w-sm">
+          <h1 className="mb-2 text-center text-3xl font-bold text-black">
+            Who's helping?
+          </h1>
+          <p className="mb-8 text-center text-lg text-gray-500">
+            Tap your name to receive a code at your email
+          </p>
+
+          {error && <p className="mb-4 text-center text-red-500">{error}</p>}
+
+          {staffListLoading
+            ? (
+                <p className="text-center text-gray-500">Loading staff...</p>
+              )
+            : staffList.length === 0
+              ? (
+                  <p className="text-center text-gray-500">No staff available.</p>
+                )
+              : (
+                  <div className="mb-6 flex flex-col gap-3">
+                    {staffList.map(s => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => pickStaff(s)}
+                        disabled={loading}
+                        className="min-h-14 cursor-pointer rounded-2xl border-2 border-gray-200 bg-white px-6 py-4 text-left transition-all hover:border-black hover:bg-gray-50 active:scale-[0.98] disabled:opacity-50"
+                      >
+                        <div className="text-lg font-bold text-black">{s.fullName}</div>
+                        <div className="text-sm text-gray-500">{s.maskedEmail}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+          <button
+            type="button"
+            onClick={() => {
+              setMode('member');
+              setError('');
+            }}
+            className="w-full cursor-pointer text-center text-lg text-gray-500 transition-colors hover:text-black"
+          >
+            ← Back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const isStaffCode = mode === 'staff-code';
+  const displayEmail = isStaffCode ? staffMaskedEmail : maskedEmail;
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-white p-6">
       <div className="w-full max-w-sm">
@@ -81,9 +254,9 @@ export function OtpVerify() {
           Enter Verification Code
         </h1>
         <p className="mb-8 text-center text-lg text-gray-500">
-          We sent a 6-digit code to
+          {isStaffCode ? 'We sent a 6-digit staff code to' : 'We sent a 6-digit code to'}
           {' '}
-          {maskedEmail || 'your email'}
+          {displayEmail || 'your email'}
         </p>
 
         {/* Code display */}
@@ -141,14 +314,30 @@ export function OtpVerify() {
         <button
           type="button"
           onClick={() => {
+            if (isStaffCode) {
+              setMode('staff-pick');
+              setCode('');
+              setError('');
+              return;
+            }
             if (org) {
               router.push(`/${org.orgSlug}`);
             }
           }}
-          className="w-full cursor-pointer text-center text-lg text-gray-500 transition-colors hover:text-black"
+          className="mb-4 w-full cursor-pointer text-center text-lg text-gray-500 transition-colors hover:text-black"
         >
           ← Back
         </button>
+
+        {!isStaffCode && (
+          <button
+            type="button"
+            onClick={openStaffOverride}
+            className="flex min-h-16 w-full cursor-pointer items-center justify-center rounded-2xl border-2 border-gray-200 bg-white text-xl font-bold text-black transition-all hover:border-black hover:bg-gray-50 active:scale-95"
+          >
+            Staff override →
+          </button>
+        )}
       </div>
     </div>
   );
