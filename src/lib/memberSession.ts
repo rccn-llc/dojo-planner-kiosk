@@ -6,6 +6,9 @@ interface MemberSessionPayload {
   firstName: string;
   lastName: string;
   email: string;
+  // Set when a staff member unlocked this session on a member's behalf
+  // (admin override on the OTP screen). Absent for normal member self-logins.
+  actingStaffEmail?: string;
 }
 
 function getSecret(): Uint8Array {
@@ -51,6 +54,7 @@ export async function verifyMemberSession(
       firstName: (p.firstName as string) ?? '',
       lastName: (p.lastName as string) ?? '',
       email: (p.email as string) ?? '',
+      ...(typeof p.actingStaffEmail === 'string' ? { actingStaffEmail: p.actingStaffEmail } : {}),
     };
   }
   catch {

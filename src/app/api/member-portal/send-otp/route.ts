@@ -29,7 +29,7 @@ export async function POST(request: Request) {
 
     // Generate and store OTP
     const code = generateOTP();
-    const stored = await storeOTP(memberId, code);
+    const stored = await storeOTP('member', memberId, code);
 
     if (!stored) {
       return NextResponse.json({ error: 'Too many requests. Please wait a few minutes.' }, { status: 429 });
