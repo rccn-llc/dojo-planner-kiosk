@@ -1,6 +1,7 @@
 'use client';
 
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 
 const RESERVED_FIRST_SEGMENTS = new Set(['api', '_next', 'favicon.ico']);
 
@@ -9,14 +10,26 @@ const RESERVED_FIRST_SEGMENTS = new Set(['api', '_next', 'favicon.ico']);
  *
  * The kiosk is served per-org under `/<orgSlug>/...`. This hook reads
  * `usePathname()` and returns the first non-reserved path segment. As a
- * fallback it accepts `?org=<slug-or-org-id>` from the query string (useful
- * for local dev and debugging), then `NEXT_PUBLIC_DEFAULT_ORG_SLUG`.
+ * fallback it reads `?org=<slug-or-org-id>` from `window.location.search`
+ * (read lazily after mount so the page can still be statically prerendered
+ * — `useSearchParams` would force a CSR bailout). Finally falls back to
+ * `NEXT_PUBLIC_DEFAULT_ORG_SLUG`.
  *
  * Returns `null` when no slug can be derived.
  */
 export function useOrgSlug(): string | null {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const [queryOrg, setQueryOrg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const value = new URLSearchParams(window.location.search).get('org')?.trim();
+    if (value) {
+      setQueryOrg(value);
+    }
+  }, []);
 
   if (pathname) {
     const first = pathname.split('/').filter(Boolean)[0];
@@ -25,9 +38,8 @@ export function useOrgSlug(): string | null {
     }
   }
 
-  const fromQuery = searchParams.get('org')?.trim();
-  if (fromQuery) {
-    return fromQuery;
+  if (queryOrg) {
+    return queryOrg;
   }
 
   return process.env.NEXT_PUBLIC_DEFAULT_ORG_SLUG ?? null;
