@@ -137,7 +137,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [state, send] = useStoreMachine();
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug } = useOrgSlug();
 
   // Fetch tokenization config when entering checkout
   useEffect(() => {

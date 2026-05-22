@@ -98,7 +98,7 @@ interface DefaultTrialSelection {
 
 export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const [state, send] = useTrialMachine();
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug } = useOrgSlug();
   const [defaultTrial, setDefaultTrial] = useState<DefaultTrialSelection | null>(null);
   const [createdMembers, setCreatedMembers] = useState<TrialCheckinMember[]>([]);
 

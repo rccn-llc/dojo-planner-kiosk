@@ -130,7 +130,7 @@ interface LookupResult {
 
 export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberData }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug } = useOrgSlug();
   const [planPage, setPlanPage] = useState(0);
   const [successCountdown, setSuccessCountdown] = useState(60);
   const [lookupResults, setLookupResults] = useState<LookupResult[]>([]);

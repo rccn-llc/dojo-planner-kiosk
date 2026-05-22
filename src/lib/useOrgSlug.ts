@@ -5,6 +5,17 @@ import { useEffect, useState } from 'react';
 
 const RESERVED_FIRST_SEGMENTS = new Set(['api', '_next', 'favicon.ico']);
 
+function readPathSlug(pathname: string | null): string | null {
+  if (!pathname) {
+    return null;
+  }
+  const first = pathname.split('/').filter(Boolean)[0];
+  if (first && !RESERVED_FIRST_SEGMENTS.has(first)) {
+    return first;
+  }
+  return null;
+}
+
 /**
  * Resolve the Clerk org slug from the current URL.
  *
@@ -15,10 +26,15 @@ const RESERVED_FIRST_SEGMENTS = new Set(['api', '_next', 'favicon.ico']);
  * — `useSearchParams` would force a CSR bailout). Finally falls back to
  * `NEXT_PUBLIC_DEFAULT_ORG_SLUG`.
  *
- * Returns `null` when no slug can be derived.
+ * Returns `{ slug, resolved }`: `slug` is null until a value is found.
+ * `resolved` flips to true once the client-side query check has run, so
+ * consumers can show a loading state until then and avoid a guaranteed
+ * 400 round-trip when `?org=` is the only source of the slug.
  */
-export function useOrgSlug(): string | null {
+export function useOrgSlug(): { slug: string | null; resolved: boolean } {
   const pathname = usePathname();
+  const pathSlug = readPathSlug(pathname);
+  const [resolved, setResolved] = useState(pathSlug !== null);
   const [queryOrg, setQueryOrg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,20 +45,15 @@ export function useOrgSlug(): string | null {
     if (value) {
       setQueryOrg(value);
     }
+    setResolved(true);
   }, []);
 
-  if (pathname) {
-    const first = pathname.split('/').filter(Boolean)[0];
-    if (first && !RESERVED_FIRST_SEGMENTS.has(first)) {
-      return first;
-    }
-  }
+  const slug = pathSlug
+    ?? queryOrg
+    ?? process.env.NEXT_PUBLIC_DEFAULT_ORG_SLUG
+    ?? null;
 
-  if (queryOrg) {
-    return queryOrg;
-  }
-
-  return process.env.NEXT_PUBLIC_DEFAULT_ORG_SLUG ?? null;
+  return { slug, resolved };
 }
 
 /**
