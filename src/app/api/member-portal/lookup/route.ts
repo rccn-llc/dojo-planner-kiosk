@@ -1,6 +1,6 @@
 import { and, eq, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgBySlug } from '@/lib/clerk';
+import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 
@@ -14,25 +14,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ found: false, error: 'Valid 10-digit phone number is required' });
     }
 
-    if (!orgSlug) {
-      return NextResponse.json({ found: false, error: 'Organization slug is required' });
-    }
-
-    // Resolve org by slug, or fall back to ORGANIZATION_ID for kiosk usage
-    let orgId: string;
-    if (orgSlug === '_kiosk') {
-      const envOrgId = process.env.ORGANIZATION_ID;
-      if (!envOrgId) {
-        return NextResponse.json({ found: false, error: 'Organization not configured' });
+    // Resolve org: URL ?org=<slug-or-id> takes precedence; then body.orgSlug
+    // (including the legacy "_kiosk" sentinel → env); else error.
+    let orgId: string | null = await resolveOrgIdFromRequest(request);
+    if (!orgId) {
+      if (orgSlug === '_kiosk') {
+        orgId = process.env.ORGANIZATION_ID ?? null;
       }
-      orgId = envOrgId;
-    }
-    else {
-      const org = await resolveOrgBySlug(orgSlug);
-      if (!org) {
-        return NextResponse.json({ found: false, error: 'Organization not found' });
+      else if (orgSlug) {
+        const org = await resolveOrgBySlug(orgSlug);
+        orgId = org?.orgId ?? null;
       }
-      orgId = org.orgId;
+    }
+    if (!orgId) {
+      return NextResponse.json({ found: false, error: 'Organization not found' });
     }
 
     const db = getDatabase();

@@ -1,13 +1,21 @@
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { validateDevice } from '@/lib/deviceAuth';
 
 export async function GET(request: Request) {
-  const device = await validateDevice(request);
-  const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
-  const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+  // Prefer URL-derived org slug; fall back to device cert / env for legacy callers.
+  let orgId = await resolveOrgIdFromRequest(request);
+  if (!orgId) {
+    const device = await validateDevice(request);
+    orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
+  }
 
-  if (!orgId || !clerkSecretKey) {
-    return NextResponse.json({ name: null, imageUrl: null }, { status: 200 });
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY;
+  if (!orgId) {
+    return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
+  }
+  if (!clerkSecretKey) {
+    return NextResponse.json({ error: 'Clerk is not configured' }, { status: 500 });
   }
 
   try {

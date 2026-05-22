@@ -7,6 +7,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
@@ -129,6 +130,7 @@ interface LookupResult {
 
 export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberData }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
+  const orgSlug = useOrgSlug();
   const [planPage, setPlanPage] = useState(0);
   const [successCountdown, setSuccessCountdown] = useState(60);
   const [lookupResults, setLookupResults] = useState<LookupResult[]>([]);
@@ -353,7 +355,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
   // Fetch tokenization config when entering payment step
   useEffect(() => {
     if (state.matches('collectingPayment') && !tokenizationConfig && !tokenizationError) {
-      fetch('/api/payment/tokenization-config')
+      fetch(withOrgQuery('/api/payment/tokenization-config', orgSlug))
         .then(r => r.json())
         .then((data: { config: TokenizationIframeConfig }) => {
           if (data.config) {
@@ -365,7 +367,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
         })
         .catch(() => setTokenizationError('Failed to load payment form'));
     }
-  }, [state, tokenizationConfig, tokenizationError]);
+  }, [state, tokenizationConfig, tokenizationError, orgSlug]);
 
   // Calculate admin fee on the payment page. Memberships are NOT taxed (per
   // Basys guidance), so we only pass isTaxable: false. Both card and ACH use
@@ -384,7 +386,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     }
     let cancelled = false;
     send({ type: 'CALCULATE_FEES_START' });
-    fetch('/api/payment/calculate-fees', {
+    fetch(withOrgQuery('/api/payment/calculate-fees', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -539,7 +541,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       convertingTrialMembershipId: ctx.convertingTrialMembershipId,
     };
 
-    fetch('/api/payment/membership', {
+    fetch(withOrgQuery('/api/payment/membership', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(paymentBody),

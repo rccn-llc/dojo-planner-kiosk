@@ -45,3 +45,4 @@ storybook-static
 
 # local development references (not committed — no .gitmodules)
 /shared
+PLAN.md

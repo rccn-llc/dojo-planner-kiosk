@@ -1,5 +1,6 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import {
   membershipWaiver,
@@ -9,12 +10,12 @@ import {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { planId?: string };
-    const orgId = process.env.ORGANIZATION_ID;
-
+    const orgId = (await resolveOrgIdFromRequest(request)) ?? process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
-      return NextResponse.json({ error: 'ORGANIZATION_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
+
+    const body = await request.json() as { planId?: string };
 
     const db = getDatabase();
 

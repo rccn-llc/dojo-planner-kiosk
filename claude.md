@@ -29,22 +29,34 @@ The home screen (`KioskHome.tsx`) orchestrates flow selection and displays the C
 ```
 GET  /api/catalog              - Fetch kiosk-visible catalog items (filtered by ORGANIZATION_ID)
 GET  /api/organization         - Fetch Clerk org name via Backend API
-GET  /api/payment/tokenization-config - IQPro TokenEx iframe config for card entry
-POST /api/payment/process      - Process store order (create customer → payment method → charge)
+GET  /api/payment/tokenization-config?org=<slug> - IQPro TokenEx iframe config for card entry
+POST /api/payment/process?org=<slug>           - Process store order (create customer → payment method → charge)
+POST /api/payment/membership?org=<slug>        - Process membership signup (subscription + initial charge)
+POST /api/payment/calculate-fees?org=<slug>    - Compute tax + service fee breakdown
+GET  /api/payment/saved-payment-method/search?org=<slug>&phone=... - Vaulted-customer chooser
 ```
+
+**All `/api/payment/*` routes require `?org=<orgSlug>`.** The slug is the Clerk org slug — same one used in `/[orgSlug]/...` page URLs. The server resolves it via `resolveOrgBySlug` (1-hour cached), then looks up per-org IQPro credentials in the `organization.iqpro_config_*` columns (falling back to env vars per field). Client flows call `useOrgSlug()` (in `src/lib/useOrgSlug.ts`) which reads the slug from the current URL.
 
 ## Payment Processing (IQPro)
 
 Payments are processed via direct IQPro REST API calls — **no SDK dependency** at runtime. The `@dojo-planner/iqpro-client` package is listed in dependencies but its `dist/` is not built; all payment logic uses `iqproPost`/`iqproGet` helpers in `src/lib/iqpro.ts` that make authenticated calls using OAuth client credentials.
 
-**Flow:** OAuth token → create customer → register payment method (card token or ACH token) → process transaction.
+**Source of truth for credentials:** the main dojo-planner app's Payment Settings page writes `clientId`, encrypted `clientSecret`, and `gatewayId` to the shared `organization` row. The kiosk reads them via `src/lib/iqproConfig.ts` (`resolveIQProConfig(orgId)`), falling back to env vars per field. `scope`, `oauthUrl`, and `baseUrl` are always env.
+
+**Flow:** Resolve per-org config from `?org=<slug>` → OAuth token (cached per `clientId`) → create customer → register payment method (card token or ACH token) → process transaction.
 
 **Card payments:** TokenEx iframe tokenizes card data client-side. The token is captured before leaving the checkout screen and passed to the server.
 
 **ACH payments:** Account number tokenized server-side via IQPro Vault API, then registered as a payment method.
 
+**State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. Service fee is currently a module constant (`SERVICE_FEE_PCT = 3.75` in `src/lib/iqpro.ts`); change there until the main app exposes a per-org service-fee column.
+
 **Key files:**
-- `src/lib/iqpro.ts` — OAuth token management, tokenization config, ACH tokenization, API helpers
+- `src/lib/crypto.ts` — AES-256-GCM helpers for the encrypted client secret
+- `src/lib/iqproConfig.ts` — per-org credential resolver + tax-rate lookup (60s cache)
+- `src/lib/iqpro.ts` — OAuth token management, tokenization config, ACH tokenization, API helpers (no env reads; every function takes an `IQProConfig`)
+- `src/lib/useOrgSlug.ts` — client-side helper that reads the slug from the URL
 - `src/app/api/payment/process/route.ts` — Full payment processing endpoint
 - `src/hooks/useTokenExIframe.ts` — Client-side TokenEx iframe management
 
@@ -78,22 +90,30 @@ NEXT_PUBLIC_ORGANIZATION_ID=org_...
 # Clerk (for org name display on home screen)
 CLERK_SECRET_KEY=sk_...
 
-# IQPro Payment Processing (all required for payments to work)
-IQPRO_CLIENT_ID=...
-IQPRO_CLIENT_SECRET=...
+# IQPro Payment Processing
+# Platform-wide (always env):
 IQPRO_SCOPE=...
 IQPRO_OAUTH_URL=...
 IQPRO_BASE_URL=...          # e.g. https://sandbox.api.basyspro.com/iqsaas/v1
+# Per-org (preferred source: Payment Settings in the main app; env is a fallback):
+IQPRO_CLIENT_ID=...
+IQPRO_CLIENT_SECRET=...
 IQPRO_GATEWAY_ID=...
+# Required when any org has an encrypted clientSecret in the DB; optional otherwise.
+# 32 raw bytes, hex-encoded (e.g. openssl rand -hex 32).
+IQPRO_CONFIG_ENCRYPTION_KEY=...
 
-# Sales-tax % applied to store items only (stand-in for per-org DB column)
-KIOSK_TAX_STATE_PCT=3.75
-# Service fee % applied to all transactions; flatAmount computed by IQPro calculatefees
-KIOSK_SERVICE_FEE_PCT=3.75
+# Client-side default slug for the kiosk home page when URL is "/". In
+# production each kiosk is served at /<org-slug>/... and this is unused.
+NEXT_PUBLIC_DEFAULT_ORG_SLUG=...
 
 # Email (for receipt sending)
 RESEND_API_KEY=...
 ```
+
+Tax rate and service fee:
+- **Tax rate**: read from `organization.location_tax_rate` (edited in the main app's Location Settings). No env var.
+- **Service fee**: hard-coded `SERVICE_FEE_PCT = 3.75` constant at the top of `src/lib/iqpro.ts`. Change there until the main app exposes a per-org column.
 
 ## State Management (XState 5)
 

@@ -7,6 +7,7 @@ import EmailIcon from '@mui/icons-material/Email';
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useState } from 'react';
+import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { validateMemberEditForm } from '../../lib/validation';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
@@ -122,6 +123,7 @@ interface StaffEntry {
 }
 
 export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
+  const orgSlug = useOrgSlug();
   const [view, setView] = useState<View>('search');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
@@ -220,7 +222,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/members/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: digits }) });
+      const res = await fetch(withOrgQuery('/api/members/lookup', orgSlug), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: digits }) });
       const data = await res.json();
       if (!data.found || data.members.length === 0) {
         setResults([]);
@@ -244,7 +246,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setLoading(true);
     setError('');
     try {
-      const res = await fetch('/api/members/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      const res = await fetch(withOrgQuery('/api/members/search', orgSlug), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
       const data = await res.json();
       if (!data.found || data.members.length === 0) {
         setResults([]);
@@ -268,8 +270,8 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setView('memberDetail');
     try {
       const [detailRes, familyRes] = await Promise.all([
-        fetch(`/api/members/${memberId}`),
-        fetch(`/api/members/${memberId}/family`),
+        fetch(withOrgQuery(`/api/members/${memberId}`, orgSlug)),
+        fetch(withOrgQuery(`/api/members/${memberId}/family`, orgSlug)),
       ]);
       const detail = await detailRes.json();
       const family = await familyRes.json();
@@ -292,7 +294,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
 
     try {
       // Look up member's email hint via the member-portal lookup
-      const lookupRes = await fetch('/api/member-portal/lookup', {
+      const lookupRes = await fetch(withOrgQuery('/api/member-portal/lookup', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: searchPhone.replace(/\D/g, ''), orgSlug: '_kiosk' }),
@@ -304,7 +306,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
       const emailHint = match?.emailHint ?? '***@***.***';
 
       // Send OTP
-      await fetch('/api/member-portal/send-otp', {
+      await fetch(withOrgQuery('/api/member-portal/send-otp', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ memberId: m.memberId, orgSlug: '_kiosk' }),
@@ -383,7 +385,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setOtpCode('');
     setStaffListLoading(true);
     try {
-      const res = await fetch('/api/member-portal/staff-list', {
+      const res = await fetch(withOrgQuery('/api/member-portal/staff-list', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orgSlug: '_kiosk' }),
@@ -405,7 +407,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setOtpError('');
     setSelectedStaffId(staff.id);
     try {
-      const res = await fetch('/api/member-portal/staff-send-otp', {
+      const res = await fetch(withOrgQuery('/api/member-portal/staff-send-otp', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -483,7 +485,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setSaving(true);
     setError('');
     try {
-      const res = await fetch(`/api/members/${selectedMemberId}`, {
+      const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}`, orgSlug), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -522,7 +524,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setMembershipActionLoading(action);
     setError('');
     try {
-      const res = await fetch(`/api/members/${selectedMemberId}/membership`, {
+      const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}/membership`, orgSlug), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ memberMembershipId, action }),
@@ -545,7 +547,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setSendingWaiverId(waiverId);
     setError('');
     try {
-      const res = await fetch(`/api/members/${selectedMemberId}/waivers/${waiverId}/send`, { method: 'POST' });
+      const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}/waivers/${waiverId}/send`, orgSlug), { method: 'POST' });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error ?? 'Send failed');
@@ -565,10 +567,10 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
       let res;
       if (type === 'phone') {
         const digits = familySearchPhone.replace(/\D/g, '');
-        res = await fetch('/api/members/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: digits }) });
+        res = await fetch(withOrgQuery('/api/members/lookup', orgSlug), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phone: digits }) });
       }
       else {
-        res = await fetch('/api/members/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: familySearchName.trim() }) });
+        res = await fetch(withOrgQuery('/api/members/search', orgSlug), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: familySearchName.trim() }) });
       }
       const data = await res.json();
       setFamilySearchResults(data.members?.filter((m: MemberResult) => m.memberId !== selectedMemberId) ?? []);
@@ -598,7 +600,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setFamilyLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/members/${selectedMemberId}/create-family`, {
+      const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}/create-family`, orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -633,7 +635,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     }
     setFamilyLoading(true);
     try {
-      await fetch(`/api/members/${selectedMemberId}/link-family`, {
+      await fetch(withOrgQuery(`/api/members/${selectedMemberId}/link-family`, orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ relatedMemberId, relationship: familyRelationship }),

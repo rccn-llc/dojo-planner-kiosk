@@ -4,6 +4,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
+import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
@@ -97,12 +98,13 @@ interface DefaultTrialSelection {
 
 export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const [state, send] = useTrialMachine();
+  const orgSlug = useOrgSlug();
   const [defaultTrial, setDefaultTrial] = useState<DefaultTrialSelection | null>(null);
   const [createdMembers, setCreatedMembers] = useState<TrialCheckinMember[]>([]);
 
   // Load the first available trial program + plan once when the flow mounts
   useEffect(() => {
-    fetch('/api/trial/programs')
+    fetch(withOrgQuery('/api/trial/programs', orgSlug))
       .then(r => r.json())
       .then((data: { programs?: Array<{ id: string; name: string; trialPlans: Array<{ id: string; name: string }> }> }) => {
         const firstProgram = data.programs?.[0];
@@ -117,7 +119,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         }
       })
       .catch(() => {});
-  }, []);
+  }, [orgSlug]);
 
   // Track session IDs so effects re-run on each new session but not on re-renders
   const programsLoadedRef = useRef<string>('');
@@ -135,7 +137,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
     programsLoadedRef.current = state.context.sessionId;
     processingRef.current = false;
 
-    fetch('/api/trial/programs')
+    fetch(withOrgQuery('/api/trial/programs', orgSlug))
       .then(res => res.json())
       .then((data: { programs: Array<{ id: string; trialPlans: Array<{ id: string }> }> }) => {
         const firstPlan = data.programs?.[0]?.trialPlans?.[0];
@@ -157,7 +159,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
     }
     waiverLoadedRef.current = state.context.sessionId;
 
-    fetch('/api/trial/waiver')
+    fetch(withOrgQuery('/api/trial/waiver', orgSlug))
       .then(res => res.json())
       .then((data: { id: string; version: number; content: string }) => {
         if (data.id) {
@@ -228,7 +230,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
           membershipPlanId: ctx.selectedMembershipPlanId,
         };
 
-    fetch('/api/trial/submit', {
+    fetch(withOrgQuery('/api/trial/submit', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -306,7 +308,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       planName: defaultTrial.planName,
     };
 
-    fetch('/api/trial/submit', {
+    fetch(withOrgQuery('/api/trial/submit', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -336,7 +338,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
     if (!state.matches('collectingWaiver') || !state.context.isLoadingWaiver) {
       return;
     }
-    fetch('/api/trial/waiver')
+    fetch(withOrgQuery('/api/trial/waiver', orgSlug))
       .then(r => r.json())
       .then((data: { id?: string; version?: number; content?: string; error?: string }) => {
         if (data.id && typeof data.version === 'number' && data.content) {

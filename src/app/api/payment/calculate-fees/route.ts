@@ -1,7 +1,9 @@
 import type { FeeBreakdown } from '@/lib/types';
 
 import { NextResponse } from 'next/server';
-import { computeFeeBreakdown, getGatewayProcessors, isIQProConfigured } from '@/lib/iqpro';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
+import { computeFeeBreakdown, getGatewayProcessors } from '@/lib/iqpro';
+import { getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
 
 export interface CalculateFeesRequest {
   baseAmount: number;
@@ -25,12 +27,21 @@ const PREVIEW_BIN = '400000';
 
 /**
  * Compute the tax + service fee breakdown for a transaction.
- * - Tax: computed locally from KIOSK_TAX_STATE_PCT (store items only).
+ * - Tax: computed locally from `organization.location_tax_rate` (store items only).
  * - Service fee: computed by IQPro's /calculatefees endpoint (authoritative,
  *   avoids fractional-cent rounding discrepancies).
  */
 export async function POST(request: Request) {
-  if (!isIQProConfigured()) {
+  const orgId = await resolveOrgIdFromRequest(request);
+  if (!orgId) {
+    return NextResponse.json<CalculateFeesResponse>(
+      { success: false, error: 'Organization not found. Pass ?org=<slug>.' },
+      { status: 400 },
+    );
+  }
+
+  const iqproConfig = await resolveIQProConfig(orgId);
+  if (!iqproConfig) {
     return NextResponse.json<CalculateFeesResponse>(
       { success: false, error: 'Payment processing is not configured' },
       { status: 503 },
@@ -68,7 +79,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const processors = await getGatewayProcessors();
+    const processors = await getGatewayProcessors(iqproConfig);
     const processorId = body.paymentMethod === 'card'
       ? processors.cardProcessorId
       : processors.achProcessorId;
@@ -80,9 +91,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const taxStatePct = await getOrganizationTaxRate(orgId);
+
     const feeBreakdown: FeeBreakdown = await computeFeeBreakdown(
+      iqproConfig,
       body.baseAmount,
       body.isTaxable,
+      taxStatePct,
       {
         processorId,
         token: body.token,

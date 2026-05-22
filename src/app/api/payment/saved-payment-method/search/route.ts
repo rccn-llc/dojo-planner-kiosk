@@ -1,8 +1,9 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
-import { validateDevice } from '@/lib/deviceAuth';
-import { isIQProConfigured, searchCustomersByPhone, signMatchToken } from '@/lib/iqpro';
+import { searchCustomersByPhone, signMatchToken } from '@/lib/iqpro';
+import { resolveIQProConfig } from '@/lib/iqproConfig';
 import { member } from '@/lib/memberSchema';
 import { isValidPhoneNumber, sanitizePhoneInput } from '@/lib/utils';
 
@@ -36,19 +37,19 @@ export interface SavedPaymentMethodSearchResponse {
  * a short-lived signed match token the client passes back at charge time.
  */
 export async function GET(request: Request) {
-  if (!isIQProConfigured()) {
+  const orgId = await resolveOrgIdFromRequest(request);
+  if (!orgId) {
     return NextResponse.json<SavedPaymentMethodSearchResponse>(
-      { matches: [], error: 'Payment processing is not configured' },
-      { status: 503 },
+      { matches: [], error: 'Organization not found. Pass ?org=<slug>.' },
+      { status: 400 },
     );
   }
 
-  const device = await validateDevice(request);
-  const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
-  if (!orgId) {
+  const iqproConfig = await resolveIQProConfig(orgId);
+  if (!iqproConfig) {
     return NextResponse.json<SavedPaymentMethodSearchResponse>(
-      { matches: [], error: 'Organization context not available' },
-      { status: 500 },
+      { matches: [], error: 'Payment processing is not configured' },
+      { status: 503 },
     );
   }
 
@@ -64,7 +65,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const vaultMatches = await searchCustomersByPhone(phone);
+    const vaultMatches = await searchCustomersByPhone(iqproConfig, phone);
     if (vaultMatches.length === 0) {
       return NextResponse.json<SavedPaymentMethodSearchResponse>({ matches: [] });
     }
@@ -103,7 +104,7 @@ export async function GET(request: Request) {
         continue;
       }
       matches.push({
-        matchToken: signMatchToken({
+        matchToken: signMatchToken(iqproConfig, {
           customerId: vm.customerId,
           customerPaymentMethodId: vm.customerPaymentMethodId,
           paymentMethodType: vm.paymentMethodType,

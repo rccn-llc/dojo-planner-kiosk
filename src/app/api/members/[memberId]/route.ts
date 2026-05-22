@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import {
@@ -21,10 +22,13 @@ export async function GET(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    const device = await validateDevice(request);
-    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
+    let orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      const device = await validateDevice(request);
+      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
+    }
+    if (!orgId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
     const { memberId } = await params;
@@ -223,10 +227,13 @@ export async function PATCH(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    const device = await validateDevice(request);
-    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
+    let orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      const device = await validateDevice(request);
+      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
+    }
+    if (!orgId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
     const { memberId } = await params;

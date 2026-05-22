@@ -1,6 +1,6 @@
 import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
-import { resolveOrgBySlug } from '@/lib/clerk';
+import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { generateOTP, storeOTP } from '@/lib/otp';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
@@ -38,25 +38,23 @@ export async function POST(request: Request) {
     const staffClerkUserId = body.staffClerkUserId?.trim() ?? '';
     const orgSlug = body.orgSlug?.trim() ?? '';
 
-    if (!UUID_RE.test(memberId) || !CLERK_USER_ID_RE.test(staffClerkUserId) || !orgSlug) {
+    if (!UUID_RE.test(memberId) || !CLERK_USER_ID_RE.test(staffClerkUserId)) {
       return fakeSent();
     }
 
-    // Resolve org
-    let orgId: string;
-    if (orgSlug === '_kiosk') {
-      const envOrgId = process.env.ORGANIZATION_ID;
-      if (!envOrgId) {
-        return fakeSent();
+    // Resolve org: URL ?org= first, then body.orgSlug (legacy + _kiosk).
+    let orgId: string | null = await resolveOrgIdFromRequest(request);
+    if (!orgId) {
+      if (orgSlug === '_kiosk') {
+        orgId = process.env.ORGANIZATION_ID ?? null;
       }
-      orgId = envOrgId;
+      else if (orgSlug) {
+        const org = await resolveOrgBySlug(orgSlug);
+        orgId = org?.orgId ?? null;
+      }
     }
-    else {
-      const org = await resolveOrgBySlug(orgSlug);
-      if (!org) {
-        return fakeSent();
-      }
-      orgId = org.orgId;
+    if (!orgId) {
+      return fakeSent();
     }
 
     const secretKey = process.env.CLERK_SECRET_KEY;
