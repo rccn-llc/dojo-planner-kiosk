@@ -4,6 +4,7 @@ import type { ChildMembershipSeed } from './flows/MembershipFlow';
 import type { TrialCheckinMember } from './flows/TrialFlow';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
+import { useOrgSlug, withOrgQuery } from '../lib/useOrgSlug';
 import { CheckinFlow } from './flows/CheckinFlow';
 import { MemberAreaFlow } from './flows/MemberAreaFlow';
 import { MembershipFlow } from './flows/MembershipFlow';
@@ -17,22 +18,42 @@ export function KioskHome() {
   const [currentFlow, setCurrentFlow] = useState<FlowType>('home');
   const [orgName, setOrgName] = useState<string | null>(null);
   const [orgImageUrl, setOrgImageUrl] = useState<string | null>(null);
+  const [orgError, setOrgError] = useState<string | null>(null);
   const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
   const [childMembershipSeed, setChildMembershipSeed] = useState<ChildMembershipSeed | null>(null);
+  const orgSlug = useOrgSlug();
 
   useEffect(() => {
-    fetch('/api/organization')
-      .then(r => r.json())
-      .then((data: { name: string | null; imageUrl: string | null }) => {
+    fetch(withOrgQuery('/api/organization', orgSlug))
+      .then(async (r) => {
+        const data = await r.json() as { name?: string | null; imageUrl?: string | null; error?: string };
+        if (!r.ok) {
+          setOrgError(data.error ?? `Failed to load organization (${r.status})`);
+          return;
+        }
         if (data.name) {
           setOrgName(data.name);
+        }
+        else {
+          setOrgError('No organization was returned by Clerk for this slug.');
         }
         if (data.imageUrl) {
           setOrgImageUrl(data.imageUrl);
         }
       })
-      .catch(() => {});
-  }, []);
+      .catch(err => setOrgError(err instanceof Error ? err.message : 'Failed to load organization'));
+  }, [orgSlug]);
+
+  if (orgError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white p-8">
+        <div className="max-w-xl text-center">
+          <h1 className="mb-4 text-3xl font-bold text-red-600">Organization not loaded</h1>
+          <p className="text-lg text-gray-700">{orgError}</p>
+        </div>
+      </div>
+    );
+  }
 
   const handleFlowComplete = () => {
     setCurrentFlow('home');

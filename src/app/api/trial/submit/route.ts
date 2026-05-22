@@ -3,6 +3,7 @@ import type { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendTrialConfirmation } from '@/lib/email';
 import {
@@ -58,12 +59,12 @@ function calcAge(dob: Date, now: Date): number {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json() as SubmitTrialRequest;
-    const orgId = process.env.ORGANIZATION_ID;
-
+    const orgId = (await resolveOrgIdFromRequest(request)) ?? process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
-      return NextResponse.json({ error: 'ORGANIZATION_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
+
+    const body = await request.json() as SubmitTrialRequest;
 
     const { ageGroup, member, children, waiver, membershipPlanId } = body;
 

@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
-import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut, isIQProConfigured } from '@/lib/iqpro';
+import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
+import { resolveIQProConfig } from '@/lib/iqproConfig';
 import { member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 export async function PATCH(
@@ -12,11 +14,18 @@ export async function PATCH(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    const device = await validateDevice(request);
-    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
+    // Prefer URL-derived org slug; fall back to device cert when the slug
+    // isn't present (older clients).
+    let orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      const device = await validateDevice(request);
+      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
     }
+    if (!orgId) {
+      return NextResponse.json({ error: 'Organization context not available' }, { status: 400 });
+    }
+
+    const iqproConfig = await resolveIQProConfig(orgId);
 
     const { memberId } = await params;
     const body = await request.json() as {
@@ -82,16 +91,16 @@ export async function PATCH(
       plan = plans[0] ? { name: plans[0].name, cancellationFee: 0 } : undefined;
     }
 
-    const gatewayId = process.env.IQPRO_GATEWAY_ID;
+    const gatewayId = iqproConfig?.gatewayId;
 
     // ── IQPro operations ─────────────────────────────────────────────────────
     let cancellationFeeCharged = 0;
     let cancellationTxId: string | undefined;
 
-    if (membership.iqproSubscriptionId && isIQProConfigured() && gatewayId) {
+    if (membership.iqproSubscriptionId && iqproConfig && gatewayId) {
       // 1. GET the subscription
       const subPath = `/api/gateway/${gatewayId}/subscription/${membership.iqproSubscriptionId}`;
-      const subRes = await iqproGet<{ data?: Record<string, unknown> }>(subPath);
+      const subRes = await iqproGet<{ data?: Record<string, unknown> }>(iqproConfig, subPath);
       const sub = (subRes.data ?? subRes) as Record<string, unknown>;
       const recurrence = sub.recurrence as Record<string, unknown> | undefined;
 
@@ -109,7 +118,7 @@ export async function PATCH(
             // Cancellation fees are NOT taxable (per Basys guidance on non-store charges).
             // Need processorId + BIN for IQPro /calculatefees. The vaulted card
             // exposes its masked number, so we can pull a BIN from there.
-            const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
+            const { cardProcessorId, achProcessorId } = await getGatewayProcessors(iqproConfig);
             const processorId = paymentMethodName === 'card' ? cardProcessorId : achProcessorId;
             if (!processorId) {
               throw new Error(`No ${paymentMethodName} processor configured`);
@@ -118,7 +127,7 @@ export async function PATCH(
             const maskedNumber = (cardInfo?.maskedNumber ?? cardInfo?.maskedCard ?? '') as string;
             const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : '400000';
 
-            const serverFees = await computeFeeBreakdown(baseAmount, /* isTaxable */ false, {
+            const serverFees = await computeFeeBreakdown(iqproConfig, baseAmount, /* isTaxable */ false, /* taxStatePct */ 0, {
               processorId,
               creditCardBin: paymentMethodName === 'card' ? bin : undefined,
             });
@@ -158,6 +167,7 @@ export async function PATCH(
             };
 
             const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
+              iqproConfig,
               `/api/gateway/${gatewayId}/transaction`,
               feeTxPayload,
             );
@@ -201,6 +211,7 @@ export async function PATCH(
         // Use the dedicated cancel endpoint: POST /subscription/{id}/cancel
         try {
           await iqproPost(
+            iqproConfig,
             `${subPath}/cancel`,
             {
               cancel: {
@@ -235,7 +246,7 @@ export async function PATCH(
         }
 
         try {
-          await iqproPut<Record<string, unknown>>(subPath, putPayload);
+          await iqproPut<Record<string, unknown>>(iqproConfig, subPath, putPayload);
         }
         catch (putErr) {
           console.error('[membership] IQPro subscription update failed:', putErr);

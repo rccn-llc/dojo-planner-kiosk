@@ -1,3 +1,4 @@
+import type { NextRequest } from 'next/server';
 import { createClerkClient } from '@clerk/backend';
 
 interface OrgInfo {
@@ -44,4 +45,23 @@ export async function resolveOrgBySlug(slug: string): Promise<OrgInfo | null> {
     console.error('[clerk] Failed to resolve org by slug:', error);
     return null;
   }
+}
+
+/**
+ * Resolve an organization ID from an incoming request's `?org=<value>` query
+ * param. Accepts either a Clerk org slug (e.g. `cta-hq`) or a Clerk org ID
+ * (`org_...`); the ID form is a dev/debug convenience that skips the slug
+ * lookup. Returns null when the param is missing or the slug doesn't match.
+ */
+export async function resolveOrgIdFromRequest(request: NextRequest | Request): Promise<string | null> {
+  const url = 'nextUrl' in request ? request.nextUrl : new URL(request.url);
+  const value = url.searchParams.get('org')?.trim();
+  if (!value) {
+    return null;
+  }
+  if (value.startsWith('org_')) {
+    return value;
+  }
+  const org = await resolveOrgBySlug(value);
+  return org?.orgId ?? null;
 }

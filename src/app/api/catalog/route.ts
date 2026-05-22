@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemImage, catalogItemVariant } from '@/lib/catalogSchema';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 
@@ -24,12 +25,14 @@ export async function GET(request: Request) {
   try {
     const db = getDatabase();
 
-    // Resolve org ID from device cert (production) or env var (development)
-    const device = await validateDevice(request);
-    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
-
+    // Resolve org from URL slug first, then device cert, then env var.
+    let orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      const device = await validateDevice(request);
+      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
+    }
+    if (!orgId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
     // Fetch kiosk-visible active items for this org, ordered by sortOrder

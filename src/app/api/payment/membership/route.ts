@@ -3,9 +3,11 @@ import type { FeeBreakdown } from '@/lib/types';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
-import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, isIQProConfigured, tokenizeAch } from '@/lib/iqpro';
+import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
+import { resolveIQProConfig } from '@/lib/iqproConfig';
 import {
   address,
   member,
@@ -78,15 +80,20 @@ function sanitizeForLog(value: unknown): string {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as MembershipPaymentBody;
-    const orgId = body.organizationId || process.env.ORGANIZATION_ID;
-
+    const orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ success: false, error: 'Organization context not available' }, { status: 500 });
+      return NextResponse.json({ success: false, error: 'Organization not found. Pass ?org=<slug>.' }, { status: 400 });
     }
 
+    const iqproConfig = await resolveIQProConfig(orgId);
+    // iqproConfig may be null when this org has no IQPro credentials; the
+    // payment branch below is gated on it. We continue so the member/waiver
+    // records still write for $0 plans / plans without payment.
+
+    const body = await request.json() as MembershipPaymentBody;
+
     const db = getDatabase();
-    const gatewayId = process.env.IQPRO_GATEWAY_ID;
+    const gatewayId = iqproConfig?.gatewayId;
     const now = new Date();
 
     // Fetch the plan from the database
@@ -258,13 +265,14 @@ export async function POST(request: Request) {
     let txId: string | undefined;
     let chargedFees: Awaited<ReturnType<typeof computeFeeBreakdown>> | undefined;
 
-    if (plan.price > 0 && isIQProConfigured() && gatewayId) {
+    if (plan.price > 0 && iqproConfig && gatewayId) {
       try {
         // Get gateway processor IDs for card/ACH
-        const { cardProcessorId, achProcessorId } = await getGatewayProcessors();
+        const { cardProcessorId, achProcessorId } = await getGatewayProcessors(iqproConfig);
 
         // Create IQPro customer
         const customerRes = await iqproPost<{ data?: Record<string, unknown> }>(
+          iqproConfig,
           `/api/gateway/${gatewayId}/customer`,
           {
             name: `${body.firstName} ${body.lastName}`,
@@ -292,6 +300,7 @@ export async function POST(request: Request) {
 
         // Fetch customer details to get billing address ID
         const customerDetail = await iqproGet<{ data?: Record<string, unknown> }>(
+          iqproConfig,
           `/api/gateway/${gatewayId}/customer/${customerId}`,
         );
         const detailData = customerDetail.data ?? customerDetail;
@@ -320,6 +329,7 @@ export async function POST(request: Request) {
           const maskedCard = `${body.cardFirstSix}******${body.cardLastFour}`;
 
           const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
+            iqproConfig,
             `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
             {
               card: {
@@ -335,7 +345,7 @@ export async function POST(request: Request) {
         }
         else {
           achAccountType = body.achAccountType ?? 'Checking';
-          const tokenizeResult = await tokenizeAch({
+          const tokenizeResult = await tokenizeAch(iqproConfig, {
             accountNumber: body.achAccountNumber!,
             routingNumber: body.achRoutingNumber!,
             achAccountType,
@@ -343,6 +353,7 @@ export async function POST(request: Request) {
           achToken = tokenizeResult.achToken;
 
           const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
+            iqproConfig,
             `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
             {
               ach: {
@@ -370,7 +381,9 @@ export async function POST(request: Request) {
         if (!processorId) {
           throw new Error(`No ${body.paymentMethod} processor configured`);
         }
-        const serverFees = await computeFeeBreakdown(discountedBase, /* isTaxable */ false, {
+        // Memberships aren't taxable, so the per-org tax rate doesn't affect
+        // this call — pass 0 explicitly to keep the new signature happy.
+        const serverFees = await computeFeeBreakdown(iqproConfig, discountedBase, /* isTaxable */ false, /* taxStatePct */ 0, {
           processorId,
           token: body.paymentMethod === 'card' ? body.cardToken : achToken,
           creditCardBin: body.paymentMethod === 'card' ? body.cardFirstSix : undefined,
@@ -503,6 +516,7 @@ export async function POST(request: Request) {
           }
 
           const subRes = await iqproPost<{ data?: Record<string, unknown> }>(
+            iqproConfig,
             `/api/gateway/${gatewayId}/subscription`,
             {
               customerId,
@@ -558,6 +572,7 @@ export async function POST(request: Request) {
             };
 
             const initTxRes = await iqproPost<{ data?: Record<string, unknown> }>(
+              iqproConfig,
               `/api/gateway/${gatewayId}/transaction`,
               initTxPayload,
             );
@@ -581,6 +596,7 @@ export async function POST(request: Request) {
           };
 
           const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
+            iqproConfig,
             `/api/gateway/${gatewayId}/transaction`,
             txPayload,
           );

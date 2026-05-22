@@ -1,13 +1,14 @@
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { coupon } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
-    const orgId = process.env.ORGANIZATION_ID;
+    const orgId = (await resolveOrgIdFromRequest(request)) ?? process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
     const body = await request.json() as { code?: string };

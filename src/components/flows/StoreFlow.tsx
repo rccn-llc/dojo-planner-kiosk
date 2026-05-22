@@ -10,6 +10,7 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
@@ -136,11 +137,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [state, send] = useStoreMachine();
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
+  const orgSlug = useOrgSlug();
 
   // Fetch tokenization config when entering checkout
   useEffect(() => {
     if (state.matches('checkout') && !tokenizationConfig && !tokenizationError) {
-      fetch('/api/payment/tokenization-config')
+      fetch(withOrgQuery('/api/payment/tokenization-config', orgSlug))
         .then(r => r.json())
         .then((data: { config?: TokenizationIframeConfig; error?: string }) => {
           if (data.config) {
@@ -302,7 +304,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           })),
         };
 
-        const res = await fetch('/api/payment/process', {
+        const res = await fetch(withOrgQuery('/api/payment/process', orgSlug), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -333,7 +335,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // Fetch products when entering browsing state
   useEffect(() => {
     if (state.matches('browsing') && state.context.isLoadingProducts && state.context.products.length === 0) {
-      fetch('/api/catalog')
+      fetch(withOrgQuery('/api/catalog', orgSlug))
         .then(r => r.json())
         .then(data => send({ type: 'LOAD_PRODUCTS_SUCCESS', products: data.products ?? [] }))
         .catch(() => send({ type: 'LOAD_PRODUCTS_FAILURE' }));
@@ -350,7 +352,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       (sum, item) => sum + item.price * item.quantity,
       0,
     );
-    fetch('/api/coupons/validate', {
+    fetch(withOrgQuery('/api/coupons/validate', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code: state.context.discountCode, subtotal }),
@@ -387,12 +389,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     send({ type: 'SAVED_LOOKUP_START', phone });
 
     Promise.allSettled([
-      fetch('/api/members/lookup', {
+      fetch(withOrgQuery('/api/members/lookup', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: rawPhone }),
       }).then(r => r.json()),
-      fetch(`/api/payment/saved-payment-method/search?phone=${encodeURIComponent(phone)}`)
+      fetch(withOrgQuery(`/api/payment/saved-payment-method/search?phone=${encodeURIComponent(phone)}`, orgSlug))
         .then(r => r.json() as Promise<{ matches?: Array<{ matchToken: string; fullName: string }>; error?: string }>),
     ])
       .then(([memberRes, vaultRes]) => {
@@ -449,7 +451,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     const previewPaymentMethod = state.context.paymentMethod === 'saved'
       ? 'card'
       : state.context.paymentMethod;
-    fetch('/api/payment/calculate-fees', {
+    fetch(withOrgQuery('/api/payment/calculate-fees', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

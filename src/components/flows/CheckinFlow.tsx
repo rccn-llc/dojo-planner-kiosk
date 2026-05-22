@@ -3,6 +3,7 @@
 import type { CheckinClass, CheckinMember } from '../../machines/types';
 import { useEffect, useState } from 'react';
 import { useCheckinMachine } from '../../hooks/useKioskMachines';
+import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { StepIndicator } from '../StepIndicator';
@@ -36,6 +37,7 @@ function formatTime(time24: string): string {
 
 export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: CheckinFlowProps) {
   const [state, send] = useCheckinMachine();
+  const orgSlug = useOrgSlug();
   const [phoneInput, setPhoneInput] = useState('');
 
   // If the caller supplied already-known members (e.g. from a just-created trial),
@@ -79,7 +81,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
     if (!isLookingUp) {
       return;
     }
-    fetch('/api/members/lookup', {
+    fetch(withOrgQuery('/api/members/lookup', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: phoneNumber, checkinOnly: true }),
@@ -96,7 +98,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
       .catch(() => {
         send({ type: 'MEMBER_NOT_FOUND' });
       });
-  }, [isLookingUp, phoneNumber, send]);
+  }, [isLookingUp, phoneNumber, send, orgSlug]);
 
   // Auto-select if only one member found
   useEffect(() => {
@@ -113,7 +115,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
     if (!isLoadingClasses || !selectedMember) {
       return;
     }
-    fetch(`/api/classes/today?memberId=${encodeURIComponent(selectedMember.memberId)}`)
+    fetch(withOrgQuery(`/api/classes/today?memberId=${encodeURIComponent(selectedMember.memberId)}`, orgSlug))
       .then(r => r.json())
       .then((data) => {
         const status = data.membershipStatus;
@@ -127,14 +129,14 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
       .catch(() => {
         send({ type: 'CLASSES_LOADED', classes: [] });
       });
-  }, [isLoadingClasses, selectedMember, send]);
+  }, [isLoadingClasses, selectedMember, send, orgSlug]);
 
   // Process check-in when entering processingCheckin state
   useEffect(() => {
     if (!isProcessingCheckin || !selectedMember || !selectedClass) {
       return;
     }
-    fetch('/api/checkin', {
+    fetch(withOrgQuery('/api/checkin', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -154,7 +156,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
       .catch((err) => {
         send({ type: 'CHECKIN_FAILED', error: err instanceof Error ? err.message : 'Check-in failed' });
       });
-  }, [isProcessingCheckin, selectedMember, selectedClass, send]);
+  }, [isProcessingCheckin, selectedMember, selectedClass, send, orgSlug]);
 
   // Auto-complete after success
   useEffect(() => {

@@ -1,9 +1,11 @@
 import type { FeeBreakdown } from '@/lib/types';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
-import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, isIQProConfigured, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
+import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
+import { getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
 import { member } from '@/lib/memberSchema';
 
 export interface ProcessStoreOrderBody {
@@ -86,7 +88,16 @@ function sanitizeForLog(value: unknown): string {
  * Flow: create customer → register payment method → charge
  */
 export async function POST(request: Request) {
-  if (!isIQProConfigured()) {
+  const orgId = await resolveOrgIdFromRequest(request);
+  if (!orgId) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Organization not found. Pass ?org=<slug>.' },
+      { status: 400 },
+    );
+  }
+
+  const iqproConfig = await resolveIQProConfig(orgId);
+  if (!iqproConfig) {
     return NextResponse.json<ProcessStoreOrderResult>(
       { success: false, status: 'declined', error: 'Payment processing is not configured' },
       { status: 503 },
@@ -104,7 +115,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const gatewayId = process.env.IQPRO_GATEWAY_ID!;
+  const gatewayId = iqproConfig.gatewayId;
 
   // Verify the signed match token unconditionally. The downstream branch
   // is gated on the *verified payload*, never on the raw request value, so a
@@ -115,7 +126,7 @@ export async function POST(request: Request) {
   // non-vaulted flow) and throws for any present-but-invalid token (→ 400).
   let payload;
   try {
-    payload = verifyMatchToken(body.savedPaymentMatchToken);
+    payload = verifyMatchToken(iqproConfig, body.savedPaymentMatchToken);
   }
   catch (err) {
     const message = err instanceof Error ? err.message : 'Invalid saved payment selection';
@@ -149,6 +160,7 @@ export async function POST(request: Request) {
     else {
       // ── Step 1: Create customer ───────────────────────────────────────────────
       const customerRes = await iqproPost<{ data?: Record<string, unknown> }>(
+        iqproConfig,
         `/api/gateway/${gatewayId}/customer`,
         {
           name: `${body.firstName} ${body.lastName}`,
@@ -177,6 +189,7 @@ export async function POST(request: Request) {
 
       // Get the customer's billing address ID so the ACH processor can resolve the name
       const customerDetail = await iqproGet<{ data?: Record<string, unknown> }>(
+        iqproConfig,
         `/api/gateway/${gatewayId}/customer/${customerId}`,
       );
       const detailData = customerDetail.data ?? customerDetail;
@@ -199,6 +212,7 @@ export async function POST(request: Request) {
         const maskedCard = `${body.cardFirstSix}******${body.cardLastFour}`;
 
         const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
+          iqproConfig,
           `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
           {
             card: {
@@ -217,7 +231,7 @@ export async function POST(request: Request) {
         // ACH: tokenize server-side via Vault API, then register payment method
         achAccountType = body.achAccountType ?? 'Checking';
 
-        const tokenizeResult = await tokenizeAch({
+        const tokenizeResult = await tokenizeAch(iqproConfig, {
           accountNumber: body.achAccountNumber!,
           routingNumber: body.achRoutingNumber!,
           achAccountType,
@@ -226,6 +240,7 @@ export async function POST(request: Request) {
         console.warn('[payment/process] ACH tokenization result:', sanitizeForLog(JSON.stringify(tokenizeResult)));
 
         const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
+          iqproConfig,
           `/api/gateway/${gatewayId}/customer/${customerId}/payment`,
           {
             ach: {
@@ -260,7 +275,7 @@ export async function POST(request: Request) {
     // paymentMethod field (which the client may have left as a placeholder).
     const effectivePaymentMethod: 'card' | 'ach' = vaulted ? vaulted.paymentMethodType : body.paymentMethod;
 
-    const processors = await getGatewayProcessors();
+    const processors = await getGatewayProcessors(iqproConfig);
     const processorId = effectivePaymentMethod === 'card' ? processors.cardProcessorId : processors.achProcessorId;
     if (!processorId) {
       return NextResponse.json<ProcessStoreOrderResult>(
@@ -276,7 +291,8 @@ export async function POST(request: Request) {
       ? vaulted.cardMaskedNumber.slice(0, 6)
       : undefined;
 
-    const serverFees = await computeFeeBreakdown(body.baseAmount, /* isTaxable */ true, {
+    const taxStatePct = await getOrganizationTaxRate(orgId);
+    const serverFees = await computeFeeBreakdown(iqproConfig, body.baseAmount, /* isTaxable */ true, taxStatePct, {
       processorId,
       token: vaulted ? undefined : (effectivePaymentMethod === 'card' ? body.cardToken : achToken),
       creditCardBin: vaulted
@@ -417,6 +433,7 @@ export async function POST(request: Request) {
     };
 
     const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
+      iqproConfig,
       `/api/gateway/${gatewayId}/transaction`,
       txPayload,
     );

@@ -1,16 +1,17 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { waiverMergeFieldTrialSchema, waiverTemplateTrialSchema } from '@/lib/trialSchema';
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const db = getDatabase();
-    const orgId = process.env.ORGANIZATION_ID;
-
+    const orgId = (await resolveOrgIdFromRequest(request)) ?? process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
-      return NextResponse.json({ error: 'ORGANIZATION_ID is not configured' }, { status: 500 });
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
+
+    const db = getDatabase();
 
     // Fetch the default active waiver template, newest version first
     const defaultTemplates = await db

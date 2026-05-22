@@ -1,6 +1,6 @@
 import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
-import { resolveOrgBySlug } from '@/lib/clerk';
+import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 
 // Org roles whose holders may unlock a member's portal via the admin override.
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
@@ -21,24 +21,18 @@ export async function POST(request: Request) {
     const body = await request.json() as { orgSlug?: string };
     const orgSlug = body.orgSlug?.trim() ?? '';
 
-    if (!orgSlug) {
+    let orgId: string | null = await resolveOrgIdFromRequest(request);
+    if (!orgId) {
+      if (orgSlug === '_kiosk') {
+        orgId = process.env.ORGANIZATION_ID ?? null;
+      }
+      else if (orgSlug) {
+        const org = await resolveOrgBySlug(orgSlug);
+        orgId = org?.orgId ?? null;
+      }
+    }
+    if (!orgId) {
       return NextResponse.json({ staff: [] });
-    }
-
-    let orgId: string;
-    if (orgSlug === '_kiosk') {
-      const envOrgId = process.env.ORGANIZATION_ID;
-      if (!envOrgId) {
-        return NextResponse.json({ staff: [] });
-      }
-      orgId = envOrgId;
-    }
-    else {
-      const org = await resolveOrgBySlug(orgSlug);
-      if (!org) {
-        return NextResponse.json({ staff: [] });
-      }
-      orgId = org.orgId;
     }
 
     const secretKey = process.env.CLERK_SECRET_KEY;

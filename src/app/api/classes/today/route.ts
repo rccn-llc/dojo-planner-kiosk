@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import {
@@ -16,11 +17,13 @@ import {
 
 export async function GET(request: NextRequest) {
   try {
-    const device = await validateDevice(request);
-    const orgId = device?.orgId ?? process.env.ORGANIZATION_ID;
-
+    let orgId = await resolveOrgIdFromRequest(request);
     if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 500 });
+      const device = await validateDevice(request);
+      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
+    }
+    if (!orgId) {
+      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
     const memberId = request.nextUrl.searchParams.get('memberId');
