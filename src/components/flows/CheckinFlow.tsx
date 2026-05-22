@@ -37,7 +37,7 @@ function formatTime(time24: string): string {
 
 export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: CheckinFlowProps) {
   const [state, send] = useCheckinMachine();
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug } = useOrgSlug();
   const [phoneInput, setPhoneInput] = useState('');
 
   // If the caller supplied already-known members (e.g. from a just-created trial),

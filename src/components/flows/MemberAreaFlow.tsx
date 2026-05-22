@@ -123,7 +123,7 @@ interface StaffEntry {
 }
 
 export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug } = useOrgSlug();
   const [view, setView] = useState<View>('search');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');

@@ -19,11 +19,18 @@ export function KioskHome() {
   const [orgName, setOrgName] = useState<string | null>(null);
   const [orgImageUrl, setOrgImageUrl] = useState<string | null>(null);
   const [orgError, setOrgError] = useState<string | null>(null);
+  const [orgLoaded, setOrgLoaded] = useState(false);
   const [checkinPreseededMembers, setCheckinPreseededMembers] = useState<TrialCheckinMember[]>([]);
   const [childMembershipSeed, setChildMembershipSeed] = useState<ChildMembershipSeed | null>(null);
-  const orgSlug = useOrgSlug();
+  const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
 
   useEffect(() => {
+    // Wait for useOrgSlug to finish reading window.location.search on the
+    // client. Without this we'd fire a guaranteed-400 request during SSR /
+    // first paint before the `?org=` query has been read.
+    if (!orgSlugResolved) {
+      return;
+    }
     fetch(withOrgQuery('/api/organization', orgSlug))
       .then(async (r) => {
         const data = await r.json() as { name?: string | null; imageUrl?: string | null; error?: string };
@@ -41,8 +48,13 @@ export function KioskHome() {
           setOrgImageUrl(data.imageUrl);
         }
       })
-      .catch(err => setOrgError(err instanceof Error ? err.message : 'Failed to load organization'));
-  }, [orgSlug]);
+      .catch(err => setOrgError(err instanceof Error ? err.message : 'Failed to load organization'))
+      .finally(() => setOrgLoaded(true));
+  }, [orgSlug, orgSlugResolved]);
+
+  if (!orgLoaded) {
+    return <div className="min-h-screen bg-white" />;
+  }
 
   if (orgError) {
     return (
