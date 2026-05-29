@@ -23,7 +23,11 @@ export interface CalculateFeesResponse {
   error?: string;
 }
 
-const PREVIEW_BIN = '400000';
+// IQPro's /calculatefees looks the BIN up in their database to determine card
+// brand/category; an unassigned BIN like `400000` triggers an opaque 500. Use
+// the Visa test BIN (4242 4242…) which IQPro recognises as a real issuer.
+// ServiceFee is a straight percentage so the returned amount is identical.
+const PREVIEW_BIN = '424242';
 
 /**
  * Compute the tax + service fee breakdown for a transaction.

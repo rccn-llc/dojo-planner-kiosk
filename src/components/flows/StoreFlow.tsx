@@ -137,7 +137,10 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [state, send] = useStoreMachine();
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
-  const { slug: orgSlug } = useOrgSlug();
+  // Mirrors capturedTokenRef.current.firstSix in state so the fee-calc effect
+  // re-runs once a real card BIN is available and we can drop the placeholder.
+  const [capturedFirstSix, setCapturedFirstSix] = useState<string>('');
+  const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
 
   // Fetch tokenization config when entering checkout
   useEffect(() => {
@@ -194,6 +197,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       // Card not yet valid — clear any prior token so we don't charge a stale one
       if (capturedTokenRef.current) {
         capturedTokenRef.current = null;
+        setCapturedFirstSix('');
       }
       return;
     }
@@ -209,11 +213,15 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         if (cancelled) {
           return;
         }
+        const firstSix = result.firstSix ?? '';
         capturedTokenRef.current = {
           token: result.token,
-          firstSix: result.firstSix ?? '',
+          firstSix,
           lastFour: result.lastFour ?? '',
         };
+        // Triggers the fee-calc effect to re-run with the real BIN so the
+        // server can drop the unrecognised-BIN placeholder.
+        setCapturedFirstSix(firstSix);
       }
       catch (err) {
         console.error('[StoreFlow] Tokenization failed:', err);
@@ -325,6 +333,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       finally {
         processingRef.current = false;
         capturedTokenRef.current = null;
+        setCapturedFirstSix('');
       }
     };
 
@@ -332,8 +341,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
 
-  // Fetch products when entering browsing state
+  // Fetch products when entering browsing state — wait until the org slug has
+  // been resolved so the request isn't sent without `?org=` and rejected 400.
   useEffect(() => {
+    if (!orgSlugResolved) {
+      return;
+    }
     if (state.matches('browsing') && state.context.isLoadingProducts && state.context.products.length === 0) {
       fetch(withOrgQuery('/api/catalog', orgSlug))
         .then(r => r.json())
@@ -341,7 +354,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         .catch(() => send({ type: 'LOAD_PRODUCTS_FAILURE' }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value]);
+  }, [state.value, orgSlugResolved]);
 
   // Validate discount code when entering applyingDiscount state
   useEffect(() => {
@@ -459,7 +472,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         isTaxable: true,
         paymentMethod: previewPaymentMethod,
         token: capturedTokenRef.current?.token,
-        creditCardBin: capturedTokenRef.current?.firstSix,
+        creditCardBin: capturedFirstSix || capturedTokenRef.current?.firstSix,
       }),
     })
       .then(r => r.json() as Promise<{ success: boolean; feeBreakdown?: typeof state.context.feeBreakdown; error?: string }>)
@@ -484,7 +497,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value, state.context.paymentMethod, state.context.discountAmount, state.context.cartItems.length, state.context.cardToken]);
+  }, [state.value, state.context.paymentMethod, state.context.discountAmount, state.context.cartItems.length, state.context.cardToken, capturedFirstSix]);
 
   // Auto-return to home after order success (60s countdown)
   useEffect(() => {
