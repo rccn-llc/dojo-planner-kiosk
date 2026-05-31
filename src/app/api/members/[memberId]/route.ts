@@ -62,6 +62,10 @@ export async function GET(
         planFrequency: membershipPlan.frequency,
         planContractLength: membershipPlan.contractLength,
         isTrial: membershipPlan.isTrial,
+        cancellationFee: membershipPlan.cancellationFee,
+        holdFeeAmount: membershipPlan.holdFeeAmount,
+        holdFeeFrequency: membershipPlan.holdFeeFrequency,
+        holdLimitPerYear: membershipPlan.holdLimitPerYear,
       })
       .from(memberMembership)
       .innerJoin(membershipPlan, eq(memberMembership.membershipPlanId, membershipPlan.id))
@@ -184,6 +188,10 @@ export async function GET(
         planFrequency: ms.planFrequency,
         planContractLength: ms.planContractLength,
         isTrial: ms.isTrial ?? false,
+        cancellationFee: ms.cancellationFee,
+        holdFeeAmount: ms.holdFeeAmount,
+        holdFeeFrequency: ms.holdFeeFrequency,
+        holdLimitPerYear: ms.holdLimitPerYear,
       })),
       waivers: waivers.map(w => ({
         id: w.id,

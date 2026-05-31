@@ -66,6 +66,7 @@ export const memberMembership = pgTable(
     endDate: timestamp('end_date', { mode: 'date' }),
     nextPaymentDate: timestamp('next_payment_date', { mode: 'date' }),
     iqproSubscriptionId: text('iqpro_subscription_id'),
+    iqproHoldFeeSubscriptionId: text('iqpro_hold_fee_subscription_id'),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
   },
@@ -107,6 +108,9 @@ export const membershipPlan = pgTable(
     price: real('price').notNull().default(0),
     signupFee: real('signup_fee').notNull().default(0),
     cancellationFee: real('cancellation_fee').notNull().default(0),
+    holdFeeAmount: real('hold_fee_amount').notNull().default(0),
+    holdFeeFrequency: text('hold_fee_frequency'),
+    holdLimitPerYear: integer('hold_limit_per_year'),
     frequency: text('frequency').notNull().default('Monthly'),
     contractLength: text('contract_length').notNull(),
     accessLevel: text('access_level').notNull(),
@@ -327,5 +331,34 @@ export const attendance = pgTable(
     index('attendance_member_idx').on(table.memberId),
     index('attendance_date_idx').on(table.attendanceDate),
     index('attendance_schedule_idx').on(table.classScheduleInstanceId),
+  ],
+);
+
+// Audit event table — shared with dojo-planner. The kiosk writes
+// memberMembership.hold / cancel / reactivate rows so the per-year hold limit
+// stays in sync across both apps (the count is read from this table).
+export const auditEvent = pgTable(
+  'audit_event',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    userId: text('user_id').notNull(),
+    action: text('action').notNull(),
+    entityType: text('entity_type').notNull(),
+    entityId: text('entity_id'),
+    role: text('role'),
+    status: text('status').notNull(),
+    changes: text('changes'),
+    error: text('error'),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    requestId: text('request_id'),
+    timestamp: timestamp('timestamp', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    index('audit_org_idx').on(table.organizationId),
+    index('audit_user_idx').on(table.userId),
+    index('audit_entity_idx').on(table.entityType, table.entityId),
+    index('audit_timestamp_idx').on(table.timestamp),
   ],
 );

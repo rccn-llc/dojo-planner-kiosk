@@ -51,6 +51,10 @@ interface MembershipData {
   planFrequency: string | null;
   planContractLength: string | null;
   isTrial: boolean;
+  cancellationFee: number;
+  holdFeeAmount: number;
+  holdFeeFrequency: string | null;
+  holdLimitPerYear: number | null;
 }
 
 interface WaiverData {
@@ -516,8 +520,16 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
   // ── Membership actions ──
 
   const [membershipActionLoading, setMembershipActionLoading] = useState<'cancel' | 'hold' | 'reactivate' | null>(null);
+  // Confirmation panel state for hold/cancel — null when not confirming. Drives
+  // the inline preview that shows the fee + (for cancel) the waive-fee toggle.
+  const [pendingAction, setPendingAction] = useState<{ action: 'cancel' | 'hold'; memberMembershipId: string } | null>(null);
+  const [waiveCancelFee, setWaiveCancelFee] = useState(false);
 
-  const handleMembershipAction = async (action: 'cancel' | 'hold' | 'reactivate', memberMembershipId: string) => {
+  const handleMembershipAction = async (
+    action: 'cancel' | 'hold' | 'reactivate',
+    memberMembershipId: string,
+    options?: { waiveFee?: boolean },
+  ) => {
     if (!selectedMemberId) {
       return;
     }
@@ -527,15 +539,58 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
       const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}/membership`, orgSlug), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberMembershipId, action }),
+        body: JSON.stringify({
+          memberMembershipId,
+          action,
+          ...(action === 'cancel' && options?.waiveFee ? { waiveFee: true } : {}),
+        }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data?.holdLimitPerYear != null) {
+        setError(`Hold limit reached: ${data.priorHolds} of ${data.holdLimitPerYear} holds used in the past 12 months.`);
+        setMembershipActionLoading(null);
+        setPendingAction(null);
+        return;
+      }
       if (!res.ok) {
         throw new Error(`Failed to ${action} membership`);
       }
+      if (data?.feeChargeError) {
+        setError(`${action === 'cancel' ? 'Cancelled' : action === 'hold' ? 'Held' : 'Reactivated'}, but fee charge failed: ${data.feeChargeError}`);
+      }
+      setPendingAction(null);
+      setWaiveCancelFee(false);
       await loadMemberDetail(selectedMemberId);
     }
     catch { setError(`Failed to ${action} membership`); }
     setMembershipActionLoading(null);
+  };
+
+  function formatHoldFeeCadence(frequency: string | null): string {
+    if (!frequency || frequency === 'one-time') {
+      return '';
+    }
+    switch (frequency) {
+      case 'Weekly': return '/wk';
+      case 'Monthly': return '/mo';
+      case 'Semi-Annual': return '/6mo';
+      case 'Annual': return '/yr';
+      default: return '';
+    }
+  }
+
+  const openHoldConfirm = (memberMembershipId: string) => {
+    setError('');
+    setPendingAction({ action: 'hold', memberMembershipId });
+  };
+  const openCancelConfirm = (memberMembershipId: string) => {
+    setError('');
+    setWaiveCancelFee(false);
+    setPendingAction({ action: 'cancel', memberMembershipId });
+  };
+  const closePendingAction = () => {
+    setPendingAction(null);
+    setWaiveCancelFee(false);
   };
 
   // ── Send waiver email ──
@@ -1281,27 +1336,27 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                             <StatusBadge status={activeMembership.status} />
                           </div>
                           {/* Membership action buttons */}
-                          {activeMembership.status === 'active' && (
+                          {activeMembership.status === 'active' && pendingAction === null && (
                             <div className="mt-4 flex gap-3">
                               <button
                                 type="button"
-                                onClick={() => handleMembershipAction('hold', activeMembership.id)}
+                                onClick={() => openHoldConfirm(activeMembership.id)}
                                 disabled={membershipActionLoading !== null}
                                 className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-amber-400 bg-amber-50 text-base font-semibold text-amber-700 transition-all hover:bg-amber-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                {membershipActionLoading === 'hold' ? 'Placing hold…' : 'Hold'}
+                                Hold
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleMembershipAction('cancel', activeMembership.id)}
+                                onClick={() => openCancelConfirm(activeMembership.id)}
                                 disabled={membershipActionLoading !== null}
                                 className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-red-400 bg-red-50 text-base font-semibold text-red-700 transition-all hover:bg-red-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                {membershipActionLoading === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                                Cancel
                               </button>
                             </div>
                           )}
-                          {activeMembership.status === 'hold' && (
+                          {activeMembership.status === 'hold' && pendingAction === null && (
                             <div className="mt-4 flex gap-3">
                               <button
                                 type="button"
@@ -1313,12 +1368,96 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleMembershipAction('cancel', activeMembership.id)}
+                                onClick={() => openCancelConfirm(activeMembership.id)}
                                 disabled={membershipActionLoading !== null}
                                 className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-red-400 bg-red-50 text-base font-semibold text-red-700 transition-all hover:bg-red-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                {membershipActionLoading === 'cancel' ? 'Cancelling…' : 'Cancel'}
+                                Cancel
                               </button>
+                            </div>
+                          )}
+                          {/* Inline confirmation panel for hold/cancel with fee preview. */}
+                          {pendingAction !== null && pendingAction.memberMembershipId === activeMembership.id && (
+                            <div className="mt-4 space-y-3 rounded-xl border-2 border-gray-200 bg-gray-50 p-4">
+                              {pendingAction.action === 'hold' && (
+                                <>
+                                  <p className="text-base font-semibold text-gray-800">Place membership on hold?</p>
+                                  {activeMembership.holdFeeAmount > 0 && activeMembership.holdFeeFrequency
+                                    ? (
+                                        <p className="text-sm text-gray-700">
+                                          {activeMembership.holdFeeFrequency === 'one-time'
+                                            ? `A one-time hold fee of ${formatCurrency(activeMembership.holdFeeAmount)} will be charged now.`
+                                            : `A recurring hold fee of ${formatCurrency(activeMembership.holdFeeAmount)}${formatHoldFeeCadence(activeMembership.holdFeeFrequency)} will be billed until reactivation.`}
+                                        </p>
+                                      )
+                                    : (
+                                        <p className="text-sm text-gray-700">No hold fee applies to this plan.</p>
+                                      )}
+                                  {activeMembership.holdLimitPerYear != null && activeMembership.holdLimitPerYear > 0 && (
+                                    <p className="text-xs text-gray-500">
+                                      Plan allows up to
+                                      {' '}
+                                      {activeMembership.holdLimitPerYear}
+                                      {' '}
+                                      hold
+                                      {activeMembership.holdLimitPerYear === 1 ? '' : 's'}
+                                      {' '}
+                                      per 12 months.
+                                    </p>
+                                  )}
+                                </>
+                              )}
+                              {pendingAction.action === 'cancel' && (
+                                <>
+                                  <p className="text-base font-semibold text-gray-800">Cancel membership?</p>
+                                  {activeMembership.cancellationFee > 0
+                                    ? (
+                                        <>
+                                          <p className="text-sm text-gray-700">
+                                            {waiveCancelFee
+                                              ? 'The cancellation fee will be waived.'
+                                              : `A cancellation fee of ${formatCurrency(activeMembership.cancellationFee)} will be charged.`}
+                                          </p>
+                                          <label className="flex items-center gap-2 text-sm text-gray-700">
+                                            <input
+                                              type="checkbox"
+                                              checked={waiveCancelFee}
+                                              onChange={e => setWaiveCancelFee(e.target.checked)}
+                                              className="size-5 cursor-pointer"
+                                            />
+                                            Waive cancellation fee
+                                          </label>
+                                        </>
+                                      )
+                                    : (
+                                        <p className="text-sm text-gray-700">No cancellation fee applies to this plan.</p>
+                                      )}
+                                </>
+                              )}
+                              <div className="flex gap-3 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={closePendingAction}
+                                  disabled={membershipActionLoading !== null}
+                                  className="min-h-12 flex-1 cursor-pointer rounded-xl border-2 border-gray-300 bg-white text-base font-semibold text-gray-700 transition-all hover:bg-gray-100 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  Back
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMembershipAction(pendingAction.action, pendingAction.memberMembershipId, { waiveFee: waiveCancelFee })}
+                                  disabled={membershipActionLoading !== null}
+                                  className={`min-h-12 flex-1 cursor-pointer rounded-xl border-2 text-base font-semibold transition-all active:scale-95 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    pendingAction.action === 'hold'
+                                      ? 'border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'border-red-400 bg-red-50 text-red-700 hover:bg-red-100'
+                                  }`}
+                                >
+                                  {membershipActionLoading === pendingAction.action
+                                    ? pendingAction.action === 'hold' ? 'Placing hold…' : 'Cancelling…'
+                                    : pendingAction.action === 'hold' ? 'Confirm hold' : 'Confirm cancel'}
+                                </button>
+                              </div>
                             </div>
                           )}
                           {activeMembership.status === 'cancelled' && onAssignChildMembership && (
