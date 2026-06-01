@@ -23,7 +23,6 @@
   },
   "dependencies": {
     "@clerk/backend": "^1.24.0",
-    "@dojo-planner/iqpro-client": "github:rccn-llc/iqpro-client",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^7.3.7",
