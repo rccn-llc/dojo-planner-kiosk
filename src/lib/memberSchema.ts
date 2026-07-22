@@ -42,7 +42,9 @@ export const address = pgTable('address', {
   zipCode: text('zip_code').notNull(),
   country: text('country').notNull().default('US'),
   isDefault: boolean('is_default').default(false),
-});
+}, table => [
+  index('address_member_idx').on(table.memberId),
+]);
 
 // Family member link table
 export const familyMember = pgTable('family_member', {
@@ -51,6 +53,9 @@ export const familyMember = pgTable('family_member', {
   relationship: text('relationship').notNull(),
 }, table => [
   primaryKey({ columns: [table.memberId, table.relatedMemberId] }),
+  // The composite PK covers lookups by memberId (prefix); family lookups that
+  // key on related_member_id alone need their own index.
+  index('family_member_related_idx').on(table.relatedMemberId),
 ]);
 
 // Member membership table
@@ -214,6 +219,9 @@ export const signedWaiver = pgTable(
     membershipPlanContractLength: text('membership_plan_contract_length'),
     membershipPlanSignupFee: real('membership_plan_signup_fee'),
     membershipPlanIsTrial: boolean('membership_plan_is_trial'),
+    // Single signature per waiver — the signer. When a minor requires a
+    // guardian, this is the GUARDIAN's signature and signedByRelationship
+    // records the relationship; the minor never signs (dojo-planner #303).
     signatureDataUrl: text('signature_data_url').notNull(),
     signedByName: text('signed_by_name').notNull(),
     signedByEmail: text('signed_by_email'),
@@ -234,6 +242,7 @@ export const signedWaiver = pgTable(
     index('signed_waiver_member_idx').on(table.memberId),
     index('signed_waiver_template_idx').on(table.waiverTemplateId),
     index('signed_waiver_membership_idx').on(table.memberMembershipId),
+    index('signed_waiver_org_signed_idx').on(table.organizationId, table.signedAt),
   ],
 );
 
@@ -261,8 +270,24 @@ export const transaction = pgTable(
     index('transaction_member_idx').on(table.memberId),
     index('transaction_status_idx').on(table.status),
     index('transaction_date_idx').on(table.createdAt),
+    index('transaction_org_created_idx').on(table.organizationId, table.createdAt),
   ],
 );
+
+// Payment method table — vaulted card / ACH details, shared with dojo-planner.
+export const paymentMethod = pgTable('payment_method', {
+  id: text('id').primaryKey(),
+  memberId: text('member_id').notNull(),
+  stripePaymentMethodId: text('stripe_payment_method_id'),
+  iqproPaymentMethodId: text('iqpro_payment_method_id'),
+  type: text('type').notNull(),
+  firstSix: text('first_six'), // Card BIN — first 6 digits, for the BIN(6)+last4 masked display. Null for ACH.
+  last4: text('last4'),
+  accountType: text('account_type'), // ACH bank account type: 'Checking' | 'Savings'. Null for cards.
+  isDefault: boolean('is_default').default(false),
+}, table => [
+  index('payment_method_member_idx').on(table.memberId),
+]);
 
 // Class table (dojo_class would conflict — using 'class' table name)
 export const dojoClass = pgTable(
@@ -279,6 +304,7 @@ export const dojoClass = pgTable(
     maxCapacity: integer('max_capacity'),
     minAge: integer('min_age'),
     maxAge: integer('max_age'),
+    allowWalkIns: text('allow_walk_ins').default('Yes'), // 'Yes' | 'No'
     isActive: boolean('is_active').default(true),
     createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),

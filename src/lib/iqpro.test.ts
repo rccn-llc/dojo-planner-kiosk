@@ -98,6 +98,89 @@ describe('oAuth token cache', () => {
   });
 });
 
+describe('getGatewayProcessors', () => {
+  function mockGateway(processors: unknown[]) {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600 }), { status: 200 }),
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { processors } }), { status: 200 }),
+    );
+    return fetchMock;
+  }
+
+  it('prefers the processors flagged as default', async () => {
+    mockGateway([
+      { processorId: 'proc-first', isDefaultCard: false, isDefaultAch: false },
+      { processorId: 'proc-card', isDefaultCard: true, isDefaultAch: false },
+      { processorId: 'proc-ach', isDefaultCard: false, isDefaultAch: true },
+    ]);
+
+    const { getGatewayProcessors } = await import('./iqpro');
+
+    await expect(getGatewayProcessors(makeConfig())).resolves.toEqual({
+      cardProcessorId: 'proc-card',
+      achProcessorId: 'proc-ach',
+    });
+  });
+
+  // Regression: gateways with processors provisioned but none flagged default
+  // used to resolve to null, which hard-failed every charge.
+  it('falls back to the first processor when none is flagged default', async () => {
+    mockGateway([
+      { processorId: 'proc-only', isDefaultCard: false, isDefaultAch: false },
+      { processorId: 'proc-second', isDefaultCard: false, isDefaultAch: false },
+    ]);
+
+    const { getGatewayProcessors } = await import('./iqpro');
+
+    await expect(getGatewayProcessors(makeConfig())).resolves.toEqual({
+      cardProcessorId: 'proc-only',
+      achProcessorId: 'proc-only',
+    });
+  });
+
+  it('falls back per kind — a card-only default still yields an ACH processor', async () => {
+    mockGateway([
+      { processorId: 'proc-first', isDefaultCard: false, isDefaultAch: false },
+      { processorId: 'proc-card', isDefaultCard: true, isDefaultAch: false },
+    ]);
+
+    const { getGatewayProcessors } = await import('./iqpro');
+
+    await expect(getGatewayProcessors(makeConfig())).resolves.toEqual({
+      cardProcessorId: 'proc-card',
+      achProcessorId: 'proc-first',
+    });
+  });
+
+  it('returns nulls when the gateway has no processors at all', async () => {
+    mockGateway([]);
+
+    const { getGatewayProcessors } = await import('./iqpro');
+
+    await expect(getGatewayProcessors(makeConfig())).resolves.toEqual({
+      cardProcessorId: null,
+      achProcessorId: null,
+    });
+  });
+
+  it('caches per gatewayId — a second call does not re-fetch', async () => {
+    const fetchMock = mockGateway([
+      { processorId: 'proc-card', isDefaultCard: true, isDefaultAch: true },
+    ]);
+
+    const { getGatewayProcessors } = await import('./iqpro');
+    await getGatewayProcessors(makeConfig());
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    await getGatewayProcessors(makeConfig());
+
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+  });
+});
+
 describe('match token', () => {
   it('signs and verifies a token round-trip using config.clientSecret', async () => {
     const { signMatchToken, verifyMatchToken } = await import('./iqpro');

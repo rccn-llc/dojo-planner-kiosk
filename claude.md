@@ -10,6 +10,8 @@
 
 **Shared code:** Kiosk-specific types and utilities live in `src/lib/types.ts` and `src/lib/utils.ts`. No submodule or external dependency on dojo-planner at runtime.
 
+**Shared database schema:** The kiosk and dojo-planner share one Postgres database. dojo-planner owns the authoritative schema + migrations (`dojo-planner/src/models/Schema.ts`); the kiosk **redeclares only the subset of tables/columns it uses** as local Drizzle definitions. Each table is declared **once** — `src/lib/memberSchema.ts` is the source of truth for member/waiver/payment tables and `src/lib/trialSchema.ts` re-exports from it under `*TrialSchema` aliases (never re-declare a `pgTable` for a table already defined elsewhere — duplicate declarations drift apart silently). `src/lib/schemaParity.test.ts` reports (warn-only) any dojo-planner column the kiosk doesn't declare; review it when dojo-planner's schema changes and adopt columns the kiosk now needs. The kiosk must stay read-compatible but never authoritative — it cannot add migrations or edit the dojo-planner repo.
+
 ## Kiosk User Flows
 
 Each flow is a standalone component in `src/components/flows/` backed by an XState machine in `src/machines/`:
@@ -50,7 +52,7 @@ Payments are processed via direct IQPro REST API calls — **no SDK dependency**
 
 **ACH payments:** Account number tokenized server-side via IQPro Vault API, then registered as a payment method.
 
-**State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. Service fee is currently a module constant (`SERVICE_FEE_PCT = 3.75` in `src/lib/iqpro.ts`); change there until the main app exposes a per-org service-fee column.
+**State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. **Service fee:** read from `organization.service_fee_rate` via `getOrganizationServiceFeePct(orgId)` (same cached `loadFromDb` as tax + IQPro config, so no extra round-trip), falling back to `DEFAULT_SERVICE_FEE_PCT = 3.75` when the column is null. The resolved pct is threaded into `computeFeeBreakdown` as a parameter — `src/lib/iqpro.ts` stays free of DB/env reads. Until the main app writes `service_fee_rate`, every org falls back to 3.75.
 
 **Key files:**
 - `src/lib/crypto.ts` — AES-256-GCM helpers for the encrypted client secret
@@ -113,7 +115,7 @@ RESEND_API_KEY=...
 
 Tax rate and service fee:
 - **Tax rate**: read from `organization.location_tax_rate` (edited in the main app's Location Settings). No env var.
-- **Service fee**: hard-coded `SERVICE_FEE_PCT = 3.75` constant at the top of `src/lib/iqpro.ts`. Change there until the main app exposes a per-org column.
+- **Service fee**: read from `organization.service_fee_rate` via `getOrganizationServiceFeePct(orgId)` in `src/lib/iqproConfig.ts`, falling back to `DEFAULT_SERVICE_FEE_PCT = 3.75` when null. No env var. The main app must expose/write `service_fee_rate` for a non-default rate to take effect.
 
 ## State Management (XState 5)
 

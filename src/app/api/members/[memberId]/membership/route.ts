@@ -7,7 +7,7 @@ import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
-import { resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
 import { auditEvent, member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 
 type DB = ReturnType<typeof getDatabase>;
@@ -225,8 +225,10 @@ async function chargeOneTimeFee(args: {
     const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : '400000';
 
     // Cancellation / hold fees are NOT taxable (per Basys guidance on non-store charges).
+    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
     const serverFees = await computeFeeBreakdown(config, baseAmount, false, 0, {
       processorId,
+      serviceFeePct,
       creditCardBin: paymentMethodName === 'card' ? bin : undefined,
     });
     const paymentAdjustments: Array<Record<string, unknown>> = [buildServiceFeeAdjustment(serverFees)];

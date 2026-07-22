@@ -38,15 +38,6 @@ interface TokenizeAchResult {
 
 // ── Service-fee constant ──────────────────────────────────────────────────────
 
-/**
- * Service fee percentage applied to EVERY transaction.
- *
- * TODO(per-org service fee): when the main app exposes an
- * `organization.service_fee_rate` column, replace this constant with a per-org
- * lookup mirroring the tax-rate pattern in `iqproConfig.ts`.
- */
-const SERVICE_FEE_PCT = 3.75;
-
 // ── OAuth token cache (keyed by clientId) ────────────────────────────────────
 
 const OAUTH_CACHE_MAX = 100;
@@ -296,14 +287,25 @@ export async function getGatewayProcessors(config: IQProConfig): Promise<Gateway
     isDefaultAch: boolean;
   }>;
 
-  const defaultCard = processors.find(p => p.isDefaultCard);
-  const defaultAch = processors.find(p => p.isDefaultAch);
+  // Prefer the processor flagged as default, but fall back to the first
+  // available processor of that kind. Some gateways (notably the sandbox) have
+  // processors provisioned but none flagged isDefaultCard/isDefaultAch — the
+  // old behaviour returned null there, which hard-failed every charge with
+  // "No processor configured" and surfaced as a payment decline. Mirrors
+  // dojo-planner's getGatewayProcessors.
+  const defaultCard = processors.find(p => p.isDefaultCard) ?? processors[0];
+  const defaultAch = processors.find(p => p.isDefaultAch) ?? processors[0];
 
   const entry: GatewayProcessors = {
     cardProcessorId: defaultCard?.processorId ?? null,
     achProcessorId: defaultAch?.processorId ?? null,
   };
   processorsCache.set(config.gatewayId, entry);
+
+  const usedCardFallback = !processors.some(p => p.isDefaultCard) && entry.cardProcessorId !== null;
+  const usedAchFallback = !processors.some(p => p.isDefaultAch) && entry.achProcessorId !== null;
+  devLog('[IQPro] Gateway processors loaded:', { ...entry, usedCardFallback, usedAchFallback });
+
   return entry;
 }
 
@@ -325,6 +327,7 @@ interface ComputedFeeBreakdown {
 interface CalculateServiceFeeParams {
   baseAmount: number;
   processorId: string;
+  serviceFeePct: number;
   token?: string;
   creditCardBin?: string;
 }
@@ -341,7 +344,7 @@ async function fetchServiceFeeAmount(config: IQProConfig, params: CalculateServi
     processorId: params.processorId,
     transactionType: 'Sale',
     paymentAdjustments: [
-      { type: 'ServiceFee', percentage: SERVICE_FEE_PCT, flatAmount: null },
+      { type: 'ServiceFee', percentage: params.serviceFeePct, flatAmount: null },
     ],
   };
   if (params.token) {
@@ -365,7 +368,8 @@ async function fetchServiceFeeAmount(config: IQProConfig, params: CalculateServi
  * - Tax is computed locally from `taxStatePct` (the per-org rate the caller
  *   resolved from `organization.location_tax_rate`); 0 for non-taxable charges.
  * - Service fee amount is computed by IQPro via /calculatefees, using the
- *   module-level `SERVICE_FEE_PCT`.
+ *   `serviceFeePct` the caller resolved (per-org via
+ *   `getOrganizationServiceFeePct`, falling back to DEFAULT_SERVICE_FEE_PCT).
  */
 export async function computeFeeBreakdown(
   config: IQProConfig,
@@ -384,7 +388,7 @@ export async function computeFeeBreakdown(
     taxAmount,
     taxPct,
     serviceFeeAmount,
-    serviceFeePct: SERVICE_FEE_PCT,
+    serviceFeePct: serviceFeeLookup.serviceFeePct,
     amount,
   };
 }

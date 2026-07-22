@@ -5,7 +5,7 @@ import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
-import { getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
 import { member } from '@/lib/memberSchema';
 
 export interface ProcessStoreOrderBody {
@@ -292,8 +292,10 @@ export async function POST(request: Request) {
       : undefined;
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
     const serverFees = await computeFeeBreakdown(iqproConfig, body.baseAmount, /* isTaxable */ true, taxStatePct, {
       processorId,
+      serviceFeePct,
       token: vaulted ? undefined : (effectivePaymentMethod === 'card' ? body.cardToken : achToken),
       creditCardBin: vaulted
         ? vaultedCardBin
