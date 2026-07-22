@@ -109,17 +109,15 @@ export async function GET(
       }
 
       if (relatedIds.size > 0) {
-        for (const relId of relatedIds) {
-          familyMemberIds.push(relId);
-          const fmRows = await db
-            .select({ firstName: member.firstName, lastName: member.lastName })
-            .from(member)
-            .where(eq(member.id, relId))
-            .limit(1);
-          const fm = fmRows[0];
-          if (fm) {
-            familyNameMap.set(relId, `${fm.firstName} ${fm.lastName}`);
-          }
+        const relatedIdArr = [...relatedIds];
+        familyMemberIds.push(...relatedIdArr);
+        // Single batched fetch instead of one query per family member.
+        const fmRows = await db
+          .select({ id: member.id, firstName: member.firstName, lastName: member.lastName })
+          .from(member)
+          .where(inArray(member.id, relatedIdArr));
+        for (const fm of fmRows) {
+          familyNameMap.set(fm.id, `${fm.firstName} ${fm.lastName}`);
         }
       }
     }

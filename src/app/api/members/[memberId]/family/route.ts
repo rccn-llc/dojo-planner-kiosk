@@ -74,22 +74,23 @@ export async function GET(
       .where(inArray(memberMembership.memberId, relatedIdArr));
     const withDirectMembership = new Set(directMemberships.map(r => r.memberId));
 
-    // Fetch member details for all related members
+    // Fetch member details for all related members in a single batched query
+    // (was one query per related member — an N+1 on the whole household).
+    const memberRows = await db
+      .select({
+        id: member.id,
+        firstName: member.firstName,
+        lastName: member.lastName,
+        status: member.status,
+        memberType: member.memberType,
+      })
+      .from(member)
+      .where(inArray(member.id, relatedIdArr));
+    const memberById = new Map(memberRows.map(m => [m.id, m]));
+
     const familyMembers = [];
     for (const relId of relatedIds) {
-      const rows = await db
-        .select({
-          id: member.id,
-          firstName: member.firstName,
-          lastName: member.lastName,
-          status: member.status,
-          memberType: member.memberType,
-        })
-        .from(member)
-        .where(eq(member.id, relId))
-        .limit(1);
-
-      const m = rows[0];
+      const m = memberById.get(relId);
       if (!m) {
         continue;
       }

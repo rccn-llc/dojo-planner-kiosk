@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { withRetry } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { attendance } from '@/lib/memberSchema';
+import { attendance, classScheduleInstance, dojoClass } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -32,6 +32,20 @@ export async function POST(request: Request) {
     tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
     const result = await withRetry(async (db) => {
+      // Defense in depth: the class list already hides walk-in-disabled classes,
+      // but reject here too in case a stale client posts one. Only an explicit
+      // 'No' blocks; 'Yes' and legacy NULL rows are allowed.
+      const [scheduledClass] = await db
+        .select({ allowWalkIns: dojoClass.allowWalkIns })
+        .from(classScheduleInstance)
+        .innerJoin(dojoClass, eq(classScheduleInstance.classId, dojoClass.id))
+        .where(eq(classScheduleInstance.id, body.classScheduleInstanceId))
+        .limit(1);
+
+      if (scheduledClass?.allowWalkIns === 'No') {
+        return { walkInsDisabled: true } as const;
+      }
+
       // Check for existing check-in to this class today
       const [existing] = await db
         .select({ id: attendance.id })
@@ -47,7 +61,7 @@ export async function POST(request: Request) {
         .limit(1);
 
       if (existing) {
-        return { alreadyCheckedIn: true };
+        return { alreadyCheckedIn: true } as const;
       }
 
       await db.insert(attendance).values({
@@ -60,8 +74,15 @@ export async function POST(request: Request) {
         checkInMethod: 'kiosk',
       });
 
-      return { alreadyCheckedIn: false };
+      return { alreadyCheckedIn: false } as const;
     });
+
+    if ('walkInsDisabled' in result) {
+      return NextResponse.json({
+        success: false,
+        error: 'This class does not accept walk-in check-ins. Please see the front desk.',
+      });
+    }
 
     if (result.alreadyCheckedIn) {
       return NextResponse.json({

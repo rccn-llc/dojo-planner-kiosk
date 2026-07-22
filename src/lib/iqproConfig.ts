@@ -9,7 +9,15 @@ const organizationConfig = pgTable('organization', {
   iqproConfigClientSecretEncrypted: text('iqpro_config_client_secret_enc'),
   iqproConfigGatewayId: text('iqpro_config_gateway_id'),
   locationTaxRate: real('location_tax_rate'),
+  // Per-org service fee percentage. Written by the main app's Payment Settings
+  // once that column exists; until then this is null everywhere and callers
+  // fall back to DEFAULT_SERVICE_FEE_PCT.
+  serviceFeeRate: real('service_fee_rate'),
 });
+
+// Fallback used when an org has no service_fee_rate configured. Matches the
+// historical hard-coded kiosk rate.
+export const DEFAULT_SERVICE_FEE_PCT = 3.75;
 
 export interface IQProConfig {
   clientId: string;
@@ -24,6 +32,7 @@ export interface IQProConfig {
 interface CacheEntry {
   config: IQProConfig | null;
   taxRate: number;
+  serviceFeePct: number;
   expiresAt: number;
 }
 
@@ -101,7 +110,7 @@ function buildConfig(
   return { clientId, clientSecret, gatewayId, scope, oauthUrl, baseUrl, source };
 }
 
-async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number }> {
+async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }> {
   const rows = await withRetry(db =>
     db
       .select({
@@ -109,6 +118,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
         clientSecretEnc: organizationConfig.iqproConfigClientSecretEncrypted,
         gatewayId: organizationConfig.iqproConfigGatewayId,
         locationTaxRate: organizationConfig.locationTaxRate,
+        serviceFeeRate: organizationConfig.serviceFeeRate,
       })
       .from(organizationConfig)
       .where(eq(organizationConfig.id, orgId))
@@ -121,6 +131,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const dbGatewayId = row?.gatewayId ?? null;
   const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
+  const serviceFeePct = row?.serviceFeeRate ?? DEFAULT_SERVICE_FEE_PCT;
 
   const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 
@@ -128,7 +139,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
     console.warn(`[iqproConfig] org ${orgId} resolved to env-fallback credentials — populate Payment Settings in the main app to use this org's merchant.`);
   }
 
-  return { config, taxRate };
+  return { config, taxRate, serviceFeePct };
 }
 
 export async function resolveIQProConfig(orgId: string): Promise<IQProConfig | null> {
@@ -149,4 +160,17 @@ export async function getOrganizationTaxRate(orgId: string): Promise<number> {
   const loaded = await loadFromDb(orgId);
   cacheSet(orgId, loaded);
   return loaded.taxRate;
+}
+
+// Per-org service fee percentage, falling back to DEFAULT_SERVICE_FEE_PCT when
+// the org has no configured rate. Shares loadFromDb's cache with the config and
+// tax-rate lookups, so this adds no extra round-trip.
+export async function getOrganizationServiceFeePct(orgId: string): Promise<number> {
+  const cached = cacheGet(orgId);
+  if (cached) {
+    return cached.serviceFeePct;
+  }
+  const loaded = await loadFromDb(orgId);
+  cacheSet(orgId, loaded);
+  return loaded.serviceFeePct;
 }

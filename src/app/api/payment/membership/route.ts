@@ -7,13 +7,14 @@ import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
-import { resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
 import {
   address,
   member,
   memberMembership,
   membershipPlan,
   membershipWaiver,
+  paymentMethod,
   signedWaiver,
   transaction,
   waiverTemplate,
@@ -371,6 +372,24 @@ export async function POST(request: Request) {
           paymentMethodId = (pmData.customerPaymentMethodId ?? pmData.paymentMethodId ?? '') as string;
         }
 
+        // Mirror the vaulted method into our payment_method table so the main
+        // app's member-billing page can render it (BIN(6)+last4 for cards,
+        // account type for ACH). The kiosk previously vaulted only in IQPro,
+        // leaving the DB row absent and the main app with nothing to display.
+        const achLast4 = body.paymentMethod === 'ach' && body.achAccountNumber
+          ? body.achAccountNumber.slice(-4)
+          : null;
+        await db.insert(paymentMethod).values({
+          id: randomUUID(),
+          memberId,
+          iqproPaymentMethodId: paymentMethodId || null,
+          type: body.paymentMethod,
+          firstSix: body.paymentMethod === 'card' ? (body.cardFirstSix ?? null) : null,
+          last4: body.paymentMethod === 'card' ? (body.cardLastFour ?? null) : achLast4,
+          accountType: body.paymentMethod === 'ach' ? (achAccountType ?? null) : null,
+          isDefault: true,
+        });
+
         // Calculate payment amount (apply coupon discount if any).
         // Memberships are NOT taxed — only the service fee applies.
         const baseAmount = Math.round(plan.price * 100) / 100;
@@ -383,8 +402,10 @@ export async function POST(request: Request) {
         }
         // Memberships aren't taxable, so the per-org tax rate doesn't affect
         // this call — pass 0 explicitly to keep the new signature happy.
+        const serviceFeePct = await getOrganizationServiceFeePct(orgId);
         const serverFees = await computeFeeBreakdown(iqproConfig, discountedBase, /* isTaxable */ false, /* taxStatePct */ 0, {
           processorId,
+          serviceFeePct,
           token: body.paymentMethod === 'card' ? body.cardToken : achToken,
           creditCardBin: body.paymentMethod === 'card' ? body.cardFirstSix : undefined,
         });

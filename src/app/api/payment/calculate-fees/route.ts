@@ -3,7 +3,7 @@ import type { FeeBreakdown } from '@/lib/types';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { computeFeeBreakdown, getGatewayProcessors } from '@/lib/iqpro';
-import { getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
 
 export interface CalculateFeesRequest {
   baseAmount: number;
@@ -96,6 +96,7 @@ export async function POST(request: Request) {
     }
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
 
     const feeBreakdown: FeeBreakdown = await computeFeeBreakdown(
       iqproConfig,
@@ -104,6 +105,7 @@ export async function POST(request: Request) {
       taxStatePct,
       {
         processorId,
+        serviceFeePct,
         token: body.token,
         // IQPro's /calculatefees requires "exactly one" of token or BIN.
         // When no token is available (ACH always, or card before tokenization),

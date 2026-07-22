@@ -133,12 +133,18 @@ export async function POST(request: Request) {
       }
     }
 
-    // Fetch default addresses for these members
-    const addressMap = new Map<string, typeof address.$inferSelect>();
+    // Fetch default addresses for these members (only the fields used below)
+    const addressMap = new Map<string, { memberId: string; street: string; city: string; state: string; zipCode: string }>();
 
     if (memberIds.length > 0) {
       const addrs = await db
-        .select()
+        .select({
+          memberId: address.memberId,
+          street: address.street,
+          city: address.city,
+          state: address.state,
+          zipCode: address.zipCode,
+        })
         .from(address)
         .where(
           and(
@@ -152,21 +158,22 @@ export async function POST(request: Request) {
       }
     }
 
-    // Fetch the most recent signed waiver signature for each member
+    // Fetch the most recent signed waiver signature for each member in a
+    // single batched query (was one query per member — an N+1 on the primary
+    // phone-lookup path). Ordered newest-first so the first row seen per member
+    // is the most recent; later rows for the same member are skipped.
     const signatureMap = new Map<string, string>();
 
     if (memberIds.length > 0) {
-      for (const mId of memberIds) {
-        const waivers = await db
-          .select({ signatureDataUrl: signedWaiver.signatureDataUrl })
-          .from(signedWaiver)
-          .where(eq(signedWaiver.memberId, mId))
-          .orderBy(desc(signedWaiver.signedAt))
-          .limit(1);
+      const waivers = await db
+        .select({ memberId: signedWaiver.memberId, signatureDataUrl: signedWaiver.signatureDataUrl })
+        .from(signedWaiver)
+        .where(inArray(signedWaiver.memberId, memberIds))
+        .orderBy(desc(signedWaiver.signedAt));
 
-        const w = waivers[0];
-        if (w?.signatureDataUrl) {
-          signatureMap.set(mId, w.signatureDataUrl);
+      for (const w of waivers) {
+        if (w.signatureDataUrl && !signatureMap.has(w.memberId)) {
+          signatureMap.set(w.memberId, w.signatureDataUrl);
         }
       }
     }

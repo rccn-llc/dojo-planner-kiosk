@@ -143,6 +143,7 @@ export async function GET(request: NextRequest) {
         room: classScheduleInstance.room,
         className: dojoClass.name,
         programId: dojoClass.programId,
+        allowWalkIns: dojoClass.allowWalkIns,
       })
       .from(classScheduleInstance)
       .innerJoin(dojoClass, eq(classScheduleInstance.classId, dojoClass.id))
@@ -155,10 +156,16 @@ export async function GET(request: NextRequest) {
         ),
       );
 
+    // Exclude classes staff have marked as not accepting walk-in (kiosk)
+    // check-ins. Only an explicit 'No' blocks a class; 'Yes' and legacy
+    // NULL rows remain available. Done in JS to keep NULL handling explicit
+    // (SQL `allow_walk_ins <> 'No'` would wrongly drop NULL rows).
+    const walkInSchedules = schedules.filter(s => s.allowWalkIns !== 'No');
+
     // Filter by allowed programs unless member has Unlimited access
     const filteredSchedules = accessLevel === 'Unlimited'
-      ? schedules
-      : schedules.filter((s) => {
+      ? walkInSchedules
+      : walkInSchedules.filter((s) => {
           // Classes without a program are open to everyone
           if (!s.programId) {
             return true;
