@@ -2,25 +2,10 @@ import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { generateOTP, storeOTP } from '@/lib/otp';
-import { escapeHtml } from '@/lib/utils';
+import { escapeHtml, maskEmail } from '@/lib/utils';
+import { isValidClerkUserId, isValidUUID } from '@/lib/validation';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
-
-// Strict Clerk user ID format (e.g. user_2abc...). Reject anything else
-// before doing any Clerk API work to keep the response shape uniform.
-const CLERK_USER_ID_RE = /^user_[A-Za-z0-9]{8,}$/;
-const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
-
-function maskEmail(email: string): string {
-  const [user, domain] = email.split('@');
-  if (!user || !domain) {
-    return email;
-  }
-  const maskedUser = user.length > 2
-    ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
-    : user;
-  return `${maskedUser}@${domain}`;
-}
 
 // Generic "sent" response — returned even when the staff doesn't exist or
 // isn't eligible, so we don't leak which Clerk user IDs are valid staff.
@@ -39,7 +24,7 @@ export async function POST(request: Request) {
     const staffClerkUserId = body.staffClerkUserId?.trim() ?? '';
     const orgSlug = body.orgSlug?.trim() ?? '';
 
-    if (!UUID_RE.test(memberId) || !CLERK_USER_ID_RE.test(staffClerkUserId)) {
+    if (!isValidUUID(memberId) || !isValidClerkUserId(staffClerkUserId)) {
       return fakeSent();
     }
 

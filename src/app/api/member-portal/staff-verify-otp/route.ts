@@ -5,16 +5,13 @@ import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 import { createMemberSession, setSessionCookie } from '@/lib/memberSession';
 import { verifyOTP } from '@/lib/otp';
+import { isValidClerkUserId, isValidOTPCode, isValidUUID } from '@/lib/validation';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
 // Staff-impersonation sessions are short-lived: a staff member unlocks a
 // member's portal to help in person, so the session should not outlive that
 // interaction (vs. the 24h TTL for a member's own self-login).
 const SESSION_DURATION_SECONDS = 45 * 60; // 45 minutes
-
-const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
-const OTP_RE = /^\d{6}$/;
-const CLERK_USER_ID_RE = /^user_[A-Za-z0-9]{8,}$/;
 
 function rejectVerification() {
   return NextResponse.json({ verified: false, error: 'Invalid or expired code' });
@@ -31,7 +28,7 @@ export async function POST(request: Request) {
     const staffClerkUserId = body.staffClerkUserId?.trim() ?? '';
     const code = body.code?.trim() ?? '';
 
-    if (!UUID_RE.test(memberId) || !CLERK_USER_ID_RE.test(staffClerkUserId) || !OTP_RE.test(code)) {
+    if (!isValidUUID(memberId) || !isValidClerkUserId(staffClerkUserId) || !isValidOTPCode(code)) {
       return rejectVerification();
     }
 

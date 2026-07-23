@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 import { generateOTP, storeOTP } from '@/lib/otp';
-import { escapeHtml } from '@/lib/utils';
+import { escapeHtml, maskEmail } from '@/lib/utils';
 
 export async function POST(request: Request) {
   try {
@@ -66,14 +66,7 @@ export async function POST(request: Request) {
       console.warn(`[OTP] Code for ${safeEmail}: ${code}`);
     }
 
-    // Mask email for response
-    const [user, domain] = m.email.split('@');
-    const maskedUser = user && user.length > 2
-      ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
-      : user;
-    const maskedEmail = `${maskedUser}@${domain}`;
-
-    return NextResponse.json({ sent: true, maskedEmail });
+    return NextResponse.json({ sent: true, maskedEmail: maskEmail(m.email) });
   }
   catch (error) {
     console.error('[member-portal/send-otp] Error:', error);

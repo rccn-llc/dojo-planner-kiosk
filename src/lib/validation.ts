@@ -1,5 +1,14 @@
 import { isValidEmail } from './utils';
 
+// Shared strict format checks used by the member-portal OTP routes.
+const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
+const OTP_RE = /^\d{6}$/;
+const CLERK_USER_ID_RE = /^user_[A-Za-z0-9]{8,}$/;
+
+export const isValidUUID = (value: string): boolean => UUID_RE.test(value);
+export const isValidOTPCode = (value: string): boolean => OTP_RE.test(value);
+export const isValidClerkUserId = (value: string): boolean => CLERK_USER_ID_RE.test(value);
+
 export interface MemberEditFormErrors {
   firstName?: string;
   lastName?: string;

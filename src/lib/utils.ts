@@ -41,3 +41,18 @@ export const escapeHtml = (value: string): string =>
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+
+/**
+ * Mask the local part of an email for display in unauthenticated/OTP flows,
+ * e.g. `jane.doe@example.com` → `j******e@example.com`.
+ */
+export const maskEmail = (email: string): string => {
+  const [user, domain] = email.split('@');
+  if (!user || !domain) {
+    return email;
+  }
+  const maskedUser = user.length > 2
+    ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
+    : user;
+  return `${maskedUser}@${domain}`;
+};
