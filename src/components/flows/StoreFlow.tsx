@@ -916,6 +916,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   <div className="flex gap-3">
                     <input
                       type="tel"
+                      inputMode="numeric"
                       value={state.context.memberSearchPhone}
                       onChange={e => handleInputChange('memberSearchPhone', e.target.value)}
                       placeholder="Search for member by phone"
@@ -1062,6 +1063,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           <input
                             id="phoneNumber"
                             type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel"
                             value={state.context.phoneNumber}
                             onChange={e => handleInputChange('phoneNumber', e.target.value)}
                             className={disabledInputClass('phoneNumber')}
@@ -1506,7 +1509,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
         {/* ── Processing ──────────────────────────────────────────────────────── */}
         {state.matches('processingOrder') && (
-          <div className="w-full max-w-xl py-16 text-center">
+          <div role="status" aria-live="polite" className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-16 w-16 animate-spin rounded-full border-4 border-black border-t-transparent" />
             <h2 className="mb-4 text-3xl font-bold text-black">
               Processing your order…

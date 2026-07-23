@@ -328,6 +328,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 <input
                   id="parentPhone"
                   type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
                   value={state.context.parentPhone || ''}
                   onChange={e => handleInputChange('parentPhone', e.target.value)}
                   className={inputClass('parentPhone')}
@@ -653,6 +655,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 <input
                   id="phoneNumber"
                   type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel"
                   value={state.context.phoneNumber || ''}
                   onChange={e => handleInputChange('phoneNumber', e.target.value)}
                   className={inputClass('phoneNumber')}
@@ -814,6 +818,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               onClick={() => send({ type: 'AGREE_WAIVER', agreed: !state.context.waiverAgreed })}
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Enter') {
+                  // Space would otherwise scroll the page as well as toggle.
+                  e.preventDefault();
                   send({ type: 'AGREE_WAIVER', agreed: !state.context.waiverAgreed });
                 }
               }}
@@ -877,7 +883,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
         {/* ── Creating Trial ── */}
         {state.matches('creatingTrial') && (
-          <div className="w-full max-w-2xl text-center">
+          <div role="status" aria-live="polite" className="w-full max-w-2xl text-center">
             <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
               <div className="mb-6 flex justify-center">
                 <div className="h-16 w-16 animate-spin rounded-full border-4 border-black border-t-transparent" />

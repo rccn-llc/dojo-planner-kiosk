@@ -818,6 +818,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
               onClick={() => handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment)}
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Enter') {
+                  // Space would otherwise scroll the page as well as toggle.
+                  e.preventDefault();
                   handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment);
                 }
               }}
@@ -937,6 +939,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     <div className="flex gap-3">
                       <input
                         type="tel"
+                        inputMode="numeric"
                         value={state.context.memberLookupPhone || ''}
                         onChange={e => handleInputChange('memberLookupPhone', e.target.value)}
                         placeholder="Phone number"
@@ -1010,6 +1013,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     <input
                       id="phoneNumber"
                       type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
                       value={state.context.phoneNumber || ''}
                       onChange={e => handleInputChange('phoneNumber', e.target.value)}
                       className={inputClass('phoneNumber')}
@@ -1483,7 +1488,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
 
         {/* ── Processing ──────────────────────────────────────────────────────── */}
         {state.matches('processingPayment') && (
-          <div className="w-full max-w-xl py-16 text-center">
+          <div role="status" aria-live="polite" className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-20 w-20 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
             <h2 className="mb-4 text-3xl font-bold text-black">
               Processing payment…
