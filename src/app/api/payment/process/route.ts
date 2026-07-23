@@ -144,6 +144,41 @@ export async function POST(request: Request) {
       }
     : null;
 
+  // ── Validate order shape before touching the gateway ──────────────────────
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Your cart is empty.' },
+      { status: 400 },
+    );
+  }
+  const itemsValid = body.items.every(it =>
+    Number.isInteger(it.quantity) && it.quantity > 0
+    && typeof it.price === 'number' && Number.isFinite(it.price) && it.price >= 0,
+  );
+  if (!itemsValid) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'One or more items are invalid.' },
+      { status: 400 },
+    );
+  }
+  if (typeof body.subtotal !== 'number' || !Number.isFinite(body.subtotal) || body.subtotal < 0) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Invalid order total.' },
+      { status: 400 },
+    );
+  }
+
+  // ACH must carry account + routing (the client tokenizes cards but sends raw
+  // ACH fields for server-side tokenization). Guard here so we don't throw on a
+  // non-null assertion mid-charge. Only relevant for the non-vaulted path.
+  const effectiveMethod = vaulted?.paymentMethodType ?? body.paymentMethod;
+  if (!vaulted && effectiveMethod === 'ach' && (!body.achAccountNumber || !body.achRoutingNumber)) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Bank account and routing number are required.' },
+      { status: 400 },
+    );
+  }
+
   try {
     let customerId: string;
     let paymentMethodId: string;
@@ -185,6 +220,9 @@ export async function POST(request: Request) {
 
       const customerData = customerRes.data ?? customerRes;
       customerId = (customerData as Record<string, unknown>).customerId as string;
+      if (!customerId) {
+        throw new Error('IQPro customer creation returned no customerId');
+      }
       console.warn('[payment/process] Customer created:', sanitizeForLog(customerId));
 
       // Get the customer's billing address ID so the ACH processor can resolve the name
@@ -237,7 +275,7 @@ export async function POST(request: Request) {
           achAccountType,
         });
         achToken = tokenizeResult.achToken;
-        console.warn('[payment/process] ACH tokenization result:', sanitizeForLog(JSON.stringify(tokenizeResult)));
+        // Never log the tokenization result — it echoes account-derived data.
 
         const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
           iqproConfig,
@@ -510,11 +548,13 @@ export async function POST(request: Request) {
     });
   }
   catch (error) {
-    console.error('[payment/process] Error:', error);
-    return NextResponse.json<ProcessStoreOrderResult>({
-      success: false,
-      status: 'declined',
-      error: error instanceof Error ? error.message : 'Payment processing failed',
-    });
+    // Log the detail server-side; never forward the raw IQPro/processor string
+    // (it can carry gateway ids / processor bodies) to the client. Use 402 so
+    // clients and monitoring can distinguish a payment failure from a 2xx.
+    console.error('[payment/process] Error:', sanitizeForLog(error instanceof Error ? error.message : String(error)));
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Payment could not be processed. Please try again.' },
+      { status: 402 },
+    );
   }
 }

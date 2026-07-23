@@ -622,7 +622,8 @@ export async function PATCH(
         status: 'cancelled',
         cancellationFeeCharged,
         cancellationTransactionId,
-        feeChargeError,
+        // Signal (not the raw processor string) that the fee couldn't be charged.
+        feeChargeError: feeChargeError ? 'The cancellation fee could not be charged.' : undefined,
       });
     }
 
@@ -758,7 +759,8 @@ export async function PATCH(
         holdFeeCharged,
         holdFeeTransactionId,
         holdFeeSubscriptionId,
-        feeChargeError,
+        // Signal (not the raw processor string) that the fee couldn't be charged.
+        feeChargeError: feeChargeError ? 'The hold fee could not be charged.' : undefined,
       });
     }
 
