@@ -67,7 +67,10 @@ export function resetIQProConfigCache(): void {
   perOrgCache.clear();
 }
 
-function decryptOrNull(enc: string | null | undefined): string | null {
+// Returns null when there is no ciphertext to decrypt, but THROWS (fail closed)
+// when a present ciphertext can't be decrypted — a corrupt/rotated secret must
+// not silently fall through to env-fallback credentials for a payment path.
+function decryptRequired(enc: string | null | undefined): string | null {
   if (!enc) {
     return null;
   }
@@ -127,7 +130,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const row = rows[0];
 
   const dbClientId = row?.clientId ?? null;
-  const dbSecret = decryptOrNull(row?.clientSecretEnc);
+  const dbSecret = decryptRequired(row?.clientSecretEnc);
   const dbGatewayId = row?.gatewayId ?? null;
   const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
@@ -142,35 +145,37 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   return { config, taxRate, serviceFeePct };
 }
 
-export async function resolveIQProConfig(orgId: string): Promise<IQProConfig | null> {
+// In-flight loads, so concurrent cold calls for the same org (e.g. resolve
+// config + tax + fee back-to-back on a cold cache) collapse to one DB round-trip
+// instead of three.
+const inFlight = new Map<string, Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }>>();
+
+async function getCached(orgId: string): Promise<CacheEntry> {
   const cached = cacheGet(orgId);
   if (cached) {
-    return cached.config;
+    return cached;
   }
-  const loaded = await loadFromDb(orgId);
+  let load = inFlight.get(orgId);
+  if (!load) {
+    load = loadFromDb(orgId).finally(() => inFlight.delete(orgId));
+    inFlight.set(orgId, load);
+  }
+  const loaded = await load;
   cacheSet(orgId, loaded);
-  return loaded.config;
+  return { ...loaded, expiresAt: Date.now() + CACHE_TTL_MS };
+}
+
+export async function resolveIQProConfig(orgId: string): Promise<IQProConfig | null> {
+  return (await getCached(orgId)).config;
 }
 
 export async function getOrganizationTaxRate(orgId: string): Promise<number> {
-  const cached = cacheGet(orgId);
-  if (cached) {
-    return cached.taxRate;
-  }
-  const loaded = await loadFromDb(orgId);
-  cacheSet(orgId, loaded);
-  return loaded.taxRate;
+  return (await getCached(orgId)).taxRate;
 }
 
 // Per-org service fee percentage, falling back to DEFAULT_SERVICE_FEE_PCT when
-// the org has no configured rate. Shares loadFromDb's cache with the config and
+// the org has no configured rate. Shares getCached with the config and
 // tax-rate lookups, so this adds no extra round-trip.
 export async function getOrganizationServiceFeePct(orgId: string): Promise<number> {
-  const cached = cacheGet(orgId);
-  if (cached) {
-    return cached.serviceFeePct;
-  }
-  const loaded = await loadFromDb(orgId);
-  cacheSet(orgId, loaded);
-  return loaded.serviceFeePct;
+  return (await getCached(orgId)).serviceFeePct;
 }

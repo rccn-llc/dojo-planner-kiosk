@@ -6,9 +6,11 @@ interface OrgInfo {
   orgName: string;
 }
 
-// In-memory cache with 1-hour TTL
+// In-memory cache with 1-hour TTL and a size cap so a long-lived instance
+// hitting many distinct slugs can't grow the map without bound.
 const orgCache = new Map<string, { info: OrgInfo; expiresAt: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_MAX = 500;
 
 /**
  * Resolve an organization by its Clerk slug.
@@ -38,6 +40,12 @@ export async function resolveOrgBySlug(slug: string): Promise<OrgInfo | null> {
     }
 
     const info: OrgInfo = { orgId: org.id, orgName: org.name };
+    if (orgCache.size >= CACHE_MAX) {
+      const oldest = orgCache.keys().next().value;
+      if (oldest !== undefined) {
+        orgCache.delete(oldest);
+      }
+    }
     orgCache.set(slug, { info, expiresAt: Date.now() + CACHE_TTL_MS });
     return info;
   }

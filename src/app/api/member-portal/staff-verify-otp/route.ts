@@ -76,14 +76,12 @@ export async function POST(request: Request) {
       return rejectVerification();
     }
 
-    // Verify the staff OTP
+    // Verify the staff OTP. Return the SAME generic shape as every other
+    // rejection above so a wrong code can't be told apart from an invalid
+    // staff id / member (the client only reads verified/error).
     const result = await verifyOTP('staff', staffClerkUserId, code);
     if (!result.verified) {
-      return NextResponse.json({
-        verified: false,
-        reason: result.reason,
-        attemptsRemaining: result.attemptsRemaining,
-      });
+      return rejectVerification();
     }
 
     // Mint session impersonating the member, tagged with the acting staff email.

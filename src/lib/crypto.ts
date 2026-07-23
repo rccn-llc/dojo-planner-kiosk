@@ -5,10 +5,18 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
+const KEY_BYTES = 32; // AES-256
+
 function loadKey(): Buffer {
   const hex = process.env.IQPRO_CONFIG_ENCRYPTION_KEY;
   if (!hex) {
     throw new Error('IQPRO_CONFIG_ENCRYPTION_KEY is not set; cannot encrypt or decrypt IQPro secrets');
+  }
+  // Buffer.from(hex, 'hex') silently truncates odd-length / non-hex input, which
+  // would otherwise surface as a cryptic "Invalid key length" at cipher time.
+  // Validate up front so a misconfigured key fails with a clear message.
+  if (!/^[0-9a-f]+$/i.test(hex) || hex.length !== KEY_BYTES * 2) {
+    throw new Error(`IQPRO_CONFIG_ENCRYPTION_KEY must be ${KEY_BYTES} bytes hex-encoded (${KEY_BYTES * 2} hex chars)`);
   }
   return Buffer.from(hex, 'hex');
 }

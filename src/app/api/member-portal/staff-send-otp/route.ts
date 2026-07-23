@@ -81,14 +81,13 @@ export async function POST(request: Request) {
       return fakeSent();
     }
 
-    // Rate-limit + store the OTP
+    // Rate-limit + store the OTP. On a rate-limit, return the SAME generic
+    // fakeSent() shape used for invalid/ineligible staff — a distinct 429 here
+    // would only fire for *valid* staff and thus leak which ids are real.
     const code = generateOTP();
     const stored = await storeOTP('staff', staffClerkUserId, code);
     if (!stored) {
-      return NextResponse.json(
-        { error: 'Too many requests. Please wait a few minutes.' },
-        { status: 429 },
-      );
+      return fakeSent();
     }
 
     // Send via Resend

@@ -3,10 +3,16 @@ import postgres from 'postgres';
 
 // Connection singleton — reused across requests within the same serverless instance.
 // Stored on globalThis to survive Next.js hot-module reloads in development.
+// We retain both the drizzle instance and the underlying postgres client so a
+// reset can close the old socket rather than leak it.
+interface DbHandle {
+  db: ReturnType<typeof drizzle>;
+  client: ReturnType<typeof postgres>;
+}
 const globalKey = Symbol.for('dojo-kiosk-db');
-const g = globalThis as unknown as Record<symbol, ReturnType<typeof drizzle> | undefined>;
+const g = globalThis as unknown as Record<symbol, DbHandle | undefined>;
 
-function createConnection(): ReturnType<typeof drizzle> {
+function createConnection(): DbHandle {
   const connectionString = process.env.DATABASE_URL;
 
   if (!connectionString) {
@@ -23,22 +29,25 @@ function createConnection(): ReturnType<typeof drizzle> {
     connect_timeout: 10,
   });
 
-  return drizzle(client);
+  return { db: drizzle(client), client };
 }
 
 export function getDatabase(): ReturnType<typeof drizzle> {
   if (!g[globalKey]) {
     g[globalKey] = createConnection();
   }
-  return g[globalKey];
+  return g[globalKey].db;
 }
 
 /**
  * Drop the cached connection so the next getDatabase() creates a fresh one.
  * Call this when a query fails with a connection-level error (ECONNRESET, etc.).
+ * Closes the old client (fire-and-forget) so its socket isn't leaked.
  */
 function resetConnection() {
+  const handle = g[globalKey];
   g[globalKey] = undefined;
+  handle?.client.end({ timeout: 5 }).catch(() => {});
 }
 
 const CONNECTION_ERRORS = new Set(['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT']);

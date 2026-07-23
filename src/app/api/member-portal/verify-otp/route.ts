@@ -56,14 +56,14 @@ export async function POST(request: Request) {
       return rejectVerification();
     }
 
-    // Server-side OTP verification — result is never controlled by user input
+    // Server-side OTP verification — result is never controlled by user input.
+    // Return the SAME generic shape as the not-found path above; the client
+    // only reads `verified`/`error`, and exposing reason/attemptsRemaining here
+    // (but not on the not-found path) would let an attacker tell a real member
+    // apart from a non-existent one.
     const result = await verifyOTP('member', m.id, code);
     if (!result.verified) {
-      return NextResponse.json({
-        verified: false,
-        reason: result.reason,
-        attemptsRemaining: result.attemptsRemaining,
-      });
+      return rejectVerification();
     }
 
     // OTP verified — create session. orgId is always from the DB, never user input.
