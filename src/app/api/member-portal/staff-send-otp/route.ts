@@ -2,6 +2,7 @@ import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { generateOTP, storeOTP } from '@/lib/otp';
+import { escapeHtml } from '@/lib/utils';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
 
@@ -107,7 +108,7 @@ export async function POST(request: Request) {
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 400px; margin: 0 auto; padding: 40px 20px;">
             <h1 style="font-size: 24px; color: #111827; margin-bottom: 8px;">Member Portal Access</h1>
-            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${greetingName}, use this code to unlock a member's portal at the kiosk:</p>
+            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${escapeHtml(greetingName)}, use this code to unlock a member's portal at the kiosk:</p>
             <div style="background: #f3f4f6; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
               <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #111827;">${code}</span>
             </div>

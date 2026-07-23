@@ -594,7 +594,7 @@ export async function PATCH(
 
       await db.update(member)
         .set({ status: 'inactive', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, memberId));
+        .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
       await writeAuditEvent(db, {
         organizationId: orgId,
@@ -739,7 +739,7 @@ export async function PATCH(
 
       await db.update(member)
         .set({ status: 'hold', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, memberId));
+        .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
       // The success audit row is what countRecentHolds() reads to enforce the
       // limit — it must be written for the cross-app counter to stay correct.
@@ -780,7 +780,7 @@ export async function PATCH(
 
     await db.update(member)
       .set({ status: 'active', statusChangedAt: now, updatedAt: now })
-      .where(eq(member.id, memberId));
+      .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
     await writeAuditEvent(db, {
       organizationId: orgId,

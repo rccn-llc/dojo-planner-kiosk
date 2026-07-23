@@ -3,9 +3,20 @@ import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
+
+// Unauthenticated public route — throttle by IP to blunt phone-number
+// enumeration (30 lookups / 10 min per IP).
+const LOOKUP_LIMIT = 30;
+const LOOKUP_WINDOW_MS = 10 * 60 * 1000;
 
 export async function POST(request: Request) {
   try {
+    const allowed = await rateLimit(`mp-lookup:${clientIp(request)}`, LOOKUP_LIMIT, LOOKUP_WINDOW_MS);
+    if (!allowed) {
+      return NextResponse.json({ found: false, error: 'Too many attempts. Please wait a few minutes.' }, { status: 429 });
+    }
+
     const body = await request.json() as { phone?: string; orgSlug?: string };
     const rawPhone = body.phone?.replace(/\D/g, '') ?? '';
     const orgSlug = body.orgSlug?.trim() ?? '';
@@ -36,14 +47,12 @@ export async function POST(request: Request) {
       ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`
       : rawPhone;
 
+    // This route is UNAUTHENTICATED (it precedes OTP verification), so it must
+    // not return PII. It returns only opaque member ids — enough to drive the
+    // send-OTP step, which masks the destination email itself. The caller must
+    // never receive names/emails/status before proving control of the phone.
     const members = await db
-      .select({
-        id: member.id,
-        firstName: member.firstName,
-        lastName: member.lastName,
-        email: member.email,
-        status: member.status,
-      })
+      .select({ id: member.id })
       .from(member)
       .where(
         and(
@@ -63,13 +72,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       found: true,
-      members: members.map(m => ({
-        id: m.id,
-        firstName: m.firstName,
-        lastName: m.lastName,
-        email: m.email,
-        status: m.status,
-      })),
+      members: members.map(m => ({ id: m.id })),
       orgId,
     });
   }

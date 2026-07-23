@@ -87,8 +87,9 @@ async function lookupDevice(fingerprint: string): Promise<DeviceInfo | null> {
  *   3. Resolves device from x-client-cert-fingerprint against kiosk_device table
  */
 export async function validateDevice(request: Request): Promise<DeviceInfo | null> {
-  // Development bypass
-  if (process.env.NODE_ENV === 'development') {
+  // Development bypass — requires an explicit opt-in flag so a mis-set
+  // NODE_ENV in a deployed environment can never silently disable auth.
+  if (process.env.NODE_ENV !== 'production' && process.env.KIOSK_DEV_BYPASS === 'true') {
     const orgId = process.env.ORGANIZATION_ID;
     if (!orgId) {
       return null;
@@ -98,9 +99,11 @@ export async function validateDevice(request: Request): Promise<DeviceInfo | nul
 
   const headers = request.headers;
 
-  // Verify proxy secret
+  // Verify proxy secret. Fail closed: a missing PROXY_SECRET means the mTLS
+  // proxy in front of us is not enforcing anything, so reject rather than
+  // trust forgeable headers on a direct-to-origin request.
   const proxySecret = process.env.PROXY_SECRET;
-  if (proxySecret && headers.get('x-proxy-secret') !== proxySecret) {
+  if (!proxySecret || headers.get('x-proxy-secret') !== proxySecret) {
     return null;
   }
 

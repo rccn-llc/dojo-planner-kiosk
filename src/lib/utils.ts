@@ -27,3 +27,17 @@ export const generateSessionId = (): string => {
   const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
   return `kiosk_${Date.now()}_${hex}`;
 };
+
+/**
+ * Escape a string for safe interpolation into HTML (email bodies, etc.).
+ * Member-controlled values (names, plan/product names) must pass through this
+ * before landing in an HTML template, or a value like `<img onerror=...>` would
+ * be rendered as markup in the recipient's client.
+ */
+export const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');

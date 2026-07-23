@@ -7,7 +7,10 @@ import { createMemberSession, setSessionCookie } from '@/lib/memberSession';
 import { verifyOTP } from '@/lib/otp';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
-const SESSION_DURATION_SECONDS = 24 * 60 * 60; // 24 hours
+// Staff-impersonation sessions are short-lived: a staff member unlocks a
+// member's portal to help in person, so the session should not outlive that
+// interaction (vs. the 24h TTL for a member's own self-login).
+const SESSION_DURATION_SECONDS = 45 * 60; // 45 minutes
 
 const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
 const OTP_RE = /^\d{6}$/;

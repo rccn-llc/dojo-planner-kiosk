@@ -1,4 +1,4 @@
-import { eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
@@ -39,6 +39,17 @@ export async function GET(
 
     const { memberId } = await params;
     const db = getDatabase();
+
+    // The anchor member must belong to the resolved org before we expose any
+    // of their household — otherwise the org gate is decorative.
+    const anchor = await db
+      .select({ id: member.id })
+      .from(member)
+      .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)))
+      .limit(1);
+    if (anchor.length === 0) {
+      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
+    }
 
     // Find all family links where this member is on either side
     const familyLinks = await db
@@ -85,7 +96,7 @@ export async function GET(
         memberType: member.memberType,
       })
       .from(member)
-      .where(inArray(member.id, relatedIdArr));
+      .where(and(inArray(member.id, relatedIdArr), eq(member.organizationId, orgId)));
     const memberById = new Map(memberRows.map(m => [m.id, m]));
 
     const familyMembers = [];

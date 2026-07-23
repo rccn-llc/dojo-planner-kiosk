@@ -21,38 +21,35 @@ export async function POST(request: Request) {
     const db = getDatabase();
     const now = new Date();
 
-    if (action === 'hold') {
-      // Put membership on hold
-      await db.update(member)
-        .set({ status: 'hold', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, session.memberId));
+    // Only transition memberships currently in the expected source state, and
+    // only flip the member row when a membership actually changed — so a repeat
+    // request (or a request against the wrong state) is a no-op rather than
+    // silently forcing member.status out of sync with their memberships.
+    const fromStatus = action === 'hold' ? 'active' : 'hold';
+    const toStatus = action === 'hold' ? 'hold' : 'active';
 
-      await db.update(memberMembership)
-        .set({ status: 'hold', updatedAt: now })
-        .where(
-          and(
-            eq(memberMembership.memberId, session.memberId),
-            eq(memberMembership.status, 'active'),
-          ),
-        );
-    }
-    else {
-      // Resume membership
-      await db.update(member)
-        .set({ status: 'active', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, session.memberId));
+    const updated = await db.update(memberMembership)
+      .set({ status: toStatus, updatedAt: now })
+      .where(
+        and(
+          eq(memberMembership.memberId, session.memberId),
+          eq(memberMembership.status, fromStatus),
+        ),
+      )
+      .returning({ id: memberMembership.id });
 
-      await db.update(memberMembership)
-        .set({ status: 'active', updatedAt: now })
-        .where(
-          and(
-            eq(memberMembership.memberId, session.memberId),
-            eq(memberMembership.status, 'hold'),
-          ),
-        );
+    if (updated.length === 0) {
+      return NextResponse.json(
+        { error: action === 'hold' ? 'No active membership to hold' : 'No held membership to resume' },
+        { status: 409 },
+      );
     }
 
-    return NextResponse.json({ success: true, status: action === 'hold' ? 'hold' : 'active' });
+    await db.update(member)
+      .set({ status: toStatus, statusChangedAt: now, updatedAt: now })
+      .where(and(eq(member.id, session.memberId), eq(member.organizationId, session.orgId)));
+
+    return NextResponse.json({ success: true, status: toStatus });
   }
   catch (error) {
     console.error('[member-portal/me/hold] Error:', error);

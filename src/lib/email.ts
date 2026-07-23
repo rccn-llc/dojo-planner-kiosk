@@ -1,5 +1,6 @@
 import type { Buffer } from 'node:buffer';
 import { Resend } from 'resend';
+import { escapeHtml } from '@/lib/utils';
 
 // Lazily initialized — only if RESEND_API_KEY is set
 const resendApiKey = process.env.RESEND_API_KEY;
@@ -127,7 +128,7 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
 
         <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Welcome to the Team!</h1>
         <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
-          Hi ${params.firstName}, your membership is now active.
+          Hi ${escapeHtml(params.firstName)}, your membership is now active.
         </p>
 
         <!-- Membership details -->
@@ -135,13 +136,13 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
           <tr>
             <td style="padding: 16px; background-color: #f9fafb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Program</p>
-              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.programName}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${escapeHtml(params.programName)}</p>
             </td>
           </tr>
           <tr>
             <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
-              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${escapeHtml(params.planName)}</p>
             </td>
           </tr>
           <tr>
@@ -155,7 +156,7 @@ export async function sendMembershipConfirmation(params: MembershipConfirmationP
           <tr>
             <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Contract</p>
-              <p style="margin: 0; color: #111827; font-size: 16px;">${params.planContractLength}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px;">${escapeHtml(params.planContractLength)}</p>
             </td>
           </tr>`
             : ''}
@@ -236,7 +237,7 @@ export async function sendTrialConfirmation(params: TrialConfirmationParams): Pr
           <tr>
             <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Participants</p>
-              <p style="margin: 0; color: #111827; font-size: 16px;">${params.childNames!.join(', ')}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px;">${params.childNames!.map(escapeHtml).join(', ')}</p>
             </td>
           </tr>`
       : '';
@@ -252,7 +253,7 @@ export async function sendTrialConfirmation(params: TrialConfirmationParams): Pr
 
         <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Welcome!</h1>
         <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
-          Hi ${params.firstName}, your free trial is confirmed.
+          Hi ${escapeHtml(params.firstName)}, your free trial is confirmed.
         </p>
 
         <!-- Trial details -->
@@ -260,13 +261,13 @@ export async function sendTrialConfirmation(params: TrialConfirmationParams): Pr
           <tr>
             <td style="padding: 16px; background-color: #f9fafb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Program</p>
-              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.programName}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${escapeHtml(params.programName)}</p>
             </td>
           </tr>
           <tr>
             <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
-              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${escapeHtml(params.planName)}</p>
             </td>
           </tr>
           ${childrenRow}
@@ -355,7 +356,7 @@ export async function sendCancellationConfirmation(params: CancellationConfirmat
             <td style="padding: 16px; border-top: 1px solid #e5e7eb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Cancellation Fee</p>
               <p style="margin: 0; color: #111827; font-size: 20px; font-weight: 700;">$${params.cancellationFee.toFixed(2)}</p>
-              ${params.cancellationTxId ? `<p style="margin: 4px 0 0; color: #9ca3af; font-size: 12px;">Transaction: ${params.cancellationTxId}</p>` : ''}
+              ${params.cancellationTxId ? `<p style="margin: 4px 0 0; color: #9ca3af; font-size: 12px;">Transaction: ${escapeHtml(params.cancellationTxId)}</p>` : ''}
             </td>
           </tr>`
       : '';
@@ -371,14 +372,14 @@ export async function sendCancellationConfirmation(params: CancellationConfirmat
 
         <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Membership Cancelled</h1>
         <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
-          Hi ${params.firstName}, your membership has been cancelled.
+          Hi ${escapeHtml(params.firstName)}, your membership has been cancelled.
         </p>
 
         <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 24px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
           <tr>
             <td style="padding: 16px; background-color: #f9fafb;">
               <p style="margin: 0 0 4px; color: #6b7280; font-size: 13px; font-weight: 600; text-transform: uppercase;">Plan</p>
-              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${params.planName}</p>
+              <p style="margin: 0; color: #111827; font-size: 16px; font-weight: 600;">${escapeHtml(params.planName)}</p>
             </td>
           </tr>
           <tr>
@@ -452,7 +453,7 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
   const itemRows = params.items.map(item => `
     <tr>
       <td style="padding: 8px 0; color: #374151; border-bottom: 1px solid #f3f4f6;">
-        ${item.productName}${item.variantName ? ` — ${item.variantName}` : ''}
+        ${escapeHtml(item.productName)}${item.variantName ? ` — ${escapeHtml(item.variantName)}` : ''}
       </td>
       <td style="padding: 8px 0; color: #374151; border-bottom: 1px solid #f3f4f6; text-align: center;">
         ${item.quantity}
@@ -470,7 +471,7 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
     : '';
 
   const transactionNote = params.transactionId
-    ? `<p style="margin: 0 0 4px; color: #9ca3af; font-size: 12px;">Transaction ID: ${params.transactionId}</p>`
+    ? `<p style="margin: 0 0 4px; color: #9ca3af; font-size: 12px;">Transaction ID: ${escapeHtml(params.transactionId)}</p>`
     : '';
 
   return `
@@ -484,7 +485,7 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
 
         <h1 style="margin: 0 0 4px; font-size: 24px; color: #111827;">Order Confirmed</h1>
         <p style="margin: 0 0 32px; color: #6b7280; font-size: 16px;">
-          Thanks, ${params.firstName}! Here's your receipt.
+          Thanks, ${escapeHtml(params.firstName)}! Here's your receipt.
         </p>
 
         <!-- Item table -->

@@ -2,18 +2,20 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 export function proxy(request: NextRequest) {
-  // Skip all auth in development
-  if (process.env.NODE_ENV === 'development') {
+  // Skip all auth in development — requires an explicit opt-in flag so a
+  // mis-set NODE_ENV in a deployed environment can't disable the checks below.
+  if (process.env.NODE_ENV !== 'production' && process.env.KIOSK_DEV_BYPASS === 'true') {
     return NextResponse.next();
   }
 
   const hostname = request.headers.get('host') ?? '';
   const pathname = request.nextUrl.pathname;
 
-  // Kiosk subdomain: require proxy secret header
+  // Kiosk subdomain: require proxy secret header. Fail closed — a missing
+  // PROXY_SECRET means nothing is enforcing the mTLS proxy contract.
   if (hostname.startsWith('kiosk.')) {
     const proxySecret = process.env.PROXY_SECRET;
-    if (proxySecret && request.headers.get('x-proxy-secret') !== proxySecret) {
+    if (!proxySecret || request.headers.get('x-proxy-secret') !== proxySecret) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     return NextResponse.next();

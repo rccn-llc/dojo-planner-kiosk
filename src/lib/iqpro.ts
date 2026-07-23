@@ -617,7 +617,18 @@ interface MatchTokenPayload {
 const MATCH_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 function getMatchTokenSecret(config: IQProConfig): string {
-  return process.env.KIOSK_MATCH_TOKEN_SECRET ?? config.clientSecret;
+  const dedicated = process.env.KIOSK_MATCH_TOKEN_SECRET;
+  if (dedicated) {
+    return dedicated;
+  }
+  // Falling back to the IQPro client secret couples two trust domains and means
+  // rotating the merchant credential silently invalidates in-flight match
+  // tokens. Tolerated only outside production — require a dedicated secret in
+  // prod so the HMAC key is independent of the payment credential.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('KIOSK_MATCH_TOKEN_SECRET is required in production');
+  }
+  return config.clientSecret;
 }
 
 function base64UrlEncode(buf: Buffer): string {
