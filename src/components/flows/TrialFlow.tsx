@@ -4,11 +4,13 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
+import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 import { SignatureCapture } from '../SignatureCapture';
+import { StepIndicator } from '../StepIndicator';
 import { TouchDatePicker } from '../TouchDatePicker';
 
 export interface TrialCheckinMember {
@@ -21,72 +23,6 @@ interface TrialFlowProps {
   onComplete: () => void;
   onBack: () => void;
   onCheckIn?: (members: TrialCheckinMember[]) => void;
-}
-
-const US_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-];
-
-function StepIndicator({ current, total }: { current: number; total: number }) {
-  return (
-    <div className="mt-6 flex items-center justify-center gap-3">
-      {Array.from({ length: total }, (_, i) => `step-${i}`).map(stepKey => (
-        <div
-          key={stepKey}
-          className={`h-3 w-8 rounded-full transition-all ${Number(stepKey.split('-')[1]) <= current ? 'bg-black' : 'bg-gray-300'}`}
-        />
-      ))}
-    </div>
-  );
 }
 
 interface DefaultTrialSelection {
@@ -123,7 +59,6 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
 
   // Track session IDs so effects re-run on each new session but not on re-renders
   const programsLoadedRef = useRef<string>('');
-  const waiverLoadedRef = useRef<string>('');
   const processingRef = useRef(false);
 
   // Load programs when entering selectingAge (re-fetches on each new session)
@@ -145,108 +80,6 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       })
       .catch(() => {
         // Non-fatal — proceed without a pre-selected plan
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value]);
-
-  // Load waiver content when entering collectingWaiver (once per session)
-  useEffect(() => {
-    if (!state.matches('collectingWaiver')) {
-      return;
-    }
-    if (waiverLoadedRef.current === state.context.sessionId) {
-      return;
-    }
-    waiverLoadedRef.current = state.context.sessionId;
-
-    fetch(withOrgQuery('/api/trial/waiver', orgSlug))
-      .then(res => res.json())
-      .then((data: { id: string; version: number; content: string }) => {
-        if (data.id) {
-          send({ type: 'WAIVER_LOADED', id: data.id, version: data.version, content: data.content });
-        }
-      })
-      .catch(() => {
-        // Non-fatal — waiver text falls back to hardcoded content
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value]);
-
-  // Submit trial when entering creatingTrial
-  useEffect(() => {
-    if (!state.matches('creatingTrial')) {
-      return;
-    }
-    if (processingRef.current) {
-      return;
-    }
-    processingRef.current = true;
-
-    const ctx = state.context;
-    const isYouth = ctx.ageGroup === 'youth';
-
-    const body = isYouth
-      ? {
-          ageGroup: 'youth' as const,
-          member: {
-            firstName: ctx.parentFirstName,
-            lastName: ctx.parentLastName,
-            email: ctx.parentEmail,
-            phone: ctx.parentPhone,
-            address: ctx.parentAddress,
-            addressLine2: ctx.parentAddressLine2,
-            city: ctx.parentCity,
-            state: ctx.parentState,
-            zip: ctx.parentZip,
-          },
-          children: ctx.children,
-          waiver: {
-            templateId: ctx.waiverTemplateId,
-            templateVersion: ctx.waiverTemplateVersion,
-            renderedContent: ctx.waiverContent,
-            signature: ctx.signature,
-          },
-          membershipPlanId: ctx.selectedMembershipPlanId,
-        }
-      : {
-          ageGroup: 'adult' as const,
-          member: {
-            firstName: ctx.firstName,
-            lastName: ctx.lastName,
-            email: ctx.email,
-            phone: ctx.phoneNumber,
-            address: ctx.address,
-            addressLine2: ctx.addressLine2,
-            city: ctx.city,
-            state: ctx.state,
-            zip: ctx.zip,
-          },
-          waiver: {
-            templateId: ctx.waiverTemplateId,
-            templateVersion: ctx.waiverTemplateVersion,
-            renderedContent: ctx.waiverContent,
-            signature: ctx.signature,
-          },
-          membershipPlanId: ctx.selectedMembershipPlanId,
-        };
-
-    fetch(withOrgQuery('/api/trial/submit', orgSlug), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.json().then(d => Promise.reject(new Error(d.error ?? 'Submission failed')));
-        }
-        return res.json();
-      })
-      .then((data: { memberId: string }) => {
-        send({ type: 'TRIAL_SUCCESS', memberId: data.memberId });
-      })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'Something went wrong. Please try again.';
-        send({ type: 'TRIAL_FAILED', error: message });
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
@@ -553,7 +386,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 onChange={v => handleInputChange('parentState', v)}
                 label="State"
                 required
-                options={US_STATES.map(s => ({ value: s, label: s }))}
+                options={US_STATE_OPTIONS}
                 placeholder="Select state…"
                 error={state.context.errors?.parentState}
               />
@@ -884,7 +717,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 onChange={v => handleInputChange('state', v)}
                 label="State"
                 required
-                options={US_STATES.map(s => ({ value: s, label: s }))}
+                options={US_STATE_OPTIONS}
                 placeholder="Select state…"
                 error={state.context.errors?.state}
               />

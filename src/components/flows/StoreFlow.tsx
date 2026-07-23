@@ -10,63 +10,11 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
-
-const US_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-];
 
 // ── Price helpers ─────────────────────────────────────────────────────────────
 
@@ -1193,7 +1141,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           onChange={v => handleInputChange('state', v)}
                           label="State / Province / Region"
                           required
-                          options={US_STATES.map(s => ({ value: s, label: s }))}
+                          options={US_STATE_OPTIONS}
                           placeholder="Select state…"
                           error={state.context.errors?.state}
                           disabled={buyerDisabled}

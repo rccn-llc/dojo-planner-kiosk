@@ -7,6 +7,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
@@ -17,59 +18,6 @@ import { TouchDatePicker } from '../TouchDatePicker';
 
 const TOKENEX_CARD_ID = 'membership-tokenex-card';
 const TOKENEX_CVV_ID = 'membership-tokenex-cvv';
-
-const US_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-];
 
 function formatPlanPrice(plan: MembershipPlan): string {
   const formatted = plan.price.toLocaleString();
@@ -622,7 +570,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     if (state.matches('collectingPayment')) {
       return 'Payment';
     }
-    if (state.matches('processingPayment') || state.matches('creatingMembership')) {
+    if (state.matches('processingPayment')) {
       return 'Processing…';
     }
     if (state.matches('success')) {
@@ -1123,7 +1071,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     onChange={v => handleInputChange('state', v)}
                     label="State"
                     required
-                    options={US_STATES.map(s => ({ value: s, label: s }))}
+                    options={US_STATE_OPTIONS}
                     placeholder="Select state…"
                     error={state.context.errors?.state}
                   />
