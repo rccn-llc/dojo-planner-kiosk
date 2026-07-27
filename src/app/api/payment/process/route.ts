@@ -535,7 +535,7 @@ export async function POST(request: Request) {
         id: randomUUID(),
         organizationId: orgId,
         memberId: resolvedMemberId,
-        transactionType: 'store_purchase',
+        transactionType: 'product_purchase',
         amount: serverFees.amount,
         status: mapped === 'approved' ? 'paid' : 'declined',
         paymentMethod: effectiveMethod,
