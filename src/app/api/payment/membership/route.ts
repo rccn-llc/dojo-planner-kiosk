@@ -153,7 +153,6 @@ export async function POST(request: Request) {
         payment = await runPayment({
           config: iqproConfig,
           gatewayId,
-          orgId,
           body,
           plan,
           phone,
@@ -420,7 +419,6 @@ async function resolveWaiverTemplate(
 interface RunPaymentArgs {
   config: NonNullable<Awaited<ReturnType<typeof resolveIQProConfig>>>;
   gatewayId: string;
-  orgId: string;
   body: MembershipPaymentBody;
   plan: { name: string; price: number; frequency: string };
   phone: string | undefined;
@@ -434,7 +432,7 @@ interface RunPaymentArgs {
  * throws on any failure or decline — the caller persists only on success.
  */
 async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
-  const { config, gatewayId, orgId, body, plan, phone, isRecurring, now } = args;
+  const { config, gatewayId, body, plan, phone, isRecurring, now } = args;
 
   const { cardProcessorId, achProcessorId } = await getGatewayProcessors(config);
 
@@ -534,7 +532,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
   if (!processorId) {
     throw new Error(`No ${body.paymentMethod} processor configured`);
   }
-  const serviceFeePct = await getOrganizationServiceFeePct(orgId);
+  const serviceFeePct = await getOrganizationServiceFeePct();
   const fees = await computeFeeBreakdown(config, discountedBase, /* isTaxable */ false, /* taxStatePct */ 0, {
     processorId,
     serviceFeePct,

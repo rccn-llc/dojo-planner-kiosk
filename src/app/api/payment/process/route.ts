@@ -330,7 +330,7 @@ export async function POST(request: Request) {
       : undefined;
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
-    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct();
     const serverFees = await computeFeeBreakdown(iqproConfig, body.baseAmount, /* isTaxable */ true, taxStatePct, {
       processorId,
       serviceFeePct,

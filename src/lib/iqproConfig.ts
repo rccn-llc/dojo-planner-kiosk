@@ -9,14 +9,13 @@ const organizationConfig = pgTable('organization', {
   iqproConfigClientSecretEncrypted: text('iqpro_config_client_secret_enc'),
   iqproConfigGatewayId: text('iqpro_config_gateway_id'),
   locationTaxRate: real('location_tax_rate'),
-  // Per-org service fee percentage. Written by the main app's Payment Settings
-  // once that column exists; until then this is null everywhere and callers
-  // fall back to DEFAULT_SERVICE_FEE_PCT.
-  serviceFeeRate: real('service_fee_rate'),
 });
 
-// Fallback used when an org has no service_fee_rate configured. Matches the
-// historical hard-coded kiosk rate.
+// The service fee is a fixed platform rate — dojo-planner hard-codes it and does
+// NOT store it per-org (there is no organization.service_fee_rate column). Keep
+// it as a constant here to match. If per-org service fees ever become a real
+// feature, dojo-planner must add the column + Payment Settings UI first; only
+// then re-introduce a DB read here.
 export const DEFAULT_SERVICE_FEE_PCT = 3.75;
 
 export interface IQProConfig {
@@ -32,7 +31,6 @@ export interface IQProConfig {
 interface CacheEntry {
   config: IQProConfig | null;
   taxRate: number;
-  serviceFeePct: number;
   expiresAt: number;
 }
 
@@ -113,14 +111,7 @@ function buildConfig(
   return { clientId, clientSecret, gatewayId, scope, oauthUrl, baseUrl, source };
 }
 
-async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }> {
-  // NOTE: service_fee_rate is intentionally NOT selected here. dojo-planner owns
-  // the shared schema and has not shipped that column yet; selecting it makes
-  // Postgres fail the whole query (42703 "column does not exist"), which 500s
-  // every payment path. Until the main app adds the column, every org falls back
-  // to DEFAULT_SERVICE_FEE_PCT anyway, so selecting it buys nothing. Re-add it to
-  // the select (and read row.serviceFeeRate below) once the migration lands —
-  // schemaParity.test.ts will flag it.
+async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number }> {
   const rows = await withRetry(db =>
     db
       .select({
@@ -140,7 +131,6 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const dbGatewayId = row?.gatewayId ?? null;
   const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
-  const serviceFeePct = DEFAULT_SERVICE_FEE_PCT;
 
   const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 
@@ -148,13 +138,12 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
     console.warn(`[iqproConfig] org ${orgId} resolved to env-fallback credentials — populate Payment Settings in the main app to use this org's merchant.`);
   }
 
-  return { config, taxRate, serviceFeePct };
+  return { config, taxRate };
 }
 
 // In-flight loads, so concurrent cold calls for the same org (e.g. resolve
-// config + tax + fee back-to-back on a cold cache) collapse to one DB round-trip
-// instead of three.
-const inFlight = new Map<string, Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }>>();
+// config + tax back-to-back on a cold cache) collapse to one DB round-trip.
+const inFlight = new Map<string, Promise<{ config: IQProConfig | null; taxRate: number }>>();
 
 async function getCached(orgId: string): Promise<CacheEntry> {
   const cached = cacheGet(orgId);
@@ -179,9 +168,9 @@ export async function getOrganizationTaxRate(orgId: string): Promise<number> {
   return (await getCached(orgId)).taxRate;
 }
 
-// Per-org service fee percentage, falling back to DEFAULT_SERVICE_FEE_PCT when
-// the org has no configured rate. Shares getCached with the config and
-// tax-rate lookups, so this adds no extra round-trip.
-export async function getOrganizationServiceFeePct(orgId: string): Promise<number> {
-  return (await getCached(orgId)).serviceFeePct;
+// The service fee is a fixed platform rate (dojo-planner hard-codes it; there is
+// no per-org column). Kept async so call sites don't change if per-org fees ever
+// become a real DB-backed feature.
+export async function getOrganizationServiceFeePct(): Promise<number> {
+  return DEFAULT_SERVICE_FEE_PCT;
 }
