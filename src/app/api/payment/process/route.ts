@@ -1,4 +1,5 @@
 import type { FeeBreakdown } from '@/lib/types';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
@@ -6,7 +7,7 @@ import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
-import { member } from '@/lib/memberSchema';
+import { member, transaction } from '@/lib/memberSchema';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -489,23 +490,28 @@ export async function POST(request: Request) {
     // Resolve the receipt recipient. For non-vaulted charges, the buyer
     // form supplies email/name. For vaulted charges, the form is disabled —
     // pull the email + display name from the local member row matching the
-    // IQPro customerId.
+    // IQPro customerId. We also capture that member's id so the transaction
+    // row can be attributed to them (guest store orders have no member).
     let receiptEmail: string | undefined;
     let receiptFirstName: string | undefined;
     let receiptLastName: string | undefined;
+    let resolvedMemberId: string | null = null;
     if (vaulted) {
       try {
         const db = getDatabase();
         const rows = await db
-          .select({ email: member.email, firstName: member.firstName, lastName: member.lastName })
+          .select({ id: member.id, email: member.email, firstName: member.firstName, lastName: member.lastName })
           .from(member)
           .where(eq(member.iqproCustomerId, vaulted.customerId))
           .limit(1);
         const m = rows[0];
-        if (m?.email) {
-          receiptEmail = m.email;
-          receiptFirstName = m.firstName;
-          receiptLastName = m.lastName;
+        if (m) {
+          resolvedMemberId = m.id;
+          if (m.email) {
+            receiptEmail = m.email;
+            receiptFirstName = m.firstName;
+            receiptLastName = m.lastName;
+          }
         }
       }
       catch (err) {
@@ -516,6 +522,32 @@ export async function POST(request: Request) {
       receiptEmail = body.email || undefined;
       receiptFirstName = body.firstName;
       receiptLastName = body.lastName;
+    }
+
+    // Record the resolved transaction (approved or declined) BEFORE sending the
+    // receipt. member_id is the vaulted member when known, else null for guest
+    // store orders. Best-effort: a DB failure here must not change the payment
+    // outcome the buyer sees, so it's logged and swallowed.
+    try {
+      const db = getDatabase();
+      const now = new Date();
+      await db.insert(transaction).values({
+        id: randomUUID(),
+        organizationId: orgId,
+        memberId: resolvedMemberId,
+        transactionType: 'store_purchase',
+        amount: serverFees.amount,
+        status: mapped === 'approved' ? 'paid' : 'declined',
+        paymentMethod: effectiveMethod,
+        description: body.description || 'Store purchase',
+        iqproTransactionId: txId || null,
+        processedAt: mapped === 'approved' ? now : null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    catch (err) {
+      console.error('[payment/process] Failed to record store transaction:', sanitizeForLog(err instanceof Error ? err.message : String(err)));
     }
 
     // Send receipt email ONLY on confirmed approval. Never on decline or on an

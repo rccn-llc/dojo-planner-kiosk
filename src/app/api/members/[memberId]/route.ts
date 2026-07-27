@@ -209,7 +209,7 @@ export async function GET(
         description: t.description,
         processedAt: t.processedAt?.toISOString() ?? null,
         createdAt: t.createdAt?.toISOString() ?? null,
-        memberName: t.memberId !== memberId
+        memberName: t.memberId && t.memberId !== memberId
           ? familyNameMap.get(t.memberId) ?? null
           : null,
       })),
