@@ -9,14 +9,13 @@ const organizationConfig = pgTable('organization', {
   iqproConfigClientSecretEncrypted: text('iqpro_config_client_secret_enc'),
   iqproConfigGatewayId: text('iqpro_config_gateway_id'),
   locationTaxRate: real('location_tax_rate'),
-  // Per-org service fee percentage. Written by the main app's Payment Settings
-  // once that column exists; until then this is null everywhere and callers
-  // fall back to DEFAULT_SERVICE_FEE_PCT.
-  serviceFeeRate: real('service_fee_rate'),
 });
 
-// Fallback used when an org has no service_fee_rate configured. Matches the
-// historical hard-coded kiosk rate.
+// The service fee is a fixed platform rate — dojo-planner hard-codes it and does
+// NOT store it per-org (there is no organization.service_fee_rate column). Keep
+// it as a constant here to match. If per-org service fees ever become a real
+// feature, dojo-planner must add the column + Payment Settings UI first; only
+// then re-introduce a DB read here.
 export const DEFAULT_SERVICE_FEE_PCT = 3.75;
 
 export interface IQProConfig {
@@ -32,7 +31,6 @@ export interface IQProConfig {
 interface CacheEntry {
   config: IQProConfig | null;
   taxRate: number;
-  serviceFeePct: number;
   expiresAt: number;
 }
 
@@ -67,7 +65,10 @@ export function resetIQProConfigCache(): void {
   perOrgCache.clear();
 }
 
-function decryptOrNull(enc: string | null | undefined): string | null {
+// Returns null when there is no ciphertext to decrypt, but THROWS (fail closed)
+// when a present ciphertext can't be decrypted — a corrupt/rotated secret must
+// not silently fall through to env-fallback credentials for a payment path.
+function decryptRequired(enc: string | null | undefined): string | null {
   if (!enc) {
     return null;
   }
@@ -110,7 +111,7 @@ function buildConfig(
   return { clientId, clientSecret, gatewayId, scope, oauthUrl, baseUrl, source };
 }
 
-async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }> {
+async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number }> {
   const rows = await withRetry(db =>
     db
       .select({
@@ -118,7 +119,6 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
         clientSecretEnc: organizationConfig.iqproConfigClientSecretEncrypted,
         gatewayId: organizationConfig.iqproConfigGatewayId,
         locationTaxRate: organizationConfig.locationTaxRate,
-        serviceFeeRate: organizationConfig.serviceFeeRate,
       })
       .from(organizationConfig)
       .where(eq(organizationConfig.id, orgId))
@@ -127,11 +127,10 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const row = rows[0];
 
   const dbClientId = row?.clientId ?? null;
-  const dbSecret = decryptOrNull(row?.clientSecretEnc);
+  const dbSecret = decryptRequired(row?.clientSecretEnc);
   const dbGatewayId = row?.gatewayId ?? null;
   const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
-  const serviceFeePct = row?.serviceFeeRate ?? DEFAULT_SERVICE_FEE_PCT;
 
   const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 
@@ -139,38 +138,39 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
     console.warn(`[iqproConfig] org ${orgId} resolved to env-fallback credentials — populate Payment Settings in the main app to use this org's merchant.`);
   }
 
-  return { config, taxRate, serviceFeePct };
+  return { config, taxRate };
+}
+
+// In-flight loads, so concurrent cold calls for the same org (e.g. resolve
+// config + tax back-to-back on a cold cache) collapse to one DB round-trip.
+const inFlight = new Map<string, Promise<{ config: IQProConfig | null; taxRate: number }>>();
+
+async function getCached(orgId: string): Promise<CacheEntry> {
+  const cached = cacheGet(orgId);
+  if (cached) {
+    return cached;
+  }
+  let load = inFlight.get(orgId);
+  if (!load) {
+    load = loadFromDb(orgId).finally(() => inFlight.delete(orgId));
+    inFlight.set(orgId, load);
+  }
+  const loaded = await load;
+  cacheSet(orgId, loaded);
+  return { ...loaded, expiresAt: Date.now() + CACHE_TTL_MS };
 }
 
 export async function resolveIQProConfig(orgId: string): Promise<IQProConfig | null> {
-  const cached = cacheGet(orgId);
-  if (cached) {
-    return cached.config;
-  }
-  const loaded = await loadFromDb(orgId);
-  cacheSet(orgId, loaded);
-  return loaded.config;
+  return (await getCached(orgId)).config;
 }
 
 export async function getOrganizationTaxRate(orgId: string): Promise<number> {
-  const cached = cacheGet(orgId);
-  if (cached) {
-    return cached.taxRate;
-  }
-  const loaded = await loadFromDb(orgId);
-  cacheSet(orgId, loaded);
-  return loaded.taxRate;
+  return (await getCached(orgId)).taxRate;
 }
 
-// Per-org service fee percentage, falling back to DEFAULT_SERVICE_FEE_PCT when
-// the org has no configured rate. Shares loadFromDb's cache with the config and
-// tax-rate lookups, so this adds no extra round-trip.
-export async function getOrganizationServiceFeePct(orgId: string): Promise<number> {
-  const cached = cacheGet(orgId);
-  if (cached) {
-    return cached.serviceFeePct;
-  }
-  const loaded = await loadFromDb(orgId);
-  cacheSet(orgId, loaded);
-  return loaded.serviceFeePct;
+// The service fee is a fixed platform rate (dojo-planner hard-codes it; there is
+// no per-org column). Kept async so call sites don't change if per-org fees ever
+// become a real DB-backed feature.
+export async function getOrganizationServiceFeePct(): Promise<number> {
+  return DEFAULT_SERVICE_FEE_PCT;
 }

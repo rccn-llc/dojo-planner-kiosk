@@ -1,20 +1,10 @@
 import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
+import { maskEmail } from '@/lib/utils';
 
 // Org roles whose holders may unlock a member's portal via the admin override.
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
-
-function maskEmail(email: string): string {
-  const [user, domain] = email.split('@');
-  if (!user || !domain) {
-    return email;
-  }
-  const maskedUser = user.length > 2
-    ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
-    : user;
-  return `${maskedUser}@${domain}`;
-}
 
 export async function POST(request: Request) {
   try {

@@ -110,13 +110,15 @@ export async function GET(
 
       if (relatedIds.size > 0) {
         const relatedIdArr = [...relatedIds];
-        familyMemberIds.push(...relatedIdArr);
         // Single batched fetch instead of one query per family member.
+        // Org-scoped so a stale cross-org family link can't leak another org's
+        // member names / transactions into this HOH's view.
         const fmRows = await db
           .select({ id: member.id, firstName: member.firstName, lastName: member.lastName })
           .from(member)
-          .where(inArray(member.id, relatedIdArr));
+          .where(and(inArray(member.id, relatedIdArr), eq(member.organizationId, orgId)));
         for (const fm of fmRows) {
+          familyMemberIds.push(fm.id);
           familyNameMap.set(fm.id, `${fm.firstName} ${fm.lastName}`);
         }
       }
@@ -126,11 +128,12 @@ export async function GET(
     const transactions = await db
       .select()
       .from(transaction)
-      .where(
+      .where(and(
+        eq(transaction.organizationId, orgId),
         allTransactionMemberIds.length > 1
           ? inArray(transaction.memberId, allTransactionMemberIds)
           : eq(transaction.memberId, memberId),
-      )
+      ))
       .orderBy(desc(transaction.createdAt))
       .limit(50);
 
@@ -206,7 +209,7 @@ export async function GET(
         description: t.description,
         processedAt: t.processedAt?.toISOString() ?? null,
         createdAt: t.createdAt?.toISOString() ?? null,
-        memberName: t.memberId !== memberId
+        memberName: t.memberId && t.memberId !== memberId
           ? familyNameMap.get(t.memberId) ?? null
           : null,
       })),

@@ -10,63 +10,11 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
-
-const US_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-];
 
 // ── Price helpers ─────────────────────────────────────────────────────────────
 
@@ -968,6 +916,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   <div className="flex gap-3">
                     <input
                       type="tel"
+                      inputMode="numeric"
                       value={state.context.memberSearchPhone}
                       onChange={e => handleInputChange('memberSearchPhone', e.target.value)}
                       placeholder="Search for member by phone"
@@ -1114,6 +1063,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           <input
                             id="phoneNumber"
                             type="tel"
+                            inputMode="numeric"
+                            autoComplete="tel"
                             value={state.context.phoneNumber}
                             onChange={e => handleInputChange('phoneNumber', e.target.value)}
                             className={disabledInputClass('phoneNumber')}
@@ -1193,7 +1144,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                           onChange={v => handleInputChange('state', v)}
                           label="State / Province / Region"
                           required
-                          options={US_STATES.map(s => ({ value: s, label: s }))}
+                          options={US_STATE_OPTIONS}
                           placeholder="Select state…"
                           error={state.context.errors?.state}
                           disabled={buyerDisabled}
@@ -1558,7 +1509,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
 
         {/* ── Processing ──────────────────────────────────────────────────────── */}
         {state.matches('processingOrder') && (
-          <div className="w-full max-w-xl py-16 text-center">
+          <div role="status" aria-live="polite" className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-16 w-16 animate-spin rounded-full border-4 border-black border-t-transparent" />
             <h2 className="mb-4 text-3xl font-bold text-black">
               Processing your order…

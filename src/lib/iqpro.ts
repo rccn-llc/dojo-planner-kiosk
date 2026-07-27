@@ -43,12 +43,20 @@ interface TokenizeAchResult {
 const OAUTH_CACHE_MAX = 100;
 const oauthTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
+// A cached token is only valid for the exact (oauthUrl, clientId, scope) it was
+// issued for — two configs that share a clientId but differ in scope/oauthUrl
+// (env-fallback vs org, sandbox vs prod) must not reuse each other's token.
+function oauthCacheKey(config: IQProConfig): string {
+  return `${config.oauthUrl}|${config.clientId}|${config.scope}`;
+}
+
 export function resetOAuthTokenCache(): void {
   oauthTokenCache.clear();
 }
 
 async function getOAuthToken(config: IQProConfig): Promise<string> {
-  const cached = oauthTokenCache.get(config.clientId);
+  const cacheKey = oauthCacheKey(config);
+  const cached = oauthTokenCache.get(cacheKey);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.token;
   }
@@ -89,7 +97,7 @@ async function getOAuthToken(config: IQProConfig): Promise<string> {
     token: data.access_token,
     expiresAt: Date.now() + (expiresIn - 60) * 1000,
   };
-  oauthTokenCache.set(config.clientId, entry);
+  oauthTokenCache.set(cacheKey, entry);
   return entry.token;
 }
 
@@ -257,7 +265,10 @@ interface GatewayProcessors {
   achProcessorId: string | null;
 }
 
-const processorsCache = new Map<string, GatewayProcessors>();
+// TTL so a processor reconfiguration in IQPro is picked up without recycling
+// the instance. Keyed by gatewayId (globally unique).
+const PROCESSORS_CACHE_TTL_MS = 5 * 60 * 1000;
+const processorsCache = new Map<string, { value: GatewayProcessors; expiresAt: number }>();
 
 export function resetProcessorsCache(): void {
   processorsCache.clear();
@@ -265,8 +276,8 @@ export function resetProcessorsCache(): void {
 
 export async function getGatewayProcessors(config: IQProConfig): Promise<GatewayProcessors> {
   const cached = processorsCache.get(config.gatewayId);
-  if (cached) {
-    return cached;
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.value;
   }
 
   const token = await getOAuthToken(config);
@@ -300,7 +311,13 @@ export async function getGatewayProcessors(config: IQProConfig): Promise<Gateway
     cardProcessorId: defaultCard?.processorId ?? null,
     achProcessorId: defaultAch?.processorId ?? null,
   };
-  processorsCache.set(config.gatewayId, entry);
+
+  // Don't cache an all-null result: a transient empty `processors` array would
+  // otherwise pin "no processor configured" for the whole TTL and hard-fail
+  // every charge for this gateway even after IQPro is fixed.
+  if (entry.cardProcessorId !== null || entry.achProcessorId !== null) {
+    processorsCache.set(config.gatewayId, { value: entry, expiresAt: Date.now() + PROCESSORS_CACHE_TTL_MS });
+  }
 
   const usedCardFallback = !processors.some(p => p.isDefaultCard) && entry.cardProcessorId !== null;
   const usedAchFallback = !processors.some(p => p.isDefaultAch) && entry.achProcessorId !== null;
@@ -617,7 +634,18 @@ interface MatchTokenPayload {
 const MATCH_TOKEN_TTL_MS = 5 * 60 * 1000;
 
 function getMatchTokenSecret(config: IQProConfig): string {
-  return process.env.KIOSK_MATCH_TOKEN_SECRET ?? config.clientSecret;
+  const dedicated = process.env.KIOSK_MATCH_TOKEN_SECRET;
+  if (dedicated) {
+    return dedicated;
+  }
+  // Falling back to the IQPro client secret couples two trust domains and means
+  // rotating the merchant credential silently invalidates in-flight match
+  // tokens. Tolerated only outside production — require a dedicated secret in
+  // prod so the HMAC key is independent of the payment credential.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('KIOSK_MATCH_TOKEN_SECRET is required in production');
+  }
+  return config.clientSecret;
 }
 
 function base64UrlEncode(buf: Buffer): string {

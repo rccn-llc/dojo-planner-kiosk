@@ -361,6 +361,18 @@ export const membershipMachine = createMachine({
         },
         TIMEOUT: 'timeout',
       },
+      // Safety net: if the component's fetch neither resolves nor rejects (so no
+      // PAYMENT_SUCCESS/FAILED ever arrives), don't strand the kiosk on a
+      // spinner — fall through to the retryable failure screen.
+      after: {
+        30000: {
+          target: 'paymentFailed',
+          actions: assign({
+            isSubmitting: false,
+            errors: { general: 'Payment timed out. Please try again.' } as Record<string, string>,
+          }),
+        },
+      },
     },
 
     // ── Terminal states ───────────────────────────────────────────────────────

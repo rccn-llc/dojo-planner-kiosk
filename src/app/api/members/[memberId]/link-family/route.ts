@@ -1,8 +1,9 @@
+import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { validateDevice } from '@/lib/deviceAuth';
-import { familyMember } from '@/lib/memberSchema';
+import { familyMember, member } from '@/lib/memberSchema';
 
 export async function POST(
   request: Request,
@@ -31,11 +32,29 @@ export async function POST(
 
     const db = getDatabase();
 
-    await db.insert(familyMember).values({
-      memberId,
-      relatedMemberId: body.relatedMemberId,
-      relationship: body.relationship,
-    });
+    // Both members must exist and belong to the resolved org before we link
+    // them — otherwise any caller who knows two member ids could create
+    // cross-org family links.
+    const found = await db
+      .select({ id: member.id })
+      .from(member)
+      .where(and(
+        inArray(member.id, [memberId, body.relatedMemberId]),
+        eq(member.organizationId, orgId),
+      ));
+    if (found.length !== 2) {
+      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
+    }
+
+    // Idempotent: the (member_id, related_member_id) composite PK makes a repeat
+    // link a no-op rather than a 500.
+    await db.insert(familyMember)
+      .values({
+        memberId,
+        relatedMemberId: body.relatedMemberId,
+        relationship: body.relationship,
+      })
+      .onConflictDoNothing();
 
     return NextResponse.json({ success: true });
   }

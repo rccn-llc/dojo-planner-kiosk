@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 import { generateOTP, storeOTP } from '@/lib/otp';
+import { escapeHtml, maskEmail } from '@/lib/utils';
 
 export async function POST(request: Request) {
   try {
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 400px; margin: 0 auto; padding: 40px 20px;">
             <h1 style="font-size: 24px; color: #111827; margin-bottom: 8px;">Your Verification Code</h1>
-            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${m.firstName}, use this code to sign in:</p>
+            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${escapeHtml(m.firstName)}, use this code to sign in:</p>
             <div style="background: #f3f4f6; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
               <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #111827;">${code}</span>
             </div>
@@ -65,14 +66,7 @@ export async function POST(request: Request) {
       console.warn(`[OTP] Code for ${safeEmail}: ${code}`);
     }
 
-    // Mask email for response
-    const [user, domain] = m.email.split('@');
-    const maskedUser = user && user.length > 2
-      ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
-      : user;
-    const maskedEmail = `${maskedUser}@${domain}`;
-
-    return NextResponse.json({ sent: true, maskedEmail });
+    return NextResponse.json({ sent: true, maskedEmail: maskEmail(m.email) });
   }
   catch (error) {
     console.error('[member-portal/send-otp] Error:', error);

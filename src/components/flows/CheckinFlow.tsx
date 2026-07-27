@@ -1,6 +1,7 @@
 'use client';
 
 import type { CheckinClass, CheckinMember } from '../../machines/types';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useState } from 'react';
 import { useCheckinMachine } from '../../hooks/useKioskMachines';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
@@ -238,7 +239,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
 
           {/* ── Loading: Looking up member ── */}
           {state.matches('lookingUp') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
+            <div role="status" aria-live="polite" className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
               <div className="mx-auto mb-6 h-16 w-16 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
               <h2 className="text-2xl font-bold text-black sm:text-3xl">
                 Looking up your information...
@@ -283,7 +284,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
 
           {/* ── Loading: Fetching classes ── */}
           {state.matches('loadingClasses') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
+            <div role="status" aria-live="polite" className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
               <div className="mx-auto mb-6 h-16 w-16 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
               <h2 className="text-2xl font-bold text-black sm:text-3xl">
                 Loading today's classes...
@@ -344,7 +345,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
 
           {/* ── Processing check-in ── */}
           {state.matches('processingCheckin') && (
-            <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
+            <div role="status" aria-live="polite" className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
               <div className="mx-auto mb-6 h-16 w-16 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
               <h2 className="text-2xl font-bold text-black sm:text-3xl">
                 Checking you in...
@@ -357,7 +358,7 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
             <div className="w-full max-w-2xl">
               <div className="rounded-3xl border-2 border-black bg-white p-6 text-center sm:p-8 md:p-12">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-green-100">
-                  <span className="text-5xl text-green-600">✓</span>
+                  <CheckCircleOutlineIcon sx={{ fontSize: 48 }} className="text-green-600" />
                 </div>
                 <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">
                   You're checked in!

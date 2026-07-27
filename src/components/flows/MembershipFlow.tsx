@@ -7,6 +7,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { useTokenExIframe } from '../../hooks/useTokenExIframe';
+import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
 import { KioskFlowHeader } from '../KioskFlowHeader';
@@ -17,59 +18,6 @@ import { TouchDatePicker } from '../TouchDatePicker';
 
 const TOKENEX_CARD_ID = 'membership-tokenex-card';
 const TOKENEX_CVV_ID = 'membership-tokenex-cvv';
-
-const US_STATES = [
-  'AL',
-  'AK',
-  'AZ',
-  'AR',
-  'CA',
-  'CO',
-  'CT',
-  'DE',
-  'FL',
-  'GA',
-  'HI',
-  'ID',
-  'IL',
-  'IN',
-  'IA',
-  'KS',
-  'KY',
-  'LA',
-  'ME',
-  'MD',
-  'MA',
-  'MI',
-  'MN',
-  'MS',
-  'MO',
-  'MT',
-  'NE',
-  'NV',
-  'NH',
-  'NJ',
-  'NM',
-  'NY',
-  'NC',
-  'ND',
-  'OH',
-  'OK',
-  'OR',
-  'PA',
-  'RI',
-  'SC',
-  'SD',
-  'TN',
-  'TX',
-  'UT',
-  'VT',
-  'VA',
-  'WA',
-  'WV',
-  'WI',
-  'WY',
-];
 
 function formatPlanPrice(plan: MembershipPlan): string {
   const formatted = plan.price.toLocaleString();
@@ -622,7 +570,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     if (state.matches('collectingPayment')) {
       return 'Payment';
     }
-    if (state.matches('processingPayment') || state.matches('creatingMembership')) {
+    if (state.matches('processingPayment')) {
       return 'Processing…';
     }
     if (state.matches('success')) {
@@ -870,6 +818,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
               onClick={() => handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment)}
               onKeyDown={(e) => {
                 if (e.key === ' ' || e.key === 'Enter') {
+                  // Space would otherwise scroll the page as well as toggle.
+                  e.preventDefault();
                   handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment);
                 }
               }}
@@ -989,6 +939,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     <div className="flex gap-3">
                       <input
                         type="tel"
+                        inputMode="numeric"
                         value={state.context.memberLookupPhone || ''}
                         onChange={e => handleInputChange('memberLookupPhone', e.target.value)}
                         placeholder="Phone number"
@@ -1062,6 +1013,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     <input
                       id="phoneNumber"
                       type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
                       value={state.context.phoneNumber || ''}
                       onChange={e => handleInputChange('phoneNumber', e.target.value)}
                       className={inputClass('phoneNumber')}
@@ -1123,7 +1076,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     onChange={v => handleInputChange('state', v)}
                     label="State"
                     required
-                    options={US_STATES.map(s => ({ value: s, label: s }))}
+                    options={US_STATE_OPTIONS}
                     placeholder="Select state…"
                     error={state.context.errors?.state}
                   />
@@ -1535,7 +1488,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
 
         {/* ── Processing ──────────────────────────────────────────────────────── */}
         {state.matches('processingPayment') && (
-          <div className="w-full max-w-xl py-16 text-center">
+          <div role="status" aria-live="polite" className="w-full max-w-xl py-16 text-center">
             <div className="mx-auto mb-8 h-20 w-20 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
             <h2 className="mb-4 text-3xl font-bold text-black">
               Processing payment…

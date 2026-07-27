@@ -225,7 +225,7 @@ async function chargeOneTimeFee(args: {
     const bin = maskedNumber && maskedNumber.length >= 6 ? maskedNumber.slice(0, 6) : '400000';
 
     // Cancellation / hold fees are NOT taxable (per Basys guidance on non-store charges).
-    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct();
     const serverFees = await computeFeeBreakdown(config, baseAmount, false, 0, {
       processorId,
       serviceFeePct,
@@ -594,7 +594,7 @@ export async function PATCH(
 
       await db.update(member)
         .set({ status: 'inactive', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, memberId));
+        .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
       await writeAuditEvent(db, {
         organizationId: orgId,
@@ -622,7 +622,8 @@ export async function PATCH(
         status: 'cancelled',
         cancellationFeeCharged,
         cancellationTransactionId,
-        feeChargeError,
+        // Signal (not the raw processor string) that the fee couldn't be charged.
+        feeChargeError: feeChargeError ? 'The cancellation fee could not be charged.' : undefined,
       });
     }
 
@@ -739,7 +740,7 @@ export async function PATCH(
 
       await db.update(member)
         .set({ status: 'hold', statusChangedAt: now, updatedAt: now })
-        .where(eq(member.id, memberId));
+        .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
       // The success audit row is what countRecentHolds() reads to enforce the
       // limit — it must be written for the cross-app counter to stay correct.
@@ -758,7 +759,8 @@ export async function PATCH(
         holdFeeCharged,
         holdFeeTransactionId,
         holdFeeSubscriptionId,
-        feeChargeError,
+        // Signal (not the raw processor string) that the fee couldn't be charged.
+        feeChargeError: feeChargeError ? 'The hold fee could not be charged.' : undefined,
       });
     }
 
@@ -780,7 +782,7 @@ export async function PATCH(
 
     await db.update(member)
       .set({ status: 'active', statusChangedAt: now, updatedAt: now })
-      .where(eq(member.id, memberId));
+      .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
 
     await writeAuditEvent(db, {
       organizationId: orgId,

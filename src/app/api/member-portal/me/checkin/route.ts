@@ -45,13 +45,29 @@ export async function POST(request: Request) {
       const memberRows = await db
         .select({ status: member.status })
         .from(member)
-        .where(eq(member.id, session.memberId))
+        .where(and(eq(member.id, session.memberId), eq(member.organizationId, session.orgId)))
         .limit(1);
 
       const memberStatus = memberRows[0]?.status;
       if (memberStatus !== 'active' && memberStatus !== 'trial') {
         return NextResponse.json({ error: 'No active membership' }, { status: 403 });
       }
+    }
+
+    // The schedule instance must belong to the member's org — otherwise a
+    // member could log attendance against any org's class by guessing an id.
+    const schedule = await db
+      .select({ id: classScheduleInstance.id })
+      .from(classScheduleInstance)
+      .innerJoin(dojoClass, eq(classScheduleInstance.classId, dojoClass.id))
+      .where(and(
+        eq(classScheduleInstance.id, scheduleId),
+        eq(dojoClass.organizationId, session.orgId),
+      ))
+      .limit(1);
+
+    if (schedule.length === 0) {
+      return NextResponse.json({ error: 'Class not found' }, { status: 404 });
     }
 
     await db.insert(attendance).values({

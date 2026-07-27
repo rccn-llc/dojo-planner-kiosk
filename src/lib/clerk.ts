@@ -6,9 +6,11 @@ interface OrgInfo {
   orgName: string;
 }
 
-// In-memory cache with 1-hour TTL
+// In-memory cache with 1-hour TTL and a size cap so a long-lived instance
+// hitting many distinct slugs can't grow the map without bound.
 const orgCache = new Map<string, { info: OrgInfo; expiresAt: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_MAX = 500;
 
 /**
  * Resolve an organization by its Clerk slug.
@@ -38,6 +40,12 @@ export async function resolveOrgBySlug(slug: string): Promise<OrgInfo | null> {
     }
 
     const info: OrgInfo = { orgId: org.id, orgName: org.name };
+    if (orgCache.size >= CACHE_MAX) {
+      const oldest = orgCache.keys().next().value;
+      if (oldest !== undefined) {
+        orgCache.delete(oldest);
+      }
+    }
     orgCache.set(slug, { info, expiresAt: Date.now() + CACHE_TTL_MS });
     return info;
   }
@@ -49,9 +57,11 @@ export async function resolveOrgBySlug(slug: string): Promise<OrgInfo | null> {
 
 /**
  * Resolve an organization ID from an incoming request's `?org=<value>` query
- * param. Accepts either a Clerk org slug (e.g. `cta-hq`) or a Clerk org ID
- * (`org_...`); the ID form is a dev/debug convenience that skips the slug
- * lookup. Returns null when the param is missing or the slug doesn't match.
+ * param. Accepts a Clerk org slug (e.g. `cta-hq`), which is verified against
+ * Clerk. A raw Clerk org ID (`org_...`) is accepted *only outside production*
+ * as a dev/debug convenience — in production it would let any caller target
+ * any org by guessing an ID, bypassing the slug lookup. Returns null when the
+ * param is missing or the slug doesn't match.
  */
 export async function resolveOrgIdFromRequest(request: NextRequest | Request): Promise<string | null> {
   const url = 'nextUrl' in request ? request.nextUrl : new URL(request.url);
@@ -60,7 +70,7 @@ export async function resolveOrgIdFromRequest(request: NextRequest | Request): P
     return null;
   }
   if (value.startsWith('org_')) {
-    return value;
+    return process.env.NODE_ENV === 'production' ? null : value;
   }
   const org = await resolveOrgBySlug(value);
   return org?.orgId ?? null;

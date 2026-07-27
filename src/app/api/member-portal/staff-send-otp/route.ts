@@ -2,24 +2,10 @@ import { createClerkClient } from '@clerk/backend';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { generateOTP, storeOTP } from '@/lib/otp';
+import { escapeHtml, maskEmail } from '@/lib/utils';
+import { isValidClerkUserId, isValidUUID } from '@/lib/validation';
 
 const ELIGIBLE_ROLES = new Set(['org:admin', 'org:academy_owner', 'org:front_desk']);
-
-// Strict Clerk user ID format (e.g. user_2abc...). Reject anything else
-// before doing any Clerk API work to keep the response shape uniform.
-const CLERK_USER_ID_RE = /^user_[A-Za-z0-9]{8,}$/;
-const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
-
-function maskEmail(email: string): string {
-  const [user, domain] = email.split('@');
-  if (!user || !domain) {
-    return email;
-  }
-  const maskedUser = user.length > 2
-    ? `${user[0]}${'*'.repeat(user.length - 2)}${user[user.length - 1]}`
-    : user;
-  return `${maskedUser}@${domain}`;
-}
 
 // Generic "sent" response — returned even when the staff doesn't exist or
 // isn't eligible, so we don't leak which Clerk user IDs are valid staff.
@@ -38,7 +24,7 @@ export async function POST(request: Request) {
     const staffClerkUserId = body.staffClerkUserId?.trim() ?? '';
     const orgSlug = body.orgSlug?.trim() ?? '';
 
-    if (!UUID_RE.test(memberId) || !CLERK_USER_ID_RE.test(staffClerkUserId)) {
+    if (!isValidUUID(memberId) || !isValidClerkUserId(staffClerkUserId)) {
       return fakeSent();
     }
 
@@ -80,14 +66,13 @@ export async function POST(request: Request) {
       return fakeSent();
     }
 
-    // Rate-limit + store the OTP
+    // Rate-limit + store the OTP. On a rate-limit, return the SAME generic
+    // fakeSent() shape used for invalid/ineligible staff — a distinct 429 here
+    // would only fire for *valid* staff and thus leak which ids are real.
     const code = generateOTP();
     const stored = await storeOTP('staff', staffClerkUserId, code);
     if (!stored) {
-      return NextResponse.json(
-        { error: 'Too many requests. Please wait a few minutes.' },
-        { status: 429 },
-      );
+      return fakeSent();
     }
 
     // Send via Resend
@@ -107,7 +92,7 @@ export async function POST(request: Request) {
         html: `
           <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 400px; margin: 0 auto; padding: 40px 20px;">
             <h1 style="font-size: 24px; color: #111827; margin-bottom: 8px;">Member Portal Access</h1>
-            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${greetingName}, use this code to unlock a member's portal at the kiosk:</p>
+            <p style="color: #6b7280; margin-bottom: 24px;">Hi ${escapeHtml(greetingName)}, use this code to unlock a member's portal at the kiosk:</p>
             <div style="background: #f3f4f6; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
               <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #111827;">${code}</span>
             </div>

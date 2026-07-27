@@ -52,7 +52,7 @@ Payments are processed via direct IQPro REST API calls — **no SDK dependency**
 
 **ACH payments:** Account number tokenized server-side via IQPro Vault API, then registered as a payment method.
 
-**State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. **Service fee:** read from `organization.service_fee_rate` via `getOrganizationServiceFeePct(orgId)` (same cached `loadFromDb` as tax + IQPro config, so no extra round-trip), falling back to `DEFAULT_SERVICE_FEE_PCT = 3.75` when the column is null. The resolved pct is threaded into `computeFeeBreakdown` as a parameter — `src/lib/iqpro.ts` stays free of DB/env reads. Until the main app writes `service_fee_rate`, every org falls back to 3.75.
+**State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. **Service fee:** a fixed platform rate — `getOrganizationServiceFeePct()` returns the `DEFAULT_SERVICE_FEE_PCT = 3.75` constant. dojo-planner hard-codes the service fee and does NOT store it per-org (there is no `organization.service_fee_rate` column — do not add it to the kiosk's `SELECT`, it will 500 the payment path). Both values are threaded into `computeFeeBreakdown` as parameters — `src/lib/iqpro.ts` stays free of DB/env reads. If per-org service fees ever become real, dojo-planner must add the column + Payment Settings UI first.
 
 **Key files:**
 - `src/lib/crypto.ts` — AES-256-GCM helpers for the encrypted client secret
@@ -109,13 +109,19 @@ IQPRO_CONFIG_ENCRYPTION_KEY=...
 # production each kiosk is served at /<org-slug>/... and this is unused.
 NEXT_PUBLIC_DEFAULT_ORG_SLUG=...
 
+# Local-dev auth bypass. Must be exactly "true" AND NODE_ENV must not be
+# "production" for validateDevice()/proxy() to skip mTLS + proxy-secret checks.
+# Never set in production — the auth layer fails closed when PROXY_SECRET is
+# unset, so production requires PROXY_SECRET + Caddy mTLS headers.
+KIOSK_DEV_BYPASS=true
+
 # Email (for receipt sending)
 RESEND_API_KEY=...
 ```
 
 Tax rate and service fee:
 - **Tax rate**: read from `organization.location_tax_rate` (edited in the main app's Location Settings). No env var.
-- **Service fee**: read from `organization.service_fee_rate` via `getOrganizationServiceFeePct(orgId)` in `src/lib/iqproConfig.ts`, falling back to `DEFAULT_SERVICE_FEE_PCT = 3.75` when null. No env var. The main app must expose/write `service_fee_rate` for a non-default rate to take effect.
+- **Service fee**: fixed platform rate. `getOrganizationServiceFeePct()` in `src/lib/iqproConfig.ts` returns the `DEFAULT_SERVICE_FEE_PCT = 3.75` constant. No env var, no per-org DB column — dojo-planner hard-codes the service fee and has no `service_fee_rate` column.
 
 ## State Management (XState 5)
 

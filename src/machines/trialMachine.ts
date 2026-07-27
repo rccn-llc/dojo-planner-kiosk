@@ -529,6 +529,16 @@ export const trialMachine = createMachine({
         },
         TIMEOUT: 'timeout',
       },
+      // Safety net if the submit fetch never settles (no TRIAL_* event fired).
+      after: {
+        30000: {
+          target: 'error',
+          actions: assign({
+            isSubmitting: false,
+            errors: { general: 'Trial signup timed out. Please try again.' },
+          }),
+        },
+      },
     },
 
     // Step 5 – Success

@@ -90,7 +90,7 @@ export async function POST(request: Request) {
             memberType: member.memberType,
           })
           .from(member)
-          .where(inArray(member.id, missingChildIds));
+          .where(and(inArray(member.id, missingChildIds), eq(member.organizationId, orgId)));
 
         members.push(...childMembers);
       }

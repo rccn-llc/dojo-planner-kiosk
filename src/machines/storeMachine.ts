@@ -496,6 +496,15 @@ export const storeMachine = createMachine({
         },
         TIMEOUT: 'timeout',
       },
+      // Safety net if the component's fetch never settles (no PAYMENT_* event).
+      after: {
+        30000: {
+          target: 'orderFailed',
+          actions: assign({
+            errors: { general: 'Payment timed out. Please try again.' } as Record<string, string>,
+          }),
+        },
+      },
     },
 
     // ── Terminal states ───────────────────────────────────────────────────────

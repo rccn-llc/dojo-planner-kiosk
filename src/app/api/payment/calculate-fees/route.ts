@@ -96,7 +96,7 @@ export async function POST(request: Request) {
     }
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
-    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct();
 
     const feeBreakdown: FeeBreakdown = await computeFeeBreakdown(
       iqproConfig,

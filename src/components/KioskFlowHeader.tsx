@@ -16,6 +16,7 @@ export function KioskFlowHeader({ title, onBack, rightSlot }: KioskFlowHeaderPro
       <button
         type="button"
         onClick={onBack}
+        aria-label="Go back"
         className="cursor-pointer text-white transition-colors hover:text-gray-300"
       >
         <ArrowBackIcon sx={{ fontSize: 48 }} />

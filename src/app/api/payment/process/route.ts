@@ -1,4 +1,5 @@
 import type { FeeBreakdown } from '@/lib/types';
+import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
@@ -6,7 +7,7 @@ import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
-import { member } from '@/lib/memberSchema';
+import { member, transaction } from '@/lib/memberSchema';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -144,6 +145,41 @@ export async function POST(request: Request) {
       }
     : null;
 
+  // ── Validate order shape before touching the gateway ──────────────────────
+  if (!Array.isArray(body.items) || body.items.length === 0) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Your cart is empty.' },
+      { status: 400 },
+    );
+  }
+  const itemsValid = body.items.every(it =>
+    Number.isInteger(it.quantity) && it.quantity > 0
+    && typeof it.price === 'number' && Number.isFinite(it.price) && it.price >= 0,
+  );
+  if (!itemsValid) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'One or more items are invalid.' },
+      { status: 400 },
+    );
+  }
+  if (typeof body.subtotal !== 'number' || !Number.isFinite(body.subtotal) || body.subtotal < 0) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Invalid order total.' },
+      { status: 400 },
+    );
+  }
+
+  // ACH must carry account + routing (the client tokenizes cards but sends raw
+  // ACH fields for server-side tokenization). Guard here so we don't throw on a
+  // non-null assertion mid-charge. Only relevant for the non-vaulted path.
+  const effectiveMethod = vaulted?.paymentMethodType ?? body.paymentMethod;
+  if (!vaulted && effectiveMethod === 'ach' && (!body.achAccountNumber || !body.achRoutingNumber)) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Bank account and routing number are required.' },
+      { status: 400 },
+    );
+  }
+
   try {
     let customerId: string;
     let paymentMethodId: string;
@@ -185,6 +221,9 @@ export async function POST(request: Request) {
 
       const customerData = customerRes.data ?? customerRes;
       customerId = (customerData as Record<string, unknown>).customerId as string;
+      if (!customerId) {
+        throw new Error('IQPro customer creation returned no customerId');
+      }
       console.warn('[payment/process] Customer created:', sanitizeForLog(customerId));
 
       // Get the customer's billing address ID so the ACH processor can resolve the name
@@ -237,7 +276,7 @@ export async function POST(request: Request) {
           achAccountType,
         });
         achToken = tokenizeResult.achToken;
-        console.warn('[payment/process] ACH tokenization result:', sanitizeForLog(JSON.stringify(tokenizeResult)));
+        // Never log the tokenization result — it echoes account-derived data.
 
         const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
           iqproConfig,
@@ -292,7 +331,7 @@ export async function POST(request: Request) {
       : undefined;
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
-    const serviceFeePct = await getOrganizationServiceFeePct(orgId);
+    const serviceFeePct = await getOrganizationServiceFeePct();
     const serverFees = await computeFeeBreakdown(iqproConfig, body.baseAmount, /* isTaxable */ true, taxStatePct, {
       processorId,
       serviceFeePct,
@@ -451,23 +490,28 @@ export async function POST(request: Request) {
     // Resolve the receipt recipient. For non-vaulted charges, the buyer
     // form supplies email/name. For vaulted charges, the form is disabled —
     // pull the email + display name from the local member row matching the
-    // IQPro customerId.
+    // IQPro customerId. We also capture that member's id so the transaction
+    // row can be attributed to them (guest store orders have no member).
     let receiptEmail: string | undefined;
     let receiptFirstName: string | undefined;
     let receiptLastName: string | undefined;
+    let resolvedMemberId: string | null = null;
     if (vaulted) {
       try {
         const db = getDatabase();
         const rows = await db
-          .select({ email: member.email, firstName: member.firstName, lastName: member.lastName })
+          .select({ id: member.id, email: member.email, firstName: member.firstName, lastName: member.lastName })
           .from(member)
           .where(eq(member.iqproCustomerId, vaulted.customerId))
           .limit(1);
         const m = rows[0];
-        if (m?.email) {
-          receiptEmail = m.email;
-          receiptFirstName = m.firstName;
-          receiptLastName = m.lastName;
+        if (m) {
+          resolvedMemberId = m.id;
+          if (m.email) {
+            receiptEmail = m.email;
+            receiptFirstName = m.firstName;
+            receiptLastName = m.lastName;
+          }
         }
       }
       catch (err) {
@@ -478,6 +522,32 @@ export async function POST(request: Request) {
       receiptEmail = body.email || undefined;
       receiptFirstName = body.firstName;
       receiptLastName = body.lastName;
+    }
+
+    // Record the resolved transaction (approved or declined) BEFORE sending the
+    // receipt. member_id is the vaulted member when known, else null for guest
+    // store orders. Best-effort: a DB failure here must not change the payment
+    // outcome the buyer sees, so it's logged and swallowed.
+    try {
+      const db = getDatabase();
+      const now = new Date();
+      await db.insert(transaction).values({
+        id: randomUUID(),
+        organizationId: orgId,
+        memberId: resolvedMemberId,
+        transactionType: 'product_purchase',
+        amount: serverFees.amount,
+        status: mapped === 'approved' ? 'paid' : 'declined',
+        paymentMethod: effectiveMethod,
+        description: body.description || 'Store purchase',
+        iqproTransactionId: txId || null,
+        processedAt: mapped === 'approved' ? now : null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    catch (err) {
+      console.error('[payment/process] Failed to record store transaction:', sanitizeForLog(err instanceof Error ? err.message : String(err)));
     }
 
     // Send receipt email ONLY on confirmed approval. Never on decline or on an
@@ -510,11 +580,13 @@ export async function POST(request: Request) {
     });
   }
   catch (error) {
-    console.error('[payment/process] Error:', error);
-    return NextResponse.json<ProcessStoreOrderResult>({
-      success: false,
-      status: 'declined',
-      error: error instanceof Error ? error.message : 'Payment processing failed',
-    });
+    // Log the detail server-side; never forward the raw IQPro/processor string
+    // (it can carry gateway ids / processor bodies) to the client. Use 402 so
+    // clients and monitoring can distinguish a payment failure from a 2xx.
+    console.error('[payment/process] Error:', sanitizeForLog(error instanceof Error ? error.message : String(error)));
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Payment could not be processed. Please try again.' },
+      { status: 402 },
+    );
   }
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { jwtVerify, SignJWT } from 'jose';
 
 interface MemberSessionPayload {
@@ -9,6 +10,9 @@ interface MemberSessionPayload {
   // Set when a staff member unlocked this session on a member's behalf
   // (admin override on the OTP screen). Absent for normal member self-logins.
   actingStaffEmail?: string;
+  // Unique token id. Enables audit correlation now and a server-side
+  // revocation deny-list later without changing the token shape.
+  jti?: string;
 }
 
 function getSecret(): Uint8Array {
@@ -28,6 +32,7 @@ export async function createMemberSession(
 ): Promise<string> {
   return new SignJWT({ ...payload })
     .setProtectedHeader({ alg: 'HS256' })
+    .setJti(payload.jti ?? randomUUID())
     .setIssuedAt()
     .setExpirationTime(`${expiresInSeconds}s`)
     .sign(getSecret());
@@ -55,6 +60,7 @@ export async function verifyMemberSession(
       lastName: (p.lastName as string) ?? '',
       email: (p.email as string) ?? '',
       ...(typeof p.actingStaffEmail === 'string' ? { actingStaffEmail: p.actingStaffEmail } : {}),
+      ...(typeof p.jti === 'string' ? { jti: p.jti } : {}),
     };
   }
   catch {

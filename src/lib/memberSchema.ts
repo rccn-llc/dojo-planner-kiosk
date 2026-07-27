@@ -252,7 +252,10 @@ export const transaction = pgTable(
   {
     id: text('id').primaryKey(),
     organizationId: text('organization_id').notNull(),
-    memberId: text('member_id').notNull(),
+    // Nullable: guest kiosk store orders have no member. Mirrors dojo-planner's
+    // transaction.member_id, which is nullable so one-off store sales are
+    // recorded without a member. Membership/trial rows still set it.
+    memberId: text('member_id'),
     memberMembershipId: text('member_membership_id'),
     transactionType: text('transaction_type').notNull(),
     amount: real('amount').notNull(),

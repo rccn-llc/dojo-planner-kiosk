@@ -83,7 +83,7 @@ export async function POST(
     if (body.setCurrentAsHOH) {
       await db.update(member)
         .set({ memberType: 'head-of-household', updatedAt: now })
-        .where(eq(member.id, memberId));
+        .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)));
     }
 
     return NextResponse.json({
