@@ -1,0 +1,137 @@
+name: Bug Report
+description: Report a defect or unexpected behavior in Dojo Kiosk
+title: '[Bug] '
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug! Please fill out as much detail as possible to help us reproduce and fix the issue quickly.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of the kiosk is affected?
+      options:
+        - Home Screen
+        - Free Trial
+        - Check-In
+        - Membership Signup
+        - Members Area
+        - Store & Checkout
+        - Payments & Fees
+        - Waivers & Signatures
+        - Catalog
+        - Receipts & Email
+        - Device Auth & Provisioning
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is the impact?
+      options:
+        - 'Critical — Data loss, security issue, or kiosk unusable'
+        - 'High — Core flow is broken, no workaround'
+        - 'Medium — Flow partially broken, workaround exists'
+        - Low — Cosmetic issue or minor inconvenience
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: environment
+    attributes:
+      label: Environment
+      description: Where did you encounter this bug? (Check all that apply)
+      options:
+        - label: Production
+        - label: Preview / Staging
+        - label: Local development
+
+  - type: input
+    id: device
+    attributes:
+      label: Kiosk Device & OS
+      description: 'e.g. iPad 10th gen / iPadOS 17, Elo touchscreen / Chrome 124'
+      placeholder: iPad 10th gen / iPadOS 17
+    validations:
+      required: true
+
+  - type: input
+    id: org
+    attributes:
+      label: Organization / Dojo
+      description: Which dojo (Clerk org slug) was the kiosk serving when the bug occurred?
+      placeholder: e.g. austin-bjj
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what went wrong.
+      placeholder: "When I tap 'Place order' in the store, the payment spinner never resolves..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Provide numbered steps so we can reliably reproduce the issue.
+      placeholder: |
+        1. From the home screen, tap 'Store'
+        2. Add a product to the cart and tap 'Checkout'
+        3. Fill in all buyer and payment fields
+        4. ...
+        5. Observe the error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: The order should be charged and the success screen with a 60-second countdown should appear.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened instead?
+      placeholder: The spinner stays indefinitely and the kiosk never returns to the home screen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or Screen Recordings
+      description: |
+        Drag and drop screenshots or a screen recording here. Visual evidence dramatically speeds up debugging.
+        Tip: use Cmd+Shift+5 (macOS) or Win+Shift+S (Windows) for quick screenshots.
+      placeholder: Drag screenshots or a .mp4/.gif here...
+
+  - type: textarea
+    id: console
+    attributes:
+      label: Console Errors
+      description: |
+        Open DevTools (F12 → Console tab), reproduce the bug, then paste any red errors here.
+      render: text
+      placeholder: |
+        TypeError: Cannot read properties of undefined (reading 'id')
+            at StoreFlow.tsx:42
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Anything else that might help — related issues, data conditions, frequency (always/sometimes/once), etc.
+      placeholder: This only happens when the buyer selects a saved payment method rather than entering a new card.

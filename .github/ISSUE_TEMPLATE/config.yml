@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a Question / General Discussion
+    url: https://github.com/rccn-llc/dojo-planner-kiosk/discussions
+    about: For questions, feedback, or general discussion — not a bug or feature request

@@ -1,0 +1,64 @@
+name: Feature Request
+description: Suggest a new feature or improvement for Dojo Kiosk
+title: '[Feature] '
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Got an idea to make Dojo Kiosk better? We'd love to hear it. Please describe your request as clearly as possible.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected Area
+      description: Which part of the kiosk does this feature relate to?
+      options:
+        - Home Screen
+        - Free Trial
+        - Check-In
+        - Membership Signup
+        - Members Area
+        - Store & Checkout
+        - Payments & Fees
+        - Waivers & Signatures
+        - Catalog
+        - Receipts & Email
+        - Device Auth & Provisioning
+        - New Area
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Motivation
+      description: What problem does this solve? What pain point or gap prompted this request?
+      placeholder: "As a walk-in visitor, I can't sign up for a free trial in my own language because the kiosk is English-only..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the feature or change you'd like to see. Be as specific as possible.
+      placeholder: Add a language toggle on the home screen that switches all kiosk flows between English and Spanish...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Have you considered any alternative solutions or workarounds?
+      placeholder: 'Currently front desk staff translate verbally, but this slows down check-in during busy periods.'
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context / Mockups
+      description: |
+        Any extra context, examples from other apps, or mockup screenshots that illustrate your idea.
+        Drag and drop images here if you have a visual design in mind.
+      placeholder: 'Drag mockup images here, or describe how a similar kiosk handles this...'
