@@ -114,6 +114,13 @@ function buildConfig(
 }
 
 async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number; serviceFeePct: number }> {
+  // NOTE: service_fee_rate is intentionally NOT selected here. dojo-planner owns
+  // the shared schema and has not shipped that column yet; selecting it makes
+  // Postgres fail the whole query (42703 "column does not exist"), which 500s
+  // every payment path. Until the main app adds the column, every org falls back
+  // to DEFAULT_SERVICE_FEE_PCT anyway, so selecting it buys nothing. Re-add it to
+  // the select (and read row.serviceFeeRate below) once the migration lands —
+  // schemaParity.test.ts will flag it.
   const rows = await withRetry(db =>
     db
       .select({
@@ -121,7 +128,6 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
         clientSecretEnc: organizationConfig.iqproConfigClientSecretEncrypted,
         gatewayId: organizationConfig.iqproConfigGatewayId,
         locationTaxRate: organizationConfig.locationTaxRate,
-        serviceFeeRate: organizationConfig.serviceFeeRate,
       })
       .from(organizationConfig)
       .where(eq(organizationConfig.id, orgId))
@@ -134,7 +140,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const dbGatewayId = row?.gatewayId ?? null;
   const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
-  const serviceFeePct = row?.serviceFeeRate ?? DEFAULT_SERVICE_FEE_PCT;
+  const serviceFeePct = DEFAULT_SERVICE_FEE_PCT;
 
   const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 
