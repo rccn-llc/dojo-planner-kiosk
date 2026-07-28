@@ -85,6 +85,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   const [state, send] = useStoreMachine();
   const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
+  // Short-lived kiosk attestation token required by /api/payment/process.
+  const attestationTokenRef = useRef<string | null>(null);
   // Mirrors capturedTokenRef.current.firstSix in state so the fee-calc effect
   // re-runs once a real card BIN is available and we can drop the placeholder.
   const [capturedFirstSix, setCapturedFirstSix] = useState<string>('');
@@ -104,11 +106,22 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           }
         })
         .catch(() => setTokenizationError('Could not load payment form'));
+
+      // Mint a fresh kiosk attestation token for the upcoming charge.
+      if (!attestationTokenRef.current) {
+        fetch(withOrgQuery('/api/payment/attestation', orgSlug))
+          .then(r => r.json())
+          .then((data: { token?: string }) => {
+            attestationTokenRef.current = data.token ?? null;
+          })
+          .catch(() => {});
+      }
     }
     // Reset when leaving checkout entirely
     if (!state.matches('checkout') && !state.matches('lookingUpMember') && !state.matches('validatingCheckout') && !state.matches('processingOrder')) {
       setTokenizationConfig(null);
       setTokenizationError(null);
+      attestationTokenRef.current = null;
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value]);
@@ -244,6 +257,7 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           // Vaulted-customer charge — server resolves customerId + paymentMethodId
           // from this signed token.
           savedPaymentMatchToken: isSavedMethod ? (ctx.selectedSavedMatchToken ?? undefined) : undefined,
+          kioskAttestationToken: attestationTokenRef.current ?? undefined,
           // Order totals (for receipt email + server validation)
           subtotal,
           discountAmount: ctx.discountAmount,
@@ -253,6 +267,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
           description: 'Kiosk store order',
           organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? process.env.ORGANIZATION_ID ?? '',
           items: ctx.cartItems.map(i => ({
+            productId: i.productId,
+            variantId: i.variantId,
             productName: i.productName,
             variantName: i.variantName,
             quantity: i.quantity,

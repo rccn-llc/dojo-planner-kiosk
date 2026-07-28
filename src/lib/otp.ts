@@ -48,6 +48,12 @@ function getRedisClient() {
     );
     return redisClientPromise;
   }
+  // Fail closed in production: the in-memory store/lockout is per-instance and
+  // an attacker could spread OTP guesses across instances to defeat the
+  // verify-fail lockout. Refuse rather than silently degrade.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('OTP storage requires UPSTASH_REDIS_REST_URL/TOKEN in production');
+  }
   return null;
 }
 

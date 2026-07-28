@@ -2,12 +2,12 @@ import type { IQProConfig } from '@/lib/iqproConfig';
 import { randomUUID } from 'node:crypto';
 import { and, count, eq, gte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
 import { auditEvent, member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
+import { requireMemberAuth } from '@/lib/requireMemberAuth';
 
 type DB = ReturnType<typeof getDatabase>;
 
@@ -494,21 +494,24 @@ export async function PATCH(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    // Prefer URL-derived org slug; fall back to the single-org env var.
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization context not available' }, { status: 400 });
-    }
-
-    const iqproConfig = await resolveIQProConfig(orgId);
-
     const { memberId } = await params;
     const body = await request.json() as {
       memberMembershipId: string;
       action: 'cancel' | 'hold' | 'reactivate';
       waiveFee?: boolean;
     };
+
+    // Waiving a fee is an operator decision — require a staff-assisted session
+    // for it. Everything else only needs the member's own (or staff) session.
+    const auth = await requireMemberAuth(request, memberId, {
+      requireStaff: body.waiveFee === true,
+    });
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
+    const iqproConfig = await resolveIQProConfig(orgId);
 
     if (!body.memberMembershipId || !body.action) {
       return NextResponse.json({ error: 'memberMembershipId and action are required' }, { status: 400 });

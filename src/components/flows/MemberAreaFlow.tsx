@@ -6,7 +6,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import EmailIcon from '@mui/icons-material/Email';
 import SaveIcon from '@mui/icons-material/Save';
 
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { validateMemberEditForm } from '../../lib/validation';
 import { KioskFlowHeader } from '../KioskFlowHeader';
@@ -128,6 +128,22 @@ interface StaffEntry {
 
 export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
   const { slug: orgSlug } = useOrgSlug();
+  // Short-lived kiosk attestation token required by the staff-list endpoint.
+  const attestationTokenRef = useRef<string | null>(null);
+  const ensureAttestationToken = useCallback(async (): Promise<string | null> => {
+    if (attestationTokenRef.current) {
+      return attestationTokenRef.current;
+    }
+    try {
+      const res = await fetch(withOrgQuery('/api/payment/attestation', orgSlug));
+      const data = await res.json() as { token?: string };
+      attestationTokenRef.current = data.token ?? null;
+    }
+    catch {
+      attestationTokenRef.current = null;
+    }
+    return attestationTokenRef.current;
+  }, [orgSlug]);
   const [view, setView] = useState<View>('search');
   const [otpCode, setOtpCode] = useState('');
   const [otpError, setOtpError] = useState('');
@@ -389,10 +405,11 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setOtpCode('');
     setStaffListLoading(true);
     try {
+      const attestation = await ensureAttestationToken();
       const res = await fetch(withOrgQuery('/api/member-portal/staff-list', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orgSlug: '_kiosk' }),
+        body: JSON.stringify({ orgSlug: '_kiosk', kioskAttestationToken: attestation ?? undefined }),
       });
       const data = await res.json() as { staff?: StaffEntry[] };
       setStaffList(data.staff ?? []);

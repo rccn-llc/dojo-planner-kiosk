@@ -1,8 +1,8 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { familyMember, member, memberMembership } from '@/lib/memberSchema';
+import { requireMemberAuth } from '@/lib/requireMemberAuth';
 
 // Maps a relationship to its inverse.
 // The link stores: relatedMemberId is <relationship> of memberId.
@@ -27,13 +27,13 @@ export async function GET(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
-    }
-
     const { memberId } = await params;
+    const auth = await requireMemberAuth(request, memberId);
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
     const db = getDatabase();
 
     // The anchor member must belong to the resolved org before we expose any

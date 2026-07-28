@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
-import { address, familyMember, member, memberMembership, membershipPlan, signedWaiver } from '@/lib/memberSchema';
+import { address, familyMember, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +11,13 @@ export async function POST(request: Request) {
     orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
+    }
+
+    // Rate-limit per IP: this is an unauthenticated phone lookup, so cap it to
+    // blunt brute-force enumeration of members by phone number.
+    const allowed = await rateLimit(`members-lookup:${clientIp(request)}`, 30, 10 * 60 * 1000);
+    if (!allowed) {
+      return NextResponse.json({ found: false, members: [] }, { status: 429 });
     }
 
     const body = await request.json() as {
@@ -154,25 +162,11 @@ export async function POST(request: Request) {
       }
     }
 
-    // Fetch the most recent signed waiver signature for each member in a
-    // single batched query (was one query per member — an N+1 on the primary
-    // phone-lookup path). Ordered newest-first so the first row seen per member
-    // is the most recent; later rows for the same member are skipped.
-    const signatureMap = new Map<string, string>();
-
-    if (memberIds.length > 0) {
-      const waivers = await db
-        .select({ memberId: signedWaiver.memberId, signatureDataUrl: signedWaiver.signatureDataUrl })
-        .from(signedWaiver)
-        .where(inArray(signedWaiver.memberId, memberIds))
-        .orderBy(desc(signedWaiver.signedAt));
-
-      for (const w of waivers) {
-        if (w.signatureDataUrl && !signatureMap.has(w.memberId)) {
-          signatureMap.set(w.memberId, w.signatureDataUrl);
-        }
-      }
-    }
+    // NOTE: the member's stored waiver signature image is deliberately NOT
+    // returned here. It is high-value PII and this route is unauthenticated;
+    // a returning member re-signs the waiver rather than us handing the image
+    // back pre-auth. (The signature is only exposed via the session-gated
+    // member-detail route after OTP.)
 
     // Filter members based on plan matching and trial rules
     const filteredMembers = members.filter((m) => {
@@ -234,7 +228,6 @@ export async function POST(request: Request) {
           state: addr?.state ?? null,
           zip: addr?.zipCode ?? null,
           trialMembershipId: trialMembership?.memberMembershipId ?? null,
-          existingSignature: signatureMap.get(m.memberId) ?? null,
         };
       }),
     });

@@ -46,7 +46,8 @@ export async function verifyMemberSession(
   token: string,
 ): Promise<MemberSessionPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    // Pin the algorithm to HS256 so a token can't request a different alg.
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ['HS256'] });
     const p = payload as Record<string, unknown>;
 
     if (!p.memberId || !p.orgId) {

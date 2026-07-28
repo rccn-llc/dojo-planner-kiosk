@@ -8,6 +8,7 @@ import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
+import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import {
   address,
   member,
@@ -19,6 +20,7 @@ import {
   transaction,
   waiverTemplate,
 } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { generatePdfFilename, generateWaiverPdfBuffer } from '@/lib/waiverPdf';
 
 interface MembershipPaymentBody {
@@ -64,6 +66,7 @@ interface MembershipPaymentBody {
   couponDiscount?: number;
   existingMemberId?: string | null;
   convertingTrialMembershipId?: string | null;
+  kioskAttestationToken?: string;
 }
 
 function sanitizePhone(phone?: string): string | undefined {
@@ -96,12 +99,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Organization not found. Pass ?org=<slug>.' }, { status: 400 });
     }
 
+    // Abuse control: throttle signup attempts per IP and per org.
+    const ip = clientIp(request);
+    const withinIpLimit = await rateLimit(`payment-membership:ip:${ip}`, 10, 60 * 1000);
+    const withinOrgLimit = await rateLimit(`payment-membership:org:${orgId}`, 60, 60 * 1000);
+    if (!withinIpLimit || !withinOrgLimit) {
+      return NextResponse.json({ success: false, error: 'Too many attempts. Please wait a moment and try again.' }, { status: 429 });
+    }
+
     const iqproConfig = await resolveIQProConfig(orgId);
     // iqproConfig may be null when this org has no IQPro credentials; the
     // payment stage below is gated on it. We continue so the member/waiver
     // records still write for $0 plans / plans without payment.
 
     const body = await request.json() as MembershipPaymentBody;
+
+    // Require a valid, unexpired kiosk attestation token bound to this org.
+    if (!verifyAttestationToken(body.kioskAttestationToken, orgId)) {
+      return NextResponse.json({ success: false, error: 'Your session has expired. Please refresh and try again.' }, { status: 403 });
+    }
 
     const db = getDatabase();
     const gatewayId = iqproConfig?.gatewayId;

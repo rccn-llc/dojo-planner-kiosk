@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { familyMember, member } from '@/lib/memberSchema';
+import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { isValidEmail } from '@/lib/utils';
 
 interface CreateFamilyBody {
   firstName: string;
@@ -20,17 +21,32 @@ export async function POST(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
-    }
-
     const { memberId } = await params;
+    const auth = await requireMemberAuth(request, memberId);
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
     const body = await request.json() as CreateFamilyBody;
 
     if (!body.firstName?.trim() || !body.lastName?.trim() || !body.email?.trim() || !body.relationship?.trim()) {
       return NextResponse.json({ error: 'First name, last name, email, and relationship are required' }, { status: 400 });
+    }
+    if (!isValidEmail(body.email)) {
+      return NextResponse.json({ error: 'A valid email is required' }, { status: 400 });
+    }
+    if (body.phone) {
+      const digits = body.phone.replace(/\D/g, '');
+      if (digits.length > 0 && digits.length !== 10) {
+        return NextResponse.json({ error: 'A valid 10-digit phone number is required' }, { status: 400 });
+      }
+    }
+    if (body.dateOfBirth) {
+      const dob = new Date(`${body.dateOfBirth}T12:00:00`);
+      if (Number.isNaN(dob.getTime()) || dob > new Date()) {
+        return NextResponse.json({ error: 'A valid date of birth is required' }, { status: 400 });
+      }
     }
 
     const db = getDatabase();

@@ -3,7 +3,7 @@ import { and, eq, gte, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { withRetry } from '@/lib/database';
-import { attendance, classScheduleInstance, dojoClass } from '@/lib/memberSchema';
+import { attendance, classScheduleInstance, dojoClass, member } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
   try {
@@ -28,17 +28,37 @@ export async function POST(request: Request) {
     tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
     const result = await withRetry(async (db) => {
+      // The member must belong to this org — otherwise a caller could log
+      // attendance for an arbitrary member id under any org.
+      const [memberRow] = await db
+        .select({ id: member.id })
+        .from(member)
+        .where(and(eq(member.id, body.memberId), eq(member.organizationId, orgId)))
+        .limit(1);
+
+      if (!memberRow) {
+        return { memberNotFound: true } as const;
+      }
+
       // Defense in depth: the class list already hides walk-in-disabled classes,
       // but reject here too in case a stale client posts one. Only an explicit
-      // 'No' blocks; 'Yes' and legacy NULL rows are allowed.
+      // 'No' blocks; 'Yes' and legacy NULL rows are allowed. Org-scope the
+      // lookup so a class id from another org can't be used.
       const [scheduledClass] = await db
         .select({ allowWalkIns: dojoClass.allowWalkIns })
         .from(classScheduleInstance)
         .innerJoin(dojoClass, eq(classScheduleInstance.classId, dojoClass.id))
-        .where(eq(classScheduleInstance.id, body.classScheduleInstanceId))
+        .where(and(
+          eq(classScheduleInstance.id, body.classScheduleInstanceId),
+          eq(dojoClass.organizationId, orgId),
+        ))
         .limit(1);
 
-      if (scheduledClass?.allowWalkIns === 'No') {
+      if (!scheduledClass) {
+        return { classNotFound: true } as const;
+      }
+
+      if (scheduledClass.allowWalkIns === 'No') {
         return { walkInsDisabled: true } as const;
       }
 
@@ -72,6 +92,14 @@ export async function POST(request: Request) {
 
       return { alreadyCheckedIn: false } as const;
     });
+
+    if ('memberNotFound' in result) {
+      return NextResponse.json({ success: false, error: 'Member not found.' }, { status: 404 });
+    }
+
+    if ('classNotFound' in result) {
+      return NextResponse.json({ success: false, error: 'Class not found.' }, { status: 404 });
+    }
 
     if ('walkInsDisabled' in result) {
       return NextResponse.json({

@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { computeFeeBreakdown, getGatewayProcessors } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export interface CalculateFeesRequest {
   baseAmount: number;
@@ -42,6 +43,13 @@ export async function POST(request: Request) {
       { success: false, error: 'Organization not found. Pass ?org=<slug>.' },
       { status: 400 },
     );
+  }
+
+  // Each call hits IQPro (OAuth + /calculatefees); throttle per IP so it can't
+  // be used to amplify cost against the gateway.
+  const allowed = await rateLimit(`calculate-fees:${clientIp(request)}`, 60, 60 * 1000);
+  if (!allowed) {
+    return NextResponse.json<CalculateFeesResponse>({ success: false, error: 'Too many requests' }, { status: 429 });
   }
 
   const iqproConfig = await resolveIQProConfig(orgId);
@@ -120,9 +128,11 @@ export async function POST(request: Request) {
     return NextResponse.json<CalculateFeesResponse>({ success: true, feeBreakdown });
   }
   catch (err) {
+    // Log the detail server-side, but return a generic message — the raw IQPro
+    // error body can carry gateway/processor internals.
     console.error('[payment/calculate-fees] failed:', err);
     return NextResponse.json<CalculateFeesResponse>(
-      { success: false, error: err instanceof Error ? err.message : 'Fee calculation failed' },
+      { success: false, error: 'Fee calculation failed' },
       { status: 500 },
     );
   }
