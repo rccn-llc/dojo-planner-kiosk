@@ -148,9 +148,6 @@ const trialActions = {
         {
           id: `trial_${Date.now()}`,
           programId: 'adult-trial',
-          email: context.email,
-          firstName: context.firstName,
-          lastName: context.lastName,
         },
         {
           sessionId: context.sessionId,
