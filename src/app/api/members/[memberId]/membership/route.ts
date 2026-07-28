@@ -4,7 +4,6 @@ import { and, count, eq, gte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
-import { validateDevice } from '@/lib/deviceAuth';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
@@ -495,13 +494,9 @@ export async function PATCH(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    // Prefer URL-derived org slug; fall back to device cert when the slug
-    // isn't present (older clients).
+    // Prefer URL-derived org slug; fall back to the single-org env var.
     let orgId = await resolveOrgIdFromRequest(request);
-    if (!orgId) {
-      const device = await validateDevice(request);
-      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
-    }
+    orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization context not available' }, { status: 400 });
     }

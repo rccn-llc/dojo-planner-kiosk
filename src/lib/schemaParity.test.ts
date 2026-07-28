@@ -27,7 +27,6 @@ import { describe, expect, it } from 'vitest';
 const KIOSK_SCHEMA_FILES = [
   'src/lib/memberSchema.ts',
   'src/lib/catalogSchema.ts',
-  'src/lib/kioskSchema.ts',
   'src/lib/iqproConfig.ts',
 ];
 

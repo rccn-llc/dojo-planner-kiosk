@@ -109,10 +109,11 @@ IQPRO_CONFIG_ENCRYPTION_KEY=...
 # production each kiosk is served at /<org-slug>/... and this is unused.
 NEXT_PUBLIC_DEFAULT_ORG_SLUG=...
 
-# Local-dev auth bypass. Must be exactly "true" AND NODE_ENV must not be
-# "production" for validateDevice()/proxy() to skip mTLS + proxy-secret checks.
-# Never set in production — the auth layer fails closed when PROXY_SECRET is
-# unset, so production requires PROXY_SECRET + Caddy mTLS headers.
+# Local-dev bypass for the member-portal ("my.") dashboard session check.
+# Must be exactly "true" AND NODE_ENV must not be "production" for proxy() to
+# skip the member_session cookie gate on /dashboard routes. Has no effect on the
+# public kiosk ("kiosk.") subdomain, which is always served directly by Vercel
+# with no proxy in front. Never set in production.
 KIOSK_DEV_BYPASS=true
 
 # Email (for receipt sending)
