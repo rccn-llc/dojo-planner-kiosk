@@ -126,11 +126,10 @@ const storeActions = {
       'create',
       { sessionId: context.sessionId, phoneNumber: context.phoneNumber },
       {
+        // Non-PII only — name/email/phone are deliberately NOT audited.
         action: 'store_order',
         itemCount: context.cartItems.length,
         subtotal,
-        firstName: context.firstName,
-        email: context.email,
       },
     );
   },

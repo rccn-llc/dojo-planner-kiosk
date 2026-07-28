@@ -48,6 +48,7 @@ export async function POST(request: Request) {
 
     const m = members[0];
     if (!m) {
+      console.warn('[staff-verify-otp] reject: member not found');
       return rejectVerification();
     }
 
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
     // their primary email for the audit claim.
     const secretKey = process.env.CLERK_SECRET_KEY;
     if (!secretKey) {
+      console.warn('[staff-verify-otp] reject: CLERK_SECRET_KEY not set');
       return rejectVerification();
     }
 
@@ -62,6 +64,7 @@ export async function POST(request: Request) {
     const memberships = await clerk.users.getOrganizationMembershipList({ userId: staffClerkUserId });
     const orgMembership = memberships.data.find(om => om.organization.id === m.organizationId);
     if (!orgMembership || !ELIGIBLE_ROLES.has(orgMembership.role)) {
+      console.warn('[staff-verify-otp] reject: staff not in org or ineligible role', { role: orgMembership?.role ?? 'none' });
       return rejectVerification();
     }
 
@@ -70,6 +73,7 @@ export async function POST(request: Request) {
       ?? staffUser.emailAddresses[0];
     const staffEmail = primary?.emailAddress;
     if (!staffEmail) {
+      console.warn('[staff-verify-otp] reject: no staff email');
       return rejectVerification();
     }
 
@@ -78,6 +82,7 @@ export async function POST(request: Request) {
     // staff id / member (the client only reads verified/error).
     const result = await verifyOTP('staff', staffClerkUserId, code);
     if (!result.verified) {
+      console.warn('[staff-verify-otp] reject: OTP verify failed', { reason: result.reason });
       return rejectVerification();
     }
 

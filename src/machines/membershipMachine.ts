@@ -121,8 +121,8 @@ const membershipActions = {
     if (context.selectedPlan && context.email) {
       const audit = KioskAuditService.getInstance();
       audit.logMembershipSignup(
-        { id: `member_${Date.now()}`, email: context.email, firstName: context.firstName, lastName: context.lastName },
-        { planId: context.selectedPlan.id, amount: context.selectedPlan.price, subscriptionId: `sub_${Date.now()}` },
+        { id: `member_${Date.now()}` },
+        { planId: context.selectedPlan.id, amount: context.selectedPlan.price },
         { sessionId: context.sessionId, phoneNumber: context.phoneNumber },
       );
     }
