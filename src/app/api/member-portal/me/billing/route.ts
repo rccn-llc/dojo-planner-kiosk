@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { transaction } from '@/lib/memberSchema';
@@ -16,7 +16,10 @@ export async function GET(request: Request) {
     const transactions = await db
       .select()
       .from(transaction)
-      .where(eq(transaction.memberId, session.memberId))
+      .where(and(
+        eq(transaction.memberId, session.memberId),
+        eq(transaction.organizationId, session.orgId),
+      ))
       .orderBy(desc(transaction.createdAt))
       .limit(100);
 

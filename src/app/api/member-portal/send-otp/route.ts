@@ -3,15 +3,31 @@ import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 import { generateOTP, storeOTP } from '@/lib/otp';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { escapeHtml, maskEmail } from '@/lib/utils';
+import { isValidUUID } from '@/lib/validation';
+
+// Generic "sent" response — returned even when the member doesn't exist, is
+// invalid, or is rate-limited, so this endpoint can't be used as a
+// member-existence oracle. Mirrors staff-send-otp's fakeSent().
+function fakeSent() {
+  return NextResponse.json({ sent: true, maskedEmail: '' });
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json() as { memberId?: string };
     const memberId = body.memberId?.trim() ?? '';
 
-    if (!memberId) {
-      return NextResponse.json({ error: 'memberId is required' }, { status: 400 });
+    if (!isValidUUID(memberId)) {
+      return fakeSent();
+    }
+
+    // Per-IP rate limit on top of the per-member send cap inside storeOTP, so
+    // an attacker can't email-bomb across many member ids from one host.
+    const allowed = await rateLimit(`send-otp:${clientIp(request)}`, 10, 10 * 60 * 1000);
+    if (!allowed) {
+      return fakeSent();
     }
 
     const db = getDatabase();
@@ -25,15 +41,17 @@ export async function POST(request: Request) {
 
     const m = members[0];
     if (!m || !m.email) {
-      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
+      // Same generic shape as a real send — no 404, so existent and
+      // non-existent members are indistinguishable.
+      return fakeSent();
     }
 
-    // Generate and store OTP
+    // Generate and store OTP. On the per-member send cap, return the SAME
+    // generic shape (a distinct 429 would only fire for real members).
     const code = generateOTP();
     const stored = await storeOTP('member', memberId, code);
-
     if (!stored) {
-      return NextResponse.json({ error: 'Too many requests. Please wait a few minutes.' }, { status: 429 });
+      return fakeSent();
     }
 
     // Send OTP via email
@@ -70,6 +88,7 @@ export async function POST(request: Request) {
   }
   catch (error) {
     console.error('[member-portal/send-otp] Error:', error);
-    return NextResponse.json({ error: 'Failed to send OTP' }, { status: 500 });
+    // Still return the generic success shape so failures don't enumerate.
+    return fakeSent();
   }
 }

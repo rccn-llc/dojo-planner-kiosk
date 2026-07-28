@@ -1,21 +1,21 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { familyMember, member } from '@/lib/memberSchema';
+import { requireMemberAuth } from '@/lib/requireMemberAuth';
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
-    }
-
     const { memberId } = await params;
+    const auth = await requireMemberAuth(request, memberId);
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
     const body = await request.json() as { relatedMemberId: string; relationship: string };
 
     if (!body.relatedMemberId || !body.relationship) {

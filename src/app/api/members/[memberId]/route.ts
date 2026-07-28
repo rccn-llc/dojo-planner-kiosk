@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import {
   address,
@@ -15,19 +14,21 @@ import {
   signedWaiver,
   transaction,
 } from '@/lib/memberSchema';
+import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { isValidEmail } from '@/lib/utils';
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
-    }
-
     const { memberId } = await params;
+    const auth = await requireMemberAuth(request, memberId);
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
     const db = getDatabase();
 
     // Fetch member
@@ -232,13 +233,13 @@ export async function PATCH(
   { params }: { params: Promise<{ memberId: string }> },
 ) {
   try {
-    let orgId = await resolveOrgIdFromRequest(request);
-    orgId ??= process.env.ORGANIZATION_ID ?? null;
-    if (!orgId) {
-      return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
-    }
-
     const { memberId } = await params;
+    const auth = await requireMemberAuth(request, memberId);
+    if (!auth.ok) {
+      return auth.response;
+    }
+    const { orgId } = auth;
+
     const body = await request.json() as {
       firstName?: string;
       lastName?: string;
@@ -256,23 +257,49 @@ export async function PATCH(
 
     const db = getDatabase();
 
-    // Update member fields
+    // Update member fields — validate each before accepting it so a client
+    // can't write an empty name, a malformed email, a partial phone, a
+    // non-date, or a future DOB.
     const memberUpdate: Record<string, unknown> = {};
     if (body.firstName !== undefined) {
-      memberUpdate.firstName = body.firstName;
+      if (!body.firstName.trim()) {
+        return NextResponse.json({ error: 'First name is required' }, { status: 400 });
+      }
+      memberUpdate.firstName = body.firstName.trim();
     }
     if (body.lastName !== undefined) {
-      memberUpdate.lastName = body.lastName;
+      if (!body.lastName.trim()) {
+        return NextResponse.json({ error: 'Last name is required' }, { status: 400 });
+      }
+      memberUpdate.lastName = body.lastName.trim();
     }
     if (body.email !== undefined) {
-      memberUpdate.email = body.email;
+      if (!isValidEmail(body.email)) {
+        return NextResponse.json({ error: 'A valid email is required' }, { status: 400 });
+      }
+      memberUpdate.email = body.email.trim();
     }
     if (body.phone !== undefined) {
       const digits = body.phone.replace(/\D/g, '');
+      if (digits.length > 0 && digits.length !== 10) {
+        return NextResponse.json({ error: 'A valid 10-digit phone number is required' }, { status: 400 });
+      }
       memberUpdate.phone = digits || null;
     }
     if (body.dateOfBirth !== undefined) {
-      memberUpdate.dateOfBirth = body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : null;
+      if (body.dateOfBirth) {
+        const dob = new Date(`${body.dateOfBirth}T12:00:00`);
+        if (Number.isNaN(dob.getTime())) {
+          return NextResponse.json({ error: 'A valid date of birth is required' }, { status: 400 });
+        }
+        if (dob > new Date()) {
+          return NextResponse.json({ error: 'Date of birth cannot be in the future' }, { status: 400 });
+        }
+        memberUpdate.dateOfBirth = dob;
+      }
+      else {
+        memberUpdate.dateOfBirth = null;
+      }
     }
 
     if (Object.keys(memberUpdate).length > 0) {

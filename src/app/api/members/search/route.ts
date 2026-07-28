@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { member, memberMembership } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +11,13 @@ export async function POST(request: Request) {
     orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
+    }
+
+    // Rate-limit per IP: unauthenticated name search, cap to blunt roster
+    // scraping by substring.
+    const allowed = await rateLimit(`members-search:${clientIp(request)}`, 30, 10 * 60 * 1000);
+    if (!allowed) {
+      return NextResponse.json({ found: false, members: [] }, { status: 429 });
     }
 
     const body = await request.json() as { name?: string };

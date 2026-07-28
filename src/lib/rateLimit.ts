@@ -31,6 +31,12 @@ function getRedisClient() {
       }),
     );
   }
+  // Fail closed in production: the in-memory fallback is per-instance and thus
+  // not a real limit across serverless instances. Refuse rather than silently
+  // degrade the control.
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Rate limiting requires UPSTASH_REDIS_REST_URL/TOKEN in production');
+  }
   return null;
 }
 

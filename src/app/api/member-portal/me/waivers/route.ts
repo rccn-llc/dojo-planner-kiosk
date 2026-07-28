@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database';
 import { signedWaiver } from '@/lib/memberSchema';
@@ -21,7 +21,10 @@ export async function GET(request: Request) {
         signedAt: signedWaiver.signedAt,
       })
       .from(signedWaiver)
-      .where(eq(signedWaiver.memberId, session.memberId))
+      .where(and(
+        eq(signedWaiver.memberId, session.memberId),
+        eq(signedWaiver.organizationId, session.orgId),
+      ))
       .orderBy(desc(signedWaiver.signedAt));
 
     return NextResponse.json({

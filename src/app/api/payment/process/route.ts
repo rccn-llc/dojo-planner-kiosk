@@ -1,13 +1,16 @@
 import type { FeeBreakdown } from '@/lib/types';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
+import { catalogItem, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import { member, transaction } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -44,6 +47,10 @@ export interface ProcessStoreOrderBody {
   // and carries the customerId + paymentMethodId; the client never sees them.
   savedPaymentMatchToken?: string;
 
+  // Short-lived signed kiosk attestation token (from /api/payment/attestation).
+  // Required to charge; blocks scripted card-testing against this endpoint.
+  kioskAttestationToken?: string;
+
   // Order totals — all server-authoritative (re-validated)
   subtotal: number; // pre-discount, pre-fee subtotal
   discountAmount: number;
@@ -53,6 +60,8 @@ export interface ProcessStoreOrderBody {
   description: string;
   organizationId: string;
   items: Array<{
+    productId?: string;
+    variantId?: string;
     productName: string;
     variantName?: string;
     quantity: number;
@@ -97,6 +106,18 @@ export async function POST(request: Request) {
     );
   }
 
+  // Abuse control: throttle charge attempts per IP and per org so this endpoint
+  // can't be used for card-testing / BIN attacks against the live merchant.
+  const ip = clientIp(request);
+  const withinIpLimit = await rateLimit(`payment-process:ip:${ip}`, 10, 60 * 1000);
+  const withinOrgLimit = await rateLimit(`payment-process:org:${orgId}`, 60, 60 * 1000);
+  if (!withinIpLimit || !withinOrgLimit) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Too many payment attempts. Please wait a moment and try again.' },
+      { status: 429 },
+    );
+  }
+
   const iqproConfig = await resolveIQProConfig(orgId);
   if (!iqproConfig) {
     return NextResponse.json<ProcessStoreOrderResult>(
@@ -113,6 +134,14 @@ export async function POST(request: Request) {
     return NextResponse.json<ProcessStoreOrderResult>(
       { success: false, status: 'declined', error: 'Invalid request body' },
       { status: 400 },
+    );
+  }
+
+  // Require a valid, unexpired kiosk attestation token bound to this org.
+  if (!verifyAttestationToken(body.kioskAttestationToken, orgId)) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Your session has expired. Please refresh and try again.' },
+      { status: 403 },
     );
   }
 
@@ -167,6 +196,104 @@ export async function POST(request: Request) {
       { success: false, status: 'declined', error: 'Invalid order total.' },
       { status: 400 },
     );
+  }
+
+  // ── Re-derive every line-item price from the catalog ──────────────────────
+  // The client sends prices, but they are NOT authoritative: a tampered
+  // request could set price/baseAmount to $0.01. Look each item up by
+  // (productId [+ variantId]) scoped to this org and kiosk-visible catalog,
+  // and rebuild the subtotal/baseAmount from those DB prices. The fee-mismatch
+  // check further down only proves fees match the *base* — it can't catch a
+  // forged base, so this is the control that does.
+  let authoritativeSubtotal: number;
+  let authoritativeBase: number;
+  {
+    const db = getDatabase();
+    const productIds = body.items.map(it => it.productId).filter((id): id is string => !!id);
+    if (productIds.length !== body.items.length) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'One or more items are invalid.' },
+        { status: 400 },
+      );
+    }
+
+    const products = await db
+      .select({ id: catalogItem.id, basePrice: catalogItem.basePrice })
+      .from(catalogItem)
+      .where(and(
+        inArray(catalogItem.id, productIds),
+        eq(catalogItem.organizationId, orgId),
+        eq(catalogItem.isActive, true),
+        eq(catalogItem.showOnKiosk, true),
+      ));
+    const basePriceById = new Map(products.map(p => [p.id, p.basePrice]));
+
+    const variantIds = body.items.map(it => it.variantId).filter((id): id is string => !!id);
+    const variantById = new Map<string, { catalogItemId: string; price: number }>();
+    if (variantIds.length > 0) {
+      const variants = await db
+        .select({ id: catalogItemVariant.id, catalogItemId: catalogItemVariant.catalogItemId, price: catalogItemVariant.price })
+        .from(catalogItemVariant)
+        .where(inArray(catalogItemVariant.id, variantIds));
+      for (const v of variants) {
+        variantById.set(v.id, { catalogItemId: v.catalogItemId, price: v.price });
+      }
+    }
+
+    authoritativeSubtotal = 0;
+    for (const item of body.items) {
+      const productId = item.productId!;
+      if (!basePriceById.has(productId)) {
+        return NextResponse.json<ProcessStoreOrderResult>(
+          { success: false, status: 'declined', error: 'One or more items are no longer available. Please refresh and try again.' },
+          { status: 400 },
+        );
+      }
+      let unitPrice: number;
+      if (item.variantId) {
+        const variant = variantById.get(item.variantId);
+        // The variant must exist AND belong to the claimed product — otherwise
+        // a caller could pair an expensive product with a cheap variant id.
+        if (!variant || variant.catalogItemId !== productId) {
+          return NextResponse.json<ProcessStoreOrderResult>(
+            { success: false, status: 'declined', error: 'One or more items are no longer available. Please refresh and try again.' },
+            { status: 400 },
+          );
+        }
+        unitPrice = variant.price;
+      }
+      else {
+        unitPrice = basePriceById.get(productId)!;
+      }
+
+      // Overwrite the client-supplied price with the DB price so the IQPro
+      // line items, receipt, and fee computation all use trusted values.
+      item.price = unitPrice;
+      authoritativeSubtotal += unitPrice * item.quantity;
+    }
+    authoritativeSubtotal = Math.round(authoritativeSubtotal * 100) / 100;
+
+    if (Math.abs(authoritativeSubtotal - body.subtotal) > 0.01) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Item prices have changed — please refresh and try again.' },
+        { status: 400 },
+      );
+    }
+
+    // Clamp the client-supplied discount to [0, subtotal] so a tampered
+    // discount can't drive the fee base negative or to zero. (Coupon validity
+    // itself is enforced by /api/coupons/validate; here we only bound it.)
+    const discount = typeof body.discountAmount === 'number' && Number.isFinite(body.discountAmount)
+      ? Math.min(Math.max(body.discountAmount, 0), authoritativeSubtotal)
+      : 0;
+    authoritativeBase = Math.round((authoritativeSubtotal - discount) * 100) / 100;
+
+    if (Math.abs(authoritativeBase - body.baseAmount) > 0.01) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Order total has changed — please refresh and try again.' },
+        { status: 400 },
+      );
+    }
   }
 
   // ACH must carry account + routing (the client tokenizes cards but sends raw
@@ -332,7 +459,7 @@ export async function POST(request: Request) {
 
     const taxStatePct = await getOrganizationTaxRate(orgId);
     const serviceFeePct = await getOrganizationServiceFeePct();
-    const serverFees = await computeFeeBreakdown(iqproConfig, body.baseAmount, /* isTaxable */ true, taxStatePct, {
+    const serverFees = await computeFeeBreakdown(iqproConfig, authoritativeBase, /* isTaxable */ true, taxStatePct, {
       processorId,
       serviceFeePct,
       token: vaulted ? undefined : (effectivePaymentMethod === 'card' ? body.cardToken : achToken),

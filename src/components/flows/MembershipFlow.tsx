@@ -73,7 +73,6 @@ interface LookupResult {
   state: string | null;
   zip: string | null;
   trialMembershipId: string | null;
-  existingSignature: string | null;
 }
 
 export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberData }: MembershipFlowProps) {
@@ -110,6 +109,8 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
   const capturedTokenRef = useRef<{ token: string; firstSix: string; lastFour: string } | null>(null);
   const feeCalcInFlightRef = useRef(false);
+  // Short-lived kiosk attestation token required by /api/payment/membership.
+  const attestationTokenRef = useRef<string | null>(null);
 
   const isCardPayment = state.context.paymentMethod === 'card';
 
@@ -168,7 +169,9 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
         state: m.state ?? undefined,
         zip: m.zip ?? undefined,
         trialMembershipId: m.trialMembershipId,
-        existingSignature: m.existingSignature ?? undefined,
+        // The waiver signature image is no longer returned by the unauthenticated
+        // lookup route (PII); a returning member re-signs on the waiver step.
+        existingSignature: undefined,
       },
     });
   };
@@ -314,6 +317,16 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
           }
         })
         .catch(() => setTokenizationError('Failed to load payment form'));
+
+      // Mint a fresh kiosk attestation token for the upcoming charge.
+      if (!attestationTokenRef.current) {
+        fetch(withOrgQuery('/api/payment/attestation', orgSlug))
+          .then(r => r.json())
+          .then((data: { token?: string }) => {
+            attestationTokenRef.current = data.token ?? null;
+          })
+          .catch(() => {});
+      }
     }
   }, [state, tokenizationConfig, tokenizationError, orgSlug]);
 
@@ -487,6 +500,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       organizationId: process.env.NEXT_PUBLIC_ORGANIZATION_ID ?? '',
       existingMemberId: ctx.existingMemberId,
       convertingTrialMembershipId: ctx.convertingTrialMembershipId,
+      kioskAttestationToken: attestationTokenRef.current ?? undefined,
     };
 
     fetch(withOrgQuery('/api/payment/membership', orgSlug), {

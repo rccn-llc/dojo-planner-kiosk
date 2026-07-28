@@ -5,6 +5,7 @@ import { getDatabase } from '@/lib/database';
 import { searchCustomersByPhone, signMatchToken } from '@/lib/iqpro';
 import { resolveIQProConfig } from '@/lib/iqproConfig';
 import { member } from '@/lib/memberSchema';
+import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { isValidPhoneNumber, sanitizePhoneInput } from '@/lib/utils';
 
 export interface SavedPaymentMethodMatch {
@@ -42,6 +43,16 @@ export async function GET(request: Request) {
     return NextResponse.json<SavedPaymentMethodSearchResponse>(
       { matches: [], error: 'Organization not found. Pass ?org=<slug>.' },
       { status: 400 },
+    );
+  }
+
+  // Each call hits IQPro's vault search; throttle per IP to prevent enumeration
+  // / cost amplification.
+  const allowed = await rateLimit(`saved-pm-search:${clientIp(request)}`, 30, 60 * 1000);
+  if (!allowed) {
+    return NextResponse.json<SavedPaymentMethodSearchResponse>(
+      { matches: [], error: 'Too many requests' },
+      { status: 429 },
     );
   }
 
