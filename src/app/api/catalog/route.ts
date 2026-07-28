@@ -3,7 +3,6 @@ import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemImage, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
-import { validateDevice } from '@/lib/deviceAuth';
 
 export interface StoreProductVariant {
   id: string;
@@ -25,12 +24,9 @@ export async function GET(request: Request) {
   try {
     const db = getDatabase();
 
-    // Resolve org from URL slug first, then device cert, then env var.
+    // Resolve org from URL slug first, then the single-org env var.
     let orgId = await resolveOrgIdFromRequest(request);
-    if (!orgId) {
-      const device = await validateDevice(request);
-      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
-    }
+    orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }

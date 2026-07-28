@@ -1,14 +1,10 @@
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { validateDevice } from '@/lib/deviceAuth';
 
 export async function GET(request: Request) {
-  // Prefer URL-derived org slug; fall back to device cert / env for legacy callers.
+  // Prefer URL-derived org slug; fall back to the single-org env var.
   let orgId = await resolveOrgIdFromRequest(request);
-  if (!orgId) {
-    const device = await validateDevice(request);
-    orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
-  }
+  orgId ??= process.env.ORGANIZATION_ID ?? null;
 
   const clerkSecretKey = process.env.CLERK_SECRET_KEY;
   if (!orgId) {

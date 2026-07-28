@@ -2,7 +2,6 @@ import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getDatabase } from '@/lib/database';
-import { validateDevice } from '@/lib/deviceAuth';
 import { familyMember, member, memberMembership } from '@/lib/memberSchema';
 
 // Maps a relationship to its inverse.
@@ -29,10 +28,7 @@ export async function GET(
 ) {
   try {
     let orgId = await resolveOrgIdFromRequest(request);
-    if (!orgId) {
-      const device = await validateDevice(request);
-      orgId = device?.orgId ?? process.env.ORGANIZATION_ID ?? null;
-    }
+    orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }

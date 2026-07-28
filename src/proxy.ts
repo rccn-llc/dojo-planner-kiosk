@@ -2,8 +2,9 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
 export function proxy(request: NextRequest) {
-  // Skip all auth in development — requires an explicit opt-in flag so a
-  // mis-set NODE_ENV in a deployed environment can't disable the checks below.
+  // Skip the member-portal session check in development — requires an explicit
+  // opt-in flag so a mis-set NODE_ENV in a deployed environment can't disable
+  // the dashboard cookie gate below.
   if (process.env.NODE_ENV !== 'production' && process.env.KIOSK_DEV_BYPASS === 'true') {
     return NextResponse.next();
   }
@@ -11,13 +12,9 @@ export function proxy(request: NextRequest) {
   const hostname = request.headers.get('host') ?? '';
   const pathname = request.nextUrl.pathname;
 
-  // Kiosk subdomain: require proxy secret header. Fail closed — a missing
-  // PROXY_SECRET means nothing is enforcing the mTLS proxy contract.
+  // Kiosk subdomain: public self-service terminal served directly from Vercel.
+  // There is no mTLS proxy in front, so there is nothing to verify here.
   if (hostname.startsWith('kiosk.')) {
-    const proxySecret = process.env.PROXY_SECRET;
-    if (!proxySecret || request.headers.get('x-proxy-secret') !== proxySecret) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
     return NextResponse.next();
   }
 
