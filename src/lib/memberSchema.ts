@@ -196,12 +196,17 @@ export const waiverMergeField = pgTable(
   ],
 );
 
-// Membership waiver (linking waiver templates to plans)
+// Membership waiver (linking waiver templates to plans).
+// dojo-planner declares this as a composite-key join table with NO `id` column
+// (primaryKey on [membership_plan_id, waiver_template_id]). The kiosk previously
+// declared `id`, which does not exist in the database — any query selecting it
+// would have failed at runtime. Kept in sync with dojo-planner's Schema.ts.
 export const membershipWaiver = pgTable('membership_waiver', {
-  id: text('id').primaryKey(),
   membershipPlanId: text('membership_plan_id').notNull(),
   waiverTemplateId: text('waiver_template_id').notNull(),
-});
+}, table => [
+  primaryKey({ columns: [table.membershipPlanId, table.waiverTemplateId] }),
+]);
 
 // Signed waiver table
 export const signedWaiver = pgTable(

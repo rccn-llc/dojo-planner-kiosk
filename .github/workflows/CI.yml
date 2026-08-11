@@ -97,13 +97,54 @@ jobs:
         with:
           submodules: recursive
 
+      # dojo-planner owns the authoritative schema. src/lib/schemaParity.test.ts
+      # compares the kiosk's local table declarations against it and FAILS when
+      # the kiosk declares a column dojo-planner no longer has — the only check
+      # that catches a rename/drop in the other repo before it reaches
+      # production as `column "..." does not exist` on the payment path.
+      # Without this checkout the gate silently skips.
+      #
+      # Auth is a GitHub App scoped to Contents:read on dojo-planner only, so the
+      # credential is not tied to any individual's account and cannot write.
+      # Requires repo secrets DOJO_PLANNER_APP_ID and DOJO_PLANNER_APP_PRIVATE_KEY.
+      - name: Mint dojo-planner read token
+        id: planner-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.DOJO_PLANNER_APP_ID }}
+          private-key: ${{ secrets.DOJO_PLANNER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: dojo-planner
+
+      - name: Check out dojo-planner (schema source of truth)
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/dojo-planner
+          path: .dojo-planner
+          token: ${{ steps.planner-token.outputs.token }}
+          persist-credentials: false
+
       - name: Set up Node.js environment
         uses: ./.github/actions/setup-project
         with:
           node-version: ${{ matrix.node-version }}
 
+      # Fail loudly here rather than letting the parity gate skip silently —
+      # a skipped gate looks identical to a passing one in the CI summary.
+      - name: Verify dojo-planner schema is present
+        run: |
+          if [ ! -f "${{ github.workspace }}/.dojo-planner/src/models/Schema.ts" ]; then
+            echo "::error::dojo-planner schema not found. The schema-parity gate would skip."
+            echo "::error::Check the DOJO_PLANNER_APP_ID / DOJO_PLANNER_APP_PRIVATE_KEY secrets,"
+            echo "::error::and that the GitHub App is installed on the dojo-planner repository."
+            exit 1
+          fi
+          echo "dojo-planner schema found — parity gate will run."
+
       - name: Run unit tests
-        uses: docker://mcr.microsoft.com/playwright:v1.59.1-noble
+        uses: docker://mcr.microsoft.com/playwright:v1.62.0-noble
+        env:
+          DOJO_PLANNER_DIR: ${{ github.workspace }}/.dojo-planner
         with:
           args: npx vitest --coverage --passWithNoTests
 
