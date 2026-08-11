@@ -175,7 +175,7 @@ jobs:
           restore-nextjs-cache: true
 
       - name: Run E2E tests
-        uses: docker://mcr.microsoft.com/playwright:v1.59.1-noble
+        uses: docker://mcr.microsoft.com/playwright:v1.62.0-noble
         with:
           args: npx playwright test --pass-with-no-tests
 
