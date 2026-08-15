@@ -44,7 +44,7 @@ GET  /api/payment/saved-payment-method/search?org=<slug>&phone=... - Vaulted-cus
 
 Payments are processed via direct IQPro REST API calls — **no SDK dependency** at runtime. The `@dojo-planner/iqpro-client` package is listed in dependencies but its `dist/` is not built; all payment logic uses `iqproPost`/`iqproGet` helpers in `src/lib/iqpro.ts` that make authenticated calls using OAuth client credentials.
 
-**Source of truth for credentials:** the main dojo-planner app's Payment Settings page writes `clientId`, encrypted `clientSecret`, and `gatewayId` to the shared `organization` row. The kiosk reads them via `src/lib/iqproConfig.ts` (`resolveIQProConfig(orgId)`), falling back to env vars per field. `scope`, `oauthUrl`, and `baseUrl` are always env.
+**Source of truth for credentials:** the main dojo-planner app writes `clientId`, encrypted `clientSecret`, and `gatewayId` to the shared `organization` row. That is edited in the IQPro card on dojo-planner's **Location Settings** page (`/dashboard/location-settings`) — there is no separate payment-settings route, despite what older docs claimed. The kiosk reads them via `src/lib/iqproConfig.ts` (`resolveIQProConfig(orgId)`), falling back to env vars per field. `scope`, `oauthUrl`, and `baseUrl` are always env.
 
 **Flow:** Resolve per-org config from `?org=<slug>` → OAuth token (cached per `clientId`) → create customer → register payment method (card token or ACH token) → process transaction.
 
