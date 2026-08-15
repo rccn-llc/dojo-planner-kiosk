@@ -116,13 +116,29 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: dojo-planner
 
+      # Defaults to dojo-planner's default branch. During a coordinated schema
+      # change, set the repository variable DOJO_PLANNER_REF to the planner's
+      # feature branch so this repo can be verified against the incoming schema
+      # BEFORE either side merges.
+      #
+      # Without this, the gate is a one-way ratchet: a kiosk PR that adopts a
+      # renamed column is red until the planner merges, and planner's main is
+      # red the moment it does. Reset the variable once both sides have landed.
       - name: Check out dojo-planner (schema source of truth)
         uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/dojo-planner
+          ref: ${{ vars.DOJO_PLANNER_REF || github.event.repository.default_branch }}
           path: .dojo-planner
           token: ${{ steps.planner-token.outputs.token }}
           persist-credentials: false
+
+      - name: Report which dojo-planner ref the gate is using
+        run: |
+          echo "schema-parity gate is comparing against dojo-planner@${{ vars.DOJO_PLANNER_REF || github.event.repository.default_branch }}"
+          if [ -n "${{ vars.DOJO_PLANNER_REF }}" ]; then
+            echo "::warning::DOJO_PLANNER_REF is overridden to '${{ vars.DOJO_PLANNER_REF }}'. Reset it after the coordinated change lands."
+          fi
 
       - name: Set up Node.js environment
         uses: ./.github/actions/setup-project

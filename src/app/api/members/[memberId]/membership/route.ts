@@ -19,14 +19,14 @@ interface LifecycleContext {
     lastName: string;
     email: string;
     phone: string | null;
-    iqproCustomerId: string | null;
+    providerCustomerId: string | null;
   };
   membership: {
     id: string;
     membershipPlanId: string;
     status: string;
-    iqproSubscriptionId: string | null;
-    iqproHoldFeeSubscriptionId: string | null;
+    providerSubscriptionId: string | null;
+    providerHoldFeeSubscriptionId: string | null;
   };
   plan: {
     id: string;
@@ -71,12 +71,12 @@ async function getLifecycleContext(
       memberLastName: member.lastName,
       memberEmail: member.email,
       memberPhone: member.phone,
-      iqproCustomerId: member.iqproCustomerId,
+      providerCustomerId: member.providerCustomerId,
       membershipId: memberMembership.id,
       membershipPlanId: memberMembership.membershipPlanId,
       membershipStatus: memberMembership.status,
-      iqproSubscriptionId: memberMembership.iqproSubscriptionId,
-      iqproHoldFeeSubscriptionId: memberMembership.iqproHoldFeeSubscriptionId,
+      providerSubscriptionId: memberMembership.providerSubscriptionId,
+      providerHoldFeeSubscriptionId: memberMembership.providerHoldFeeSubscriptionId,
       planId: membershipPlan.id,
       planName: membershipPlan.name,
       cancellationFee: membershipPlan.cancellationFee,
@@ -106,14 +106,14 @@ async function getLifecycleContext(
       lastName: row.memberLastName,
       email: row.memberEmail,
       phone: row.memberPhone,
-      iqproCustomerId: row.iqproCustomerId,
+      providerCustomerId: row.providerCustomerId,
     },
     membership: {
       id: row.membershipId,
       membershipPlanId: row.membershipPlanId,
       status: row.membershipStatus,
-      iqproSubscriptionId: row.iqproSubscriptionId,
-      iqproHoldFeeSubscriptionId: row.iqproHoldFeeSubscriptionId,
+      providerSubscriptionId: row.providerSubscriptionId,
+      providerHoldFeeSubscriptionId: row.providerHoldFeeSubscriptionId,
     },
     plan: {
       id: row.planId,
@@ -178,8 +178,8 @@ async function countRecentHolds(db: DB, memberMembershipId: string, organization
 
 async function chargeOneTimeFee(args: {
   config: IQProConfig;
-  iqproSubscriptionId: string;
-  iqproCustomerId: string;
+  providerSubscriptionId: string;
+  providerCustomerId: string;
   orgId: string;
   memberId: string;
   memberMembershipId: string;
@@ -189,7 +189,7 @@ async function chargeOneTimeFee(args: {
   caption: string;
   db: DB;
 }): Promise<LifecycleResult> {
-  const { config, iqproSubscriptionId, iqproCustomerId, orgId, memberId, memberMembershipId, amount, transactionType, description, caption, db } = args;
+  const { config, providerSubscriptionId, providerCustomerId, orgId, memberId, memberMembershipId, amount, transactionType, description, caption, db } = args;
   const gatewayId = config.gatewayId;
   const baseAmount = Math.round(amount * 100) / 100;
 
@@ -200,12 +200,12 @@ async function chargeOneTimeFee(args: {
   try {
     const subRes = await iqproGet<{ data?: Record<string, unknown> }>(
       config,
-      `/api/gateway/${gatewayId}/subscription/${iqproSubscriptionId}`,
+      `/api/gateway/${gatewayId}/subscription/${providerSubscriptionId}`,
     );
     const sub = (subRes.data ?? subRes) as Record<string, unknown>;
     const subPM = sub.paymentMethod as Record<string, unknown> | undefined;
     const custPM = subPM?.customerPaymentMethod as Record<string, unknown> | undefined;
-    const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? iqproCustomerId) as string;
+    const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? providerCustomerId) as string;
     const pmId = (custPM?.paymentMethodId ?? '') as string;
 
     if (!pmId) {
@@ -286,7 +286,7 @@ async function chargeOneTimeFee(args: {
       status: 'paid',
       paymentMethod: paymentMethodName,
       description,
-      iqproTransactionId: txId,
+      providerTransactionId: txId,
       processedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -303,31 +303,31 @@ async function chargeOneTimeFee(args: {
 
 async function cancelIQProSubscription(
   config: IQProConfig,
-  iqproSubscriptionId: string,
+  providerSubscriptionId: string,
 ): Promise<{ success: boolean; error?: string }> {
   const gatewayId = config.gatewayId;
   try {
     await iqproPost(
       config,
-      `/api/gateway/${gatewayId}/subscription/${iqproSubscriptionId}/cancel`,
+      `/api/gateway/${gatewayId}/subscription/${providerSubscriptionId}/cancel`,
       { cancel: { now: true, endOfBillingPeriod: false } },
     );
     return { success: true };
   }
   catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[membership] IQPro subscription cancel failed', { iqproSubscriptionId, error: message });
+    console.error('[membership] IQPro subscription cancel failed', { providerSubscriptionId, error: message });
     return { success: false, error: message };
   }
 }
 
 async function setSubscriptionAutoRenewal(
   config: IQProConfig,
-  iqproSubscriptionId: string,
+  providerSubscriptionId: string,
   isAutoRenewed: boolean,
 ): Promise<{ success: boolean; error?: string }> {
   const gatewayId = config.gatewayId;
-  const subPath = `/api/gateway/${gatewayId}/subscription/${iqproSubscriptionId}`;
+  const subPath = `/api/gateway/${gatewayId}/subscription/${providerSubscriptionId}`;
   try {
     const subRes = await iqproGet<{ data?: Record<string, unknown> }>(config, subPath);
     const sub = (subRes.data ?? subRes) as Record<string, unknown>;
@@ -355,7 +355,7 @@ async function setSubscriptionAutoRenewal(
   }
   catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[membership] IQPro subscription update failed', { iqproSubscriptionId, isAutoRenewed, error: message });
+    console.error('[membership] IQPro subscription update failed', { providerSubscriptionId, isAutoRenewed, error: message });
     return { success: false, error: message };
   }
 }
@@ -400,18 +400,18 @@ async function createHoldFeeSubscription(
   const gatewayId = config.gatewayId;
   try {
     // Pull customerId + paymentMethodId from the existing membership subscription.
-    if (!ctx.membership.iqproSubscriptionId) {
+    if (!ctx.membership.providerSubscriptionId) {
       return { success: false, error: 'No existing membership subscription to copy payment method from.' };
     }
     const subRes = await iqproGet<{ data?: Record<string, unknown> }>(
       config,
-      `/api/gateway/${gatewayId}/subscription/${ctx.membership.iqproSubscriptionId}`,
+      `/api/gateway/${gatewayId}/subscription/${ctx.membership.providerSubscriptionId}`,
     );
     const sub = (subRes.data ?? subRes) as Record<string, unknown>;
     const subPM = sub.paymentMethod as Record<string, unknown> | undefined;
     const custPM = subPM?.customerPaymentMethod as Record<string, unknown> | undefined;
     const pmId = (custPM?.paymentMethodId ?? '') as string;
-    const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? ctx.member.iqproCustomerId ?? '') as string;
+    const customerId = ((sub.customer as Record<string, unknown> | undefined)?.customerId ?? ctx.member.providerCustomerId ?? '') as string;
 
     if (!pmId || !customerId) {
       return { success: false, error: 'No saved payment method on the existing subscription. Cannot create recurring hold-fee sub.' };
@@ -533,11 +533,11 @@ export async function PATCH(
       let cancellationTransactionId: string | undefined;
       let feeChargeError: string | undefined;
 
-      if (iqproConfig && feeAmount > 0 && ctx.member.iqproCustomerId && ctx.membership.iqproSubscriptionId) {
+      if (iqproConfig && feeAmount > 0 && ctx.member.providerCustomerId && ctx.membership.providerSubscriptionId) {
         const feeResult = await chargeOneTimeFee({
           config: iqproConfig,
-          iqproSubscriptionId: ctx.membership.iqproSubscriptionId,
-          iqproCustomerId: ctx.member.iqproCustomerId,
+          providerSubscriptionId: ctx.membership.providerSubscriptionId,
+          providerCustomerId: ctx.member.providerCustomerId,
           orgId,
           memberId,
           memberMembershipId: body.memberMembershipId,
@@ -574,18 +574,18 @@ export async function PATCH(
         }
       }
 
-      if (iqproConfig && ctx.membership.iqproSubscriptionId) {
-        await cancelIQProSubscription(iqproConfig, ctx.membership.iqproSubscriptionId);
+      if (iqproConfig && ctx.membership.providerSubscriptionId) {
+        await cancelIQProSubscription(iqproConfig, ctx.membership.providerSubscriptionId);
       }
-      if (iqproConfig && ctx.membership.iqproHoldFeeSubscriptionId) {
-        await cancelIQProSubscription(iqproConfig, ctx.membership.iqproHoldFeeSubscriptionId);
+      if (iqproConfig && ctx.membership.providerHoldFeeSubscriptionId) {
+        await cancelIQProSubscription(iqproConfig, ctx.membership.providerHoldFeeSubscriptionId);
       }
 
       await db.update(memberMembership)
         .set({
           status: 'cancelled',
           endDate: now,
-          iqproHoldFeeSubscriptionId: null,
+          providerHoldFeeSubscriptionId: null,
           updatedAt: now,
         })
         .where(eq(memberMembership.id, body.memberMembershipId));
@@ -653,15 +653,15 @@ export async function PATCH(
       if (
         iqproConfig
         && feeAmount > 0
-        && ctx.member.iqproCustomerId
-        && ctx.membership.iqproSubscriptionId
+        && ctx.member.providerCustomerId
+        && ctx.membership.providerSubscriptionId
         && feeFrequency
       ) {
         if (feeFrequency === 'one-time') {
           const result = await chargeOneTimeFee({
             config: iqproConfig,
-            iqproSubscriptionId: ctx.membership.iqproSubscriptionId,
-            iqproCustomerId: ctx.member.iqproCustomerId,
+            providerSubscriptionId: ctx.membership.providerSubscriptionId,
+            providerCustomerId: ctx.member.providerCustomerId,
             orgId,
             memberId,
             memberMembershipId: body.memberMembershipId,
@@ -724,14 +724,14 @@ export async function PATCH(
         }
       }
 
-      if (iqproConfig && ctx.membership.iqproSubscriptionId) {
-        await setSubscriptionAutoRenewal(iqproConfig, ctx.membership.iqproSubscriptionId, false);
+      if (iqproConfig && ctx.membership.providerSubscriptionId) {
+        await setSubscriptionAutoRenewal(iqproConfig, ctx.membership.providerSubscriptionId, false);
       }
 
       await db.update(memberMembership)
         .set({
           status: 'hold',
-          ...(holdFeeSubscriptionId ? { iqproHoldFeeSubscriptionId: holdFeeSubscriptionId } : {}),
+          ...(holdFeeSubscriptionId ? { providerHoldFeeSubscriptionId: holdFeeSubscriptionId } : {}),
           updatedAt: now,
         })
         .where(eq(memberMembership.id, body.memberMembershipId));
@@ -763,17 +763,17 @@ export async function PATCH(
     }
 
     // reactivate
-    if (iqproConfig && ctx.membership.iqproHoldFeeSubscriptionId) {
-      await cancelIQProSubscription(iqproConfig, ctx.membership.iqproHoldFeeSubscriptionId);
+    if (iqproConfig && ctx.membership.providerHoldFeeSubscriptionId) {
+      await cancelIQProSubscription(iqproConfig, ctx.membership.providerHoldFeeSubscriptionId);
     }
-    if (iqproConfig && ctx.membership.iqproSubscriptionId) {
-      await setSubscriptionAutoRenewal(iqproConfig, ctx.membership.iqproSubscriptionId, true);
+    if (iqproConfig && ctx.membership.providerSubscriptionId) {
+      await setSubscriptionAutoRenewal(iqproConfig, ctx.membership.providerSubscriptionId, true);
     }
 
     await db.update(memberMembership)
       .set({
         status: 'active',
-        iqproHoldFeeSubscriptionId: null,
+        providerHoldFeeSubscriptionId: null,
         updatedAt: now,
       })
       .where(eq(memberMembership.id, body.memberMembershipId));

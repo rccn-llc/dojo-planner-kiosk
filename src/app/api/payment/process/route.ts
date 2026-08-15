@@ -629,7 +629,7 @@ export async function POST(request: Request) {
         const rows = await db
           .select({ id: member.id, email: member.email, firstName: member.firstName, lastName: member.lastName })
           .from(member)
-          .where(eq(member.iqproCustomerId, vaulted.customerId))
+          .where(eq(member.providerCustomerId, vaulted.customerId))
           .limit(1);
         const m = rows[0];
         if (m) {
@@ -667,7 +667,7 @@ export async function POST(request: Request) {
         status: mapped === 'approved' ? 'paid' : 'declined',
         paymentMethod: effectiveMethod,
         description: body.description || 'Store purchase',
-        iqproTransactionId: txId || null,
+        providerTransactionId: txId || null,
         processedAt: mapped === 'approved' ? now : null,
         createdAt: now,
         updatedAt: now,
