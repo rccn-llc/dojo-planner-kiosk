@@ -84,9 +84,9 @@ function sanitizeForLog(value: unknown): string {
 
 // What the (side-effect-free) IQPro payment stage produces for the DB stage.
 interface PaymentResult {
-  iqproCustomerId: string;
+  providerCustomerId: string;
   paymentMethodId: string;
-  iqproSubscriptionId?: string;
+  providerSubscriptionId?: string;
   txId: string;
   achAccountType?: 'Checking' | 'Savings';
   fees: Awaited<ReturnType<typeof computeFeeBreakdown>>;
@@ -200,7 +200,7 @@ export async function POST(request: Request) {
             status: 'active',
             statusChangedAt: now,
             updatedAt: now,
-            ...(payment?.iqproCustomerId ? { iqproCustomerId: payment.iqproCustomerId } : {}),
+            ...(payment?.providerCustomerId ? { providerCustomerId: payment.providerCustomerId } : {}),
           })
           .where(and(eq(member.id, body.existingMemberId), eq(member.organizationId, orgId)));
       }
@@ -216,7 +216,7 @@ export async function POST(request: Request) {
           dateOfBirth: body.dateOfBirth ? new Date(`${body.dateOfBirth}T12:00:00`) : undefined,
           status: 'active',
           statusChangedAt: now,
-          ...(payment?.iqproCustomerId ? { iqproCustomerId: payment.iqproCustomerId } : {}),
+          ...(payment?.providerCustomerId ? { providerCustomerId: payment.providerCustomerId } : {}),
           createdAt: now,
           updatedAt: now,
         });
@@ -247,7 +247,7 @@ export async function POST(request: Request) {
         status: 'active',
         billingType: body.billingType,
         startDate: now,
-        ...(payment?.iqproSubscriptionId ? { iqproSubscriptionId: payment.iqproSubscriptionId } : {}),
+        ...(payment?.providerSubscriptionId ? { providerSubscriptionId: payment.providerSubscriptionId } : {}),
         createdAt: now,
         updatedAt: now,
       });
@@ -287,7 +287,7 @@ export async function POST(request: Request) {
         await tx.insert(paymentMethod).values({
           id: randomUUID(),
           memberId,
-          iqproPaymentMethodId: payment.paymentMethodId || null,
+          providerPaymentMethodId: payment.paymentMethodId || null,
           type: body.paymentMethod,
           firstSix: body.paymentMethod === 'card' ? (body.cardFirstSix ?? null) : null,
           last4: body.paymentMethod === 'card' ? (body.cardLastFour ?? null) : achLast4,
@@ -305,7 +305,7 @@ export async function POST(request: Request) {
           status: 'paid',
           paymentMethod: body.paymentMethod,
           description: `${plan.name} membership`,
-          iqproTransactionId: payment.txId,
+          providerTransactionId: payment.txId,
           processedAt: now,
           createdAt: now,
           updatedAt: now,
@@ -478,14 +478,14 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
   );
 
   const customerData = (customerRes.data ?? customerRes) as Record<string, unknown>;
-  const iqproCustomerId = customerData.customerId as string | undefined;
-  if (!iqproCustomerId) {
+  const providerCustomerId = customerData.customerId as string | undefined;
+  if (!providerCustomerId) {
     throw new Error('IQPro customer creation returned no customerId');
   }
 
   const customerDetail = await iqproGet<{ data?: Record<string, unknown> }>(
     config,
-    `/api/gateway/${gatewayId}/customer/${iqproCustomerId}`,
+    `/api/gateway/${gatewayId}/customer/${providerCustomerId}`,
   );
   const detailData = (customerDetail.data ?? customerDetail) as Record<string, unknown>;
   const addresses = (detailData.addresses ?? []) as Array<Record<string, unknown>>;
@@ -503,7 +503,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
     const maskedCard = `${body.cardFirstSix}******${body.cardLastFour}`;
     const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
       config,
-      `/api/gateway/${gatewayId}/customer/${iqproCustomerId}/payment`,
+      `/api/gateway/${gatewayId}/customer/${providerCustomerId}/payment`,
       {
         card: { token: body.cardToken, expirationDate: body.cardExpiry, maskedCard },
         isDefault: true,
@@ -522,7 +522,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
     achToken = tokenizeResult.achToken;
     const pmRes = await iqproPost<{ data?: Record<string, unknown> }>(
       config,
-      `/api/gateway/${gatewayId}/customer/${iqproCustomerId}/payment`,
+      `/api/gateway/${gatewayId}/customer/${providerCustomerId}/payment`,
       {
         ach: {
           token: tokenizeResult.achToken,
@@ -606,7 +606,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
     }
     return {
       customer: {
-        customerId: iqproCustomerId,
+        customerId: providerCustomerId,
         customerPaymentMethodId: paymentMethodId,
         ...(customerBillingAddressId && { customerBillingAddressId }),
       },
@@ -654,7 +654,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
     },
   ];
 
-  let iqproSubscriptionId: string | undefined;
+  let providerSubscriptionId: string | undefined;
   let txId: string | undefined;
 
   if (isRecurring) {
@@ -673,7 +673,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
       config,
       `/api/gateway/${gatewayId}/subscription`,
       {
-        customerId: iqproCustomerId,
+        customerId: providerCustomerId,
         subscriptionStatusId: 1,
         name: plan.name,
         prefix: 'MBR',
@@ -708,7 +708,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
       },
     );
     const subData = (subRes.data ?? subRes) as Record<string, unknown>;
-    iqproSubscriptionId = (subData.subscriptionId ?? subData.id ?? '') as string;
+    providerSubscriptionId = (subData.subscriptionId ?? subData.id ?? '') as string;
 
     // IQPro subscriptions don't auto-charge on creation — process initial Sale.
     if (amount > 0) {
@@ -730,7 +730,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
       assertTransactionApproved(initTxData);
     }
 
-    txId = txId ?? iqproSubscriptionId;
+    txId = txId ?? providerSubscriptionId;
   }
   else {
     const txRes = await iqproPost<{ data?: Record<string, unknown> }>(
@@ -752,9 +752,9 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
   }
 
   return {
-    iqproCustomerId,
+    providerCustomerId,
     paymentMethodId,
-    iqproSubscriptionId,
+    providerSubscriptionId,
     txId: txId ?? '',
     achAccountType,
     fees,

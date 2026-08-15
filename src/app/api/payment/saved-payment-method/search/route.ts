@@ -28,7 +28,7 @@ export interface SavedPaymentMethodSearchResponse {
  * IQPro's customer vault is shared across orgs and may be out of sync with
  * the local member table, so we trust the vault for "has a saved PM" and
  * the local DB for "belongs to this org". The join key is the member's
- * iqproCustomerId column, populated when the member's IQPro customer record
+ * providerCustomerId column, populated when the member's IQPro customer record
  * was created during signup.
  *
  * The chooser uses the LOCAL member's firstName + lastName (more
@@ -86,7 +86,7 @@ export async function GET(request: Request) {
     const db = getDatabase();
     const localMembers = await db
       .select({
-        iqproCustomerId: member.iqproCustomerId,
+        providerCustomerId: member.providerCustomerId,
         firstName: member.firstName,
         lastName: member.lastName,
       })
@@ -94,14 +94,14 @@ export async function GET(request: Request) {
       .where(
         and(
           eq(member.organizationId, orgId),
-          inArray(member.iqproCustomerId, customerIds),
+          inArray(member.providerCustomerId, customerIds),
         ),
       );
 
     const memberByCustomerId = new Map<string, { firstName: string; lastName: string }>();
     for (const m of localMembers) {
-      if (m.iqproCustomerId) {
-        memberByCustomerId.set(m.iqproCustomerId, {
+      if (m.providerCustomerId) {
+        memberByCustomerId.set(m.providerCustomerId, {
           firstName: m.firstName,
           lastName: m.lastName,
         });
