@@ -5,11 +5,50 @@ import { withRetry } from '@/lib/database';
 
 const organizationConfig = pgTable('organization', {
   id: text('id').primaryKey(),
-  iqproConfigClientId: text('iqpro_config_client_id'),
-  iqproConfigClientSecretEncrypted: text('iqpro_config_client_secret_enc'),
-  iqproConfigGatewayId: text('iqpro_config_gateway_id'),
+  // dojo-planner B3 replaced the three iqpro_config_* columns with ONE
+  // AES-256-GCM blob holding `{ provider, credentials }`. Same encryption key
+  // (IQPRO_CONFIG_ENCRYPTION_KEY) and same scheme, so nothing else changes
+  // here. See dojo-planner's PaymentProviderConfigService.
+  paymentProvider: text('payment_provider'),
+  paymentProviderConfigEncrypted: text('payment_provider_config_enc'),
   locationTaxRate: real('location_tax_rate'),
 });
+
+/**
+ * Shape of the decrypted blob. Kept deliberately lenient about providers the
+ * kiosk cannot yet transact on: an org switched to Square resolves to a null
+ * config here, which the payment routes already treat as "not configured"
+ * rather than charging through the wrong merchant. Square support in the
+ * kiosk is phase B5k.
+ */
+interface StoredProviderConfig {
+  provider: string;
+  credentials: Record<string, string>;
+}
+
+/**
+ * Decrypt + parse the credential blob. Fails closed on BOTH a bad decrypt and
+ * a malformed payload — either means we cannot trust what merchant we would be
+ * charging, so falling back to env credentials would be worse than erroring.
+ */
+function readConfigBlob(enc: string | null | undefined): StoredProviderConfig | null {
+  const json = decryptRequired(enc);
+  if (!json) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  }
+  catch {
+    throw new Error('Stored payment provider credentials are malformed');
+  }
+  const blob = parsed as StoredProviderConfig;
+  if (!blob || typeof blob.provider !== 'string' || typeof blob.credentials !== 'object' || blob.credentials === null) {
+    throw new Error('Stored payment provider credentials are malformed');
+  }
+  return blob;
+}
 
 // The service fee is a fixed platform rate — dojo-planner hard-codes it and does
 // NOT store it per-org (there is no organization.service_fee_rate column). Keep
@@ -115,9 +154,8 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const rows = await withRetry(db =>
     db
       .select({
-        clientId: organizationConfig.iqproConfigClientId,
-        clientSecretEnc: organizationConfig.iqproConfigClientSecretEncrypted,
-        gatewayId: organizationConfig.iqproConfigGatewayId,
+        paymentProvider: organizationConfig.paymentProvider,
+        configEnc: organizationConfig.paymentProviderConfigEncrypted,
         locationTaxRate: organizationConfig.locationTaxRate,
       })
       .from(organizationConfig)
@@ -125,12 +163,23 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
       .limit(1),
   );
   const row = rows[0];
-
-  const dbClientId = row?.clientId ?? null;
-  const dbSecret = decryptRequired(row?.clientSecretEnc);
-  const dbGatewayId = row?.gatewayId ?? null;
-  const dbHasAnyField = Boolean(dbClientId || dbSecret || dbGatewayId);
   const taxRate = row?.locationTaxRate ?? 0;
+
+  // An org on a non-IQPro provider gets a null config: the kiosk has no Square
+  // implementation yet (B5k), and silently using IQPro credentials would send
+  // the money to the wrong merchant account.
+  if (row?.paymentProvider && row.paymentProvider !== 'iqpro') {
+    console.warn(`[iqproConfig] org ${orgId} uses payment provider "${row.paymentProvider}", which the kiosk cannot process yet.`);
+    return { config: null, taxRate };
+  }
+
+  const blob = readConfigBlob(row?.configEnc);
+  const stored = blob?.provider === 'iqpro' ? blob.credentials : null;
+
+  const dbClientId = stored?.clientId ?? null;
+  const dbSecret = stored?.clientSecret ?? null;
+  const dbGatewayId = stored?.gatewayId ?? null;
+  const dbHasAnyField = Boolean(stored);
 
   const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 

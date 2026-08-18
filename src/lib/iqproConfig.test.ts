@@ -5,10 +5,14 @@ import { encryptSecret } from './crypto';
 const TEST_KEY_HEX = randomBytes(32).toString('hex');
 
 interface Row {
-  clientId: string | null;
-  clientSecretEnc: string | null;
-  gatewayId: string | null;
+  paymentProvider: string | null;
+  configEnc: string | null;
   locationTaxRate: number | null;
+}
+
+/** Build the encrypted credential blob dojo-planner writes (B3). */
+function blob(credentials: Record<string, string>, provider = 'iqpro') {
+  return encryptSecret(JSON.stringify({ provider, credentials }));
 }
 
 let nextRow: Row | null = null;
@@ -100,9 +104,8 @@ describe('resolveIQProConfig', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: 'db-client',
-      clientSecretEnc: encryptSecret('db-secret'),
-      gatewayId: 'db-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'db-client', clientSecret: 'db-secret', gatewayId: 'db-gw' }),
       locationTaxRate: 8.5,
     };
     const mod = await importFresh();
@@ -114,27 +117,44 @@ describe('resolveIQProConfig', () => {
     expect(cfg!.source).toBe('org');
   });
 
-  it('returns mixed source when only some DB fields are populated', async () => {
+  it('returns null for an org on a provider the kiosk cannot process', async () => {
+    // A Square org must NOT fall back to IQPro credentials — that would send
+    // the money to the wrong merchant account. Kiosk Square support is B5k.
     setEnv({
       IQPRO_CLIENT_ID: 'env-client',
       IQPRO_CLIENT_SECRET: 'env-secret',
+      IQPRO_GATEWAY_ID: 'env-gw',
       IQPRO_SCOPE: 'env-scope',
       IQPRO_OAUTH_URL: 'https://oauth',
       IQPRO_BASE_URL: 'https://base',
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: null,
-      clientSecretEnc: null,
-      gatewayId: 'db-gw',
+      paymentProvider: 'square',
+      configEnc: blob({ accessToken: 'sq', locationId: 'loc', applicationId: 'app', environment: 'sandbox', webhookSignatureKey: 'sig' }, 'square'),
       locationTaxRate: 0,
     };
+    const mod = await importFresh();
+
+    await expect(mod.resolveIQProConfig('org_sq')).resolves.toBeNull();
+  });
+
+  it('falls back to env when the org has no stored blob', async () => {
+    setEnv({
+      IQPRO_CLIENT_ID: 'env-client',
+      IQPRO_CLIENT_SECRET: 'env-secret',
+      IQPRO_GATEWAY_ID: 'env-gw',
+      IQPRO_SCOPE: 'env-scope',
+      IQPRO_OAUTH_URL: 'https://oauth',
+      IQPRO_BASE_URL: 'https://base',
+      IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
+    });
+    nextRow = { paymentProvider: 'iqpro', configEnc: null, locationTaxRate: 0 };
     const mod = await importFresh();
     const cfg = await mod.resolveIQProConfig('org_c');
     expect(cfg).not.toBeNull();
     expect(cfg!.clientId).toBe('env-client');
-    expect(cfg!.gatewayId).toBe('db-gw');
-    expect(cfg!.source).toBe('mixed');
+    expect(cfg!.source).toBe('env');
   });
 
   it('returns null when a required field is missing in both DB and env', async () => {
@@ -156,9 +176,8 @@ describe('resolveIQProConfig', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: 'db-client',
-      clientSecretEnc: encryptSecret('db-secret'),
-      gatewayId: 'db-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'db-client', clientSecret: 'db-secret', gatewayId: 'db-gw' }),
       locationTaxRate: 3,
     };
     const mod = await importFresh();
@@ -176,9 +195,8 @@ describe('resolveIQProConfig', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: 'db-client',
-      clientSecretEnc: encryptSecret('db-secret'),
-      gatewayId: 'db-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'db-client', clientSecret: 'db-secret', gatewayId: 'db-gw' }),
       locationTaxRate: 0,
     };
     const mod = await importFresh();
@@ -197,16 +215,14 @@ describe('resolveIQProConfig', () => {
     });
     const mod = await importFresh();
     nextRow = {
-      clientId: 'orgA-client',
-      clientSecretEnc: encryptSecret('orgA-secret'),
-      gatewayId: 'orgA-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'orgA-client', clientSecret: 'orgA-secret', gatewayId: 'orgA-gw' }),
       locationTaxRate: 5,
     };
     const a = await mod.resolveIQProConfig('orgA');
     nextRow = {
-      clientId: 'orgB-client',
-      clientSecretEnc: encryptSecret('orgB-secret'),
-      gatewayId: 'orgB-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'orgB-client', clientSecret: 'orgB-secret', gatewayId: 'orgB-gw' }),
       locationTaxRate: 0,
     };
     const b = await mod.resolveIQProConfig('orgB');
@@ -227,9 +243,8 @@ describe('getOrganizationTaxRate', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: null,
-      clientSecretEnc: null,
-      gatewayId: null,
+      paymentProvider: 'iqpro',
+      configEnc: null,
       locationTaxRate: 8.5,
     };
     const mod = await importFresh();
@@ -247,9 +262,8 @@ describe('getOrganizationTaxRate', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: null,
-      clientSecretEnc: null,
-      gatewayId: null,
+      paymentProvider: 'iqpro',
+      configEnc: null,
       locationTaxRate: null,
     };
     const mod = await importFresh();
@@ -264,9 +278,8 @@ describe('getOrganizationTaxRate', () => {
       IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX,
     });
     nextRow = {
-      clientId: 'db-client',
-      clientSecretEnc: encryptSecret('db-secret'),
-      gatewayId: 'db-gw',
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'db-client', clientSecret: 'db-secret', gatewayId: 'db-gw' }),
       locationTaxRate: 4.25,
     };
     const mod = await importFresh();
