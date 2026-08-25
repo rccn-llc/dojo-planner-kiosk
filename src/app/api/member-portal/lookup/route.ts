@@ -1,9 +1,9 @@
 import { and, eq, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { member } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 // Unauthenticated public route — throttle by IP to blunt phone-number
 // enumeration (30 lookups / 10 min per IP).
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ found: false, error: 'Organization not found' });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const phoneWithCountry = `+1${rawPhone}`;
     const phoneFormatted = rawPhone.length === 10
       ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`

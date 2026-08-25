@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { familyMember, member } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidEmail } from '@/lib/utils';
 
 interface CreateFamilyBody {
@@ -49,7 +49,7 @@ export async function POST(
       }
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
     const now = new Date();
 
     // Verify the current member exists

@@ -1,9 +1,9 @@
 import { and, eq, ilike, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { member, memberMembership } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(request: Request) {
   try {
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ found: false, members: [] });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const pattern = `%${name}%`;
 
     const members = await db

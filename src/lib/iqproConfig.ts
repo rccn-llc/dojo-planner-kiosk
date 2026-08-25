@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { pgTable, real, text } from 'drizzle-orm/pg-core';
 import { decryptSecret } from '@/lib/crypto';
-import { withRetry } from '@/lib/database';
+import { withOrgRetry } from '@/lib/database';
 
 const organizationConfig = pgTable('organization', {
   id: text('id').primaryKey(),
@@ -151,7 +151,7 @@ function buildConfig(
 }
 
 async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number }> {
-  const rows = await withRetry(db =>
+  const rows = await withOrgRetry(orgId, db =>
     db
       .select({
         paymentProvider: organizationConfig.paymentProvider,
@@ -160,8 +160,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
       })
       .from(organizationConfig)
       .where(eq(organizationConfig.id, orgId))
-      .limit(1),
-  );
+      .limit(1));
   const row = rows[0];
   const taxRate = row?.locationTaxRate ?? 0;
 

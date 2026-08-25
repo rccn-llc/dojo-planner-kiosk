@@ -1,9 +1,9 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { address, familyMember, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(request: Request) {
   try {
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ found: false, members: [] });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // Search all common phone storage formats
     const phoneWithCountry = `+1${rawPhone}`;

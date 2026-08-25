@@ -1,8 +1,8 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { familyMember, member } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(
   request: Request,
@@ -26,7 +26,7 @@ export async function POST(
       return NextResponse.json({ error: 'Cannot link a member to themselves' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
 
     // Both members must exist and belong to the resolved org before we link
     // them — otherwise any caller who knows two member ids could create

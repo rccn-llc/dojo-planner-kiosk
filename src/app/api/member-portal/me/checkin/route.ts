@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import {
   attendance,
   classScheduleInstance,
@@ -10,6 +9,7 @@ import {
   memberMembership,
 } from '@/lib/memberSchema';
 import { getSessionFromCookie } from '@/lib/memberSession';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(request: Request) {
   try {
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'classScheduleInstanceId is required' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
     const now = new Date();
 
     // Verify active membership
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
     const today = new Date();
     const dayOfWeek = today.getDay();
 

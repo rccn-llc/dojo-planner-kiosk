@@ -1,11 +1,11 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { searchCustomersByPhone, signMatchToken } from '@/lib/iqpro';
 import { resolveIQProConfig } from '@/lib/iqproConfig';
 import { member } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidPhoneNumber, sanitizePhoneInput } from '@/lib/utils';
 
 export interface SavedPaymentMethodMatch {
@@ -83,7 +83,7 @@ export async function GET(request: Request) {
 
     const customerIds = vaultMatches.map(m => m.customerId);
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const localMembers = await db
       .select({
         providerCustomerId: member.providerCustomerId,

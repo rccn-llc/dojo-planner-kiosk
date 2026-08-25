@@ -4,8 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { sendTrialConfirmation } from '@/lib/email';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import {
   addressTrialSchema,
   familyMemberTrialSchema,
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // Fetch membership plan for snapshot data
     const plans = await db

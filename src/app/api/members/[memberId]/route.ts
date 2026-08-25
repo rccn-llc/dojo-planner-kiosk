@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import {
   address,
   attendance,
@@ -15,6 +14,7 @@ import {
   transaction,
 } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidEmail } from '@/lib/utils';
 
 export async function GET(
@@ -29,7 +29,7 @@ export async function GET(
     }
     const { orgId } = auth;
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
 
     // Fetch member
     const members = await db
@@ -255,7 +255,7 @@ export async function PATCH(
       };
     };
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
 
     // Update member fields — validate each before accepting it so a client
     // can't write an empty name, a malformed email, a partial phone, a

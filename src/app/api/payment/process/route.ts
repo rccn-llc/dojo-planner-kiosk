@@ -4,13 +4,13 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import { member, transaction } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -208,7 +208,7 @@ export async function POST(request: Request) {
   let authoritativeSubtotal: number;
   let authoritativeBase: number;
   {
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const productIds = body.items.map(it => it.productId).filter((id): id is string => !!id);
     if (productIds.length !== body.items.length) {
       return NextResponse.json<ProcessStoreOrderResult>(
@@ -625,7 +625,7 @@ export async function POST(request: Request) {
     let resolvedMemberId: string | null = null;
     if (vaulted) {
       try {
-        const db = getDatabase();
+        const db = await getDatabaseForOrg(orgId);
         const rows = await db
           .select({ id: member.id, email: member.email, firstName: member.firstName, lastName: member.lastName })
           .from(member)
@@ -656,7 +656,7 @@ export async function POST(request: Request) {
     // store orders. Best-effort: a DB failure here must not change the payment
     // outcome the buyer sees, so it's logged and swallowed.
     try {
-      const db = getDatabase();
+      const db = await getDatabaseForOrg(orgId);
       const now = new Date();
       await db.insert(transaction).values({
         id: randomUUID(),

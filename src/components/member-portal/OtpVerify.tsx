@@ -42,7 +42,7 @@ export function OtpVerify() {
       const res = await fetch('/api/member-portal/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId, code: fullCode, orgId }),
+        body: JSON.stringify({ memberId, code: fullCode, orgId, orgSlug: org?.orgSlug }),
       });
       const data = await res.json();
 
@@ -72,7 +72,7 @@ export function OtpVerify() {
       const res = await fetch('/api/member-portal/staff-verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId, staffClerkUserId: selectedStaffId, code: fullCode }),
+        body: JSON.stringify({ memberId, staffClerkUserId: selectedStaffId, code: fullCode, orgSlug: org?.orgSlug }),
       });
       const data = await res.json();
 

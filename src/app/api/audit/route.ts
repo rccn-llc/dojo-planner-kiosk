@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { auditEvent } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 // Audit events originate in client-side XState machines on the public kiosk, so
 // every field is untrusted. We persist only a small allowlist of operational
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
       safeMetadata.sessionId = body.sessionId.slice(0, 128);
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     await db.insert(auditEvent).values({
       id: randomUUID(),
       organizationId: orgId,

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, gte, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { withRetry } from '@/lib/database';
+import { withOrgRetry } from '@/lib/database';
 import { attendance, classScheduleInstance, dojoClass, member } from '@/lib/memberSchema';
 
 export async function POST(request: Request) {
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     const tomorrowStart = new Date(todayStart);
     tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
-    const result = await withRetry(async (db) => {
+    const result = await withOrgRetry(orgId, async (db) => {
       // The member must belong to this org — otherwise a caller could log
       // attendance for an arbitrary member id under any org.
       const [memberRow] = await db

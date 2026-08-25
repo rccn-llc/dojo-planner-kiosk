@@ -19,7 +19,8 @@ let nextRow: Row | null = null;
 const withRetryCalls: number[] = [];
 
 vi.mock('@/lib/database', () => ({
-  withRetry: vi.fn(async (fn: (db: unknown) => Promise<unknown>) => {
+  // Now org-aware: the first argument is the orgId whose database to open.
+  withOrgRetry: vi.fn(async (_orgId: string, fn: (db: unknown) => Promise<unknown>) => {
     withRetryCalls.push(Date.now());
     const fakeDb = {
       select: () => fakeDb,

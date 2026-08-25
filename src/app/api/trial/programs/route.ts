@@ -1,7 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { membershipPlanTrialSchema, programTrialSchema } from '@/lib/trialSchema';
 
 export async function GET(request: Request) {
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // Fetch active programs for this org ordered by sortOrder
     const programs = await db
