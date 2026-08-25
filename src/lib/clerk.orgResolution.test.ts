@@ -72,4 +72,26 @@ describe('resolveOrgIdFromRequestOrBody', () => {
       {},
     )).resolves.toBeNull();
   });
+
+  it('cannot be used to widen access: the value only narrows a lookup', async () => {
+    // Static analysis flags the OTP routes' `if (!orgId)` as a user-controlled
+    // security guard. It IS user-controlled, but the value reaches the database
+    // only as an extra AND-predicate (`WHERE id = ? AND organization_id = ?`).
+    // Naming another organization therefore matches nothing rather than
+    // granting anything, and every downstream decision — the session's org, the
+    // staff-eligibility check — reads the DB row, not this value.
+    //
+    // What this test pins is the one way it could widen: accepting a raw org id
+    // in production, which would let a caller name any organization without
+    // knowing its slug.
+    vi.stubEnv('NODE_ENV', 'production');
+    const { resolveOrgIdFromRequestOrBody } = await load();
+
+    const attempts = [
+      await resolveOrgIdFromRequestOrBody(new Request('http://x/api?org=org_victim', { method: 'POST' }), null),
+      await resolveOrgIdFromRequestOrBody(new Request('http://x/api', { method: 'POST' }), { orgSlug: 'org_victim' }),
+    ];
+
+    expect(attempts).toEqual([null, null]);
+  });
 });

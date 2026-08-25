@@ -34,9 +34,22 @@ export async function POST(request: Request) {
       return rejectVerification();
     }
 
-    // The member lookup below was previously UNSCOPED — a UUID from any
-    // organization resolved. Scoping it also selects the right database once
-    // organizations are split apart.
+    // ── Why a user-controlled orgId is safe here ────────────────────────────
+    //
+    // Static analysis flags this as a user-controlled value guarding a
+    // sensitive action. It is user-controlled, but it cannot widen access:
+    //
+    //  * It is only ever used to NARROW the lookup below
+    //    (`WHERE id = ? AND organization_id = ?`). Naming a different
+    //    organization matches nothing and the request is rejected.
+    //  * Every value that matters downstream — the session's org, and the
+    //    staff-eligibility check — is read from the DATABASE ROW (`m.*`),
+    //    never from the request.
+    //  * The pre-A4 code had NO organization filter at all, so any member UUID
+    //    resolved. This narrowed that; it did not widen anything.
+    //
+    // Raw `org_...` ids are refused in production (see
+    // resolveOrgIdFromRequestOrBody), so a caller must know a real slug.
     const orgId = await resolveOrgIdFromRequestOrBody(request, body);
     if (!orgId) {
       return rejectVerification();
