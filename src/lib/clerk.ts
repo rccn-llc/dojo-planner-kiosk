@@ -75,3 +75,34 @@ export async function resolveOrgIdFromRequest(request: NextRequest | Request): P
   const org = await resolveOrgBySlug(value);
   return org?.orgId ?? null;
 }
+
+/**
+ * Resolve an organization from the query string, falling back to an `orgSlug`
+ * carried in an already-parsed request body.
+ *
+ * The member-portal OTP endpoints are POSTs whose callers send the slug in the
+ * BODY (`PhoneEntry`, `OtpVerify`) while the kiosk flow sends it in the QUERY
+ * (`MemberAreaFlow` via `withOrgQuery`). Supporting both is what lets those
+ * routes become org-scoped without breaking either caller.
+ */
+export async function resolveOrgIdFromRequestOrBody(
+  request: NextRequest | Request,
+  body: { orgSlug?: string } | null,
+): Promise<string | null> {
+  const fromQuery = await resolveOrgIdFromRequest(request);
+  if (fromQuery) {
+    return fromQuery;
+  }
+  const slug = body?.orgSlug?.trim();
+  if (!slug) {
+    return null;
+  }
+  // Mirror the query path exactly, including its dev-only raw-id escape: a
+  // caller may pass an `org_...` id rather than a slug, and the two resolvers
+  // diverging would mean a request works via ?org= but not via the body.
+  if (slug.startsWith('org_')) {
+    return process.env.NODE_ENV === 'production' ? null : slug;
+  }
+  const org = await resolveOrgBySlug(slug);
+  return org?.orgId ?? null;
+}

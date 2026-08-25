@@ -54,7 +54,9 @@ export function PhoneEntry() {
       const otpRes = await fetch('/api/member-portal/send-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId }),
+        // orgSlug scopes the member lookup to this organization and selects
+        // its database once organizations are split apart.
+        body: JSON.stringify({ memberId, orgSlug: org.orgSlug }),
       });
       const otpData = await otpRes.json();
 

@@ -1,8 +1,8 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { transaction } from '@/lib/memberSchema';
 import { getSessionFromCookie } from '@/lib/memberSession';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function GET(request: Request) {
   try {
@@ -11,7 +11,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
 
     const transactions = await db
       .select()

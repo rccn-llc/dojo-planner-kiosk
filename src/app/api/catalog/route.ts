@@ -2,7 +2,7 @@ import { and, asc, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemImage, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export interface StoreProductVariant {
   id: string;
@@ -22,14 +22,15 @@ export interface StoreProductResponse {
 
 export async function GET(request: Request) {
   try {
-    const db = getDatabase();
-
-    // Resolve org from URL slug first, then the single-org env var.
+    // Resolve org from URL slug first, then the single-org env var. This must
+    // precede the connection: which database to open now depends on it.
     let orgId = await resolveOrgIdFromRequest(request);
     orgId ??= process.env.ORGANIZATION_ID ?? null;
     if (!orgId) {
       return NextResponse.json({ error: 'Organization not found' }, { status: 400 });
     }
+
+    const db = await getDatabaseForOrg(orgId);
 
     // Fetch kiosk-visible active items for this org, ordered by sortOrder
     const items = await db

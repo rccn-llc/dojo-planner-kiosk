@@ -1,8 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { coupon } from '@/lib/memberSchema';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ valid: false, error: 'Code is required' });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     const coupons = await db
       .select()

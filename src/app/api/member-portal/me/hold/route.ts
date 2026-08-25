@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { and, count, eq, gte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { auditEvent, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
 import { getSessionFromCookie } from '@/lib/memberSession';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
-type DB = ReturnType<typeof getDatabase>;
+type DB = Awaited<ReturnType<typeof getDatabaseForOrg>>;
 
 // Count successful holds for a membership in the trailing 12 months. Reads the
 // SAME audit action the staff lifecycle route writes, so the per-year limit is
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
     const now = new Date();
     const fromStatus = action === 'hold' ? 'active' : 'hold';
     const toStatus = action === 'hold' ? 'hold' : 'active';

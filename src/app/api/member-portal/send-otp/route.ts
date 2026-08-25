@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
+import { resolveOrgIdFromRequestOrBody } from '@/lib/clerk';
 import { member } from '@/lib/memberSchema';
 import { generateOTP, storeOTP } from '@/lib/otp';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { escapeHtml, maskEmail } from '@/lib/utils';
 import { isValidUUID } from '@/lib/validation';
 
@@ -16,10 +17,18 @@ function fakeSent() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { memberId?: string };
+    const body = await request.json() as { memberId?: string; orgSlug?: string };
     const memberId = body.memberId?.trim() ?? '';
 
     if (!isValidUUID(memberId)) {
+      return fakeSent();
+    }
+
+    // The member lookup below was previously UNSCOPED — a member UUID from any
+    // organization resolved and got an OTP emailed. Scoping it also picks the
+    // right database once organizations are split apart.
+    const orgId = await resolveOrgIdFromRequestOrBody(request, body);
+    if (!orgId) {
       return fakeSent();
     }
 
@@ -30,13 +39,13 @@ export async function POST(request: Request) {
       return fakeSent();
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // Fetch member email
     const members = await db
       .select({ email: member.email, firstName: member.firstName })
       .from(member)
-      .where(eq(member.id, memberId))
+      .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)))
       .limit(1);
 
     const m = members[0];

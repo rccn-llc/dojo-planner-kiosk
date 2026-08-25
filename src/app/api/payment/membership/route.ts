@@ -4,7 +4,6 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
@@ -21,6 +20,7 @@ import {
   waiverTemplate,
 } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { generatePdfFilename, generateWaiverPdfBuffer } from '@/lib/waiverPdf';
 
 interface MembershipPaymentBody {
@@ -119,7 +119,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Your session has expired. Please refresh and try again.' }, { status: 403 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const gatewayId = iqproConfig?.gatewayId;
     const now = new Date();
 
@@ -391,7 +391,7 @@ export async function POST(request: Request) {
   }
 }
 
-type DB = ReturnType<typeof getDatabase>;
+type DB = Awaited<ReturnType<typeof getDatabaseForOrg>>;
 
 /** Resolve the plan-linked waiver template, else the org's default active one. */
 async function resolveWaiverTemplate(

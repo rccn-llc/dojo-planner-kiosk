@@ -1,8 +1,8 @@
 import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { address, member } from '@/lib/memberSchema';
 import { getSessionFromCookie } from '@/lib/memberSession';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidEmail } from '@/lib/utils';
 
 export async function GET(request: Request) {
@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
 
     const members = await db
       .select()
@@ -77,7 +77,7 @@ export async function PATCH(request: Request) {
     };
 
     // Server-side validation — client checks are UX only, never a control.
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(session.orgId);
     const updates: Record<string, unknown> = {};
 
     if (body.firstName !== undefined) {

@@ -2,14 +2,14 @@ import type { IQProConfig } from '@/lib/iqproConfig';
 import { randomUUID } from 'node:crypto';
 import { and, count, eq, gte } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
 import { auditEvent, member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
-type DB = ReturnType<typeof getDatabase>;
+type DB = Awaited<ReturnType<typeof getDatabaseForOrg>>;
 
 interface LifecycleContext {
   member: {
@@ -517,7 +517,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'memberMembershipId and action are required' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
     const ctx = await getLifecycleContext(db, memberId, body.memberMembershipId, orgId);
     if (!ctx) {
       return NextResponse.json({ error: 'Membership not found' }, { status: 404 });

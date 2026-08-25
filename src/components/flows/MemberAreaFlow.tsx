@@ -329,7 +329,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
       await fetch(withOrgQuery('/api/member-portal/send-otp', orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId: m.memberId, orgSlug: '_kiosk' }),
+        body: JSON.stringify({ memberId: m.memberId }),
       });
 
       setOtpMember({ memberId: m.memberId, firstName: m.firstName, emailHint });
@@ -354,8 +354,11 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
         : '/api/member-portal/verify-otp';
       const payload = staffMode === 'code'
         ? { memberId: otpMember.memberId, staffClerkUserId: selectedStaffId, code }
-        : { memberId: otpMember.memberId, code, orgSlug: '_kiosk', isKiosk: true };
-      const res = await fetch(endpoint, {
+        : { memberId: otpMember.memberId, code, isKiosk: true };
+      // The org rides in the query string here, as it does for send-otp above:
+      // these routes scope the member lookup to one organization, and resolve
+      // its database once organizations are split apart.
+      const res = await fetch(withOrgQuery(endpoint, orgSlug), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

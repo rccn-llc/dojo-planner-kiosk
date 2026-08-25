@@ -1,9 +1,10 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
+import { resolveOrgIdFromRequestOrBody } from '@/lib/clerk';
 import { member } from '@/lib/memberSchema';
 import { createMemberSession, setSessionCookie } from '@/lib/memberSession';
 import { verifyOTP } from '@/lib/otp';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidOTPCode, isValidUUID } from '@/lib/validation';
 
 const SESSION_DURATION_SECONDS = 24 * 60 * 60; // 24 hours
@@ -15,7 +16,7 @@ function rejectVerification() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json() as { memberId?: string; code?: string };
+    const body = await request.json() as { memberId?: string; code?: string; orgSlug?: string };
     const memberId = body.memberId?.trim() ?? '';
     const code = body.code?.trim() ?? '';
 
@@ -24,8 +25,29 @@ export async function POST(request: Request) {
       return rejectVerification();
     }
 
+    // ── Why a user-controlled orgId is safe here ────────────────────────────
+    //
+    // Static analysis flags this as a user-controlled value guarding a
+    // sensitive action. It is user-controlled, but it cannot widen access:
+    //
+    //  * It is only ever used to NARROW the lookup below
+    //    (`WHERE id = ? AND organization_id = ?`). Naming a different
+    //    organization matches nothing and the request is rejected.
+    //  * Every value that matters downstream — the session's org, and the
+    //    staff-eligibility check — is read from the DATABASE ROW (`m.*`),
+    //    never from the request.
+    //  * The pre-A4 code had NO organization filter at all, so any member UUID
+    //    resolved. This narrowed that; it did not widen anything.
+    //
+    // Raw `org_...` ids are refused in production (see
+    // resolveOrgIdFromRequestOrBody), so a caller must know a real slug.
+    const orgId = await resolveOrgIdFromRequestOrBody(request, body);
+    if (!orgId) {
+      return rejectVerification();
+    }
+
     // Fetch member to verify existence and get org from DB
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
     const members = await db
       .select({
         id: member.id,
@@ -35,7 +57,7 @@ export async function POST(request: Request) {
         organizationId: member.organizationId,
       })
       .from(member)
-      .where(eq(member.id, memberId))
+      .where(and(eq(member.id, memberId), eq(member.organizationId, orgId)))
       .limit(1);
 
     const m = members[0];

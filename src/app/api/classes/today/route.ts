@@ -2,7 +2,6 @@ import type { NextRequest } from 'next/server';
 import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import {
   attendance,
   classScheduleInstance,
@@ -13,6 +12,7 @@ import {
   membershipPlan,
   program,
 } from '@/lib/memberSchema';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function GET(request: NextRequest) {
   try {
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'memberId is required' }, { status: 400 });
     }
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // Check if member has an active membership
     const activeMemberships = await db

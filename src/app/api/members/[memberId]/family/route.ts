@@ -1,8 +1,8 @@
 import { and, eq, inArray, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
-import { getDatabase } from '@/lib/database';
 import { familyMember, member, memberMembership } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 // Maps a relationship to its inverse.
 // The link stores: relatedMemberId is <relationship> of memberId.
@@ -34,7 +34,7 @@ export async function GET(
     }
     const { orgId } = auth;
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(auth.orgId);
 
     // The anchor member must belong to the resolved org before we expose any
     // of their household — otherwise the org gate is decorative.

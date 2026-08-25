@@ -1,12 +1,12 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { getDatabase } from '@/lib/database';
 import {
   membershipWaiver,
   waiverMergeField,
   waiverTemplate,
 } from '@/lib/memberSchema';
+import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export async function POST(request: Request) {
   try {
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
 
     const body = await request.json() as { planId?: string };
 
-    const db = getDatabase();
+    const db = await getDatabaseForOrg(orgId);
 
     // If a planId is provided, look up the waiver template linked to that plan
     let template: typeof waiverTemplate.$inferSelect | undefined;
