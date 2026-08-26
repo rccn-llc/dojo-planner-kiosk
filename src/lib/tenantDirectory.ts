@@ -38,6 +38,12 @@ const TENANT_STATUS_ACTIVE = 'active';
 
 /** `region` marking a row that points at the shared database, not its own. */
 const SHARED_REGION = 'shared';
+/**
+ * Written by the planner's auto-registration (and by `rollbackTenant`) for an
+ * org that is not cut over. Must match the planner's constant exactly — the
+ * two apps read the same rows.
+ */
+const SHARED_DATABASE_SENTINEL = '__shared_database__';
 
 const CACHE_TTL_MS = 60_000;
 const CACHE_MAX = 200;
@@ -60,8 +66,71 @@ export class TenantUnavailableError extends Error {
   }
 }
 
-function sharedMode(): boolean {
-  return (process.env.TENANCY_MODE ?? 'shared') === 'shared';
+/**
+ * True when there is no separate control plane to consult.
+ *
+ * NOT a routing policy — a deployment fact. Locally the control pool would be
+ * a SECOND socket against pglite-server, which accepts exactly one, so the
+ * directory must be short-circuited before it is opened.
+ */
+function noControlPlane(): boolean {
+  const control = process.env.CONTROL_DATABASE_URL;
+  return !control || control === process.env.DATABASE_URL;
+}
+
+/**
+ * Is this row's database the shared one?
+ *
+ * ⚠️ The predicate is the DECRYPTED CONNECTION STRING, never the region label.
+ * `registerTenants` writes `region: 'aws-us-east-1'`, which is not in
+ * SHARED_REGION — so a region check passes rows that point straight at the
+ * shared database. That was a real cross-tenant leak; the label is a cheap
+ * secondary filter and can never be the primary one.
+ */
+function pointsAtSharedDatabase(connectionString: string, region: string): boolean {
+  if (
+    connectionString === process.env.DATABASE_URL
+    || connectionString === process.env.CONTROL_DATABASE_URL
+  ) {
+    return true;
+  }
+  return region === SHARED_REGION;
+}
+
+/**
+ * The database that should serve this org.
+ *
+ * A row still naming the shared database is simply NOT CUT OVER YET, so it is
+ * served from there rather than refused. Refusing is what forced an
+ * all-or-nothing flip: with a global mode flag, moving one org 409'd every
+ * other org. Orgs move one at a time, and this predicate — the same one the
+ * planner uses — is how both apps agree without a coordinated env change.
+ */
+function resolveConnectionString(orgId: string, stored: string, region: string): string {
+  const shared = process.env.DATABASE_URL;
+
+  if (stored === SHARED_DATABASE_SENTINEL) {
+    if (!shared) {
+      throw new TenantUnavailableError(orgId, 'DATABASE_URL is not set');
+    }
+    return shared;
+  }
+
+  const key = tenantEncryptionKey();
+  if (!key) {
+    throw new TenantUnavailableError(orgId, 'no tenant encryption key configured');
+  }
+
+  const decrypted = decryptConnectionString(stored, key);
+
+  if (pointsAtSharedDatabase(decrypted, region)) {
+    if (!shared) {
+      throw new TenantUnavailableError(orgId, 'DATABASE_URL is not set');
+    }
+    return shared;
+  }
+
+  return decrypted;
 }
 
 function getControlPool(): Pool {
@@ -104,7 +173,7 @@ async function resolveTenant(orgId: string): Promise<TenantRecord> {
   // tenant query with `read ECONNRESET`. Same class of bug as the planner's
   // ControlPool sizing: connection count is a property of the deployment, not
   // of the routing policy.
-  if (sharedMode()) {
+  if (noControlPlane()) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) {
       throw new TenantUnavailableError(orgId, 'DATABASE_URL is not set');
@@ -141,16 +210,7 @@ async function resolveTenant(orgId: string): Promise<TenantRecord> {
     throw new TenantUnavailableError(orgId, `status is '${row.status}'`);
   }
 
-  if (!sharedMode() && row.region === SHARED_REGION) {
-    throw new TenantUnavailableError(orgId, 'row still points at the shared database');
-  }
-
-  const key = tenantEncryptionKey();
-  if (!key) {
-    throw new TenantUnavailableError(orgId, 'no tenant encryption key configured');
-  }
-
-  const record = { orgId, connectionString: decryptConnectionString(row.connection_string_enc, key) };
+  const record = { orgId, connectionString: resolveConnectionString(orgId, row.connection_string_enc, row.region) };
 
   if (directoryCache.size >= CACHE_MAX) {
     const oldest = directoryCache.keys().next().value;
@@ -163,6 +223,17 @@ async function resolveTenant(orgId: string): Promise<TenantRecord> {
   return record;
 }
 
+/** Host of a connection string, for logging. NEVER the credentials. */
+export function connectionHost(connectionString: string): string {
+  try {
+    return new URL(connectionString).host || 'unknown';
+  }
+  catch {
+    // Logging must never break a database resolution.
+    return 'unparseable';
+  }
+}
+
 /**
  * A drizzle handle for `orgId`'s database.
  *
@@ -172,6 +243,12 @@ async function resolveTenant(orgId: string): Promise<TenantRecord> {
  */
 export async function getDatabaseForOrg(orgId: string): Promise<ReturnType<typeof drizzle>> {
   const { connectionString } = await resolveTenant(orgId);
+
+  // If the kiosk is served from the wrong database the symptom is silence:
+  // member lookups return "not found" and check-ins insert an attendance row
+  // nobody reads. One host per resolution is the only detector. Host only —
+  // a connection string carries a password.
+  console.warn('[Tenancy] resolved', { orgId, dbHost: connectionHost(connectionString) });
 
   const existing = handles.get(connectionString);
   if (existing) {
@@ -203,14 +280,5 @@ export async function invalidateOrgConnection(orgId: string): Promise<void> {
   if (handle) {
     handles.delete(cached.record.connectionString);
     await handle.client.end({ timeout: 5 }).catch(() => {});
-  }
-}
-
-/** Test hook. */
-export function resetTenantDirectory(): void {
-  directoryCache.clear();
-  for (const [key, handle] of handles) {
-    handles.delete(key);
-    handle.client.end({ timeout: 5 }).catch(() => {});
   }
 }

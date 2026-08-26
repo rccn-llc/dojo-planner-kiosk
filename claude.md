@@ -79,6 +79,29 @@ All components use mobile-first responsive Tailwind classes following dojo-plann
 
 Grids collapse from multi-column to single-column on small viewports. Headers, cards, buttons, and text all scale down.
 
+## Multi-Tenancy (per-org databases)
+
+The kiosk resolves a database **per organization** via `src/lib/tenantDirectory.ts`. There is no process-wide connection any more: `getDatabase()` was removed, and every route resolves through `withOrgRetry(orgId, fn)` / `getDatabaseForOrg(orgId)`.
+
+### An org is cut over when its OWN tenant row says so
+
+`TENANCY_MODE` is **not read** — the planner retired it from the read path and the kiosk mirrors that exactly, because both apps read the same `tenant` rows and must agree. An org is split when its row holds a real connection string that is not the shared database; a row still naming the shared database is **served from there**, not refused.
+
+⚠️ **The predicate is the DECRYPTED CONNECTION STRING, never the `region` label.** `registerTenants` writes `region: 'aws-us-east-1'`, so a region-only check would accept a row pointing straight at the shared database — a real cross-tenant leak. Region is a secondary filter only.
+
+### Refusal is deliberate
+
+A row whose `status` is not `active` throws `TenantUnavailableError` — the route must refuse, never fall back to `DATABASE_URL`. This matters most during a cutover (`status='migrating'`): serving there would insert an `attendance` row into a database that is about to be superseded, invisible to the app afterwards.
+
+### 🔒 Local dev needs no control plane
+
+`DEFAULT_TENANT_DATABASE_URL` short-circuits **before** the cache and before any control pool is opened, and a deployment with no distinct `CONTROL_DATABASE_URL` serves every org from `DATABASE_URL`. Opening a control pool locally would be a SECOND socket against pglite-server, which accepts exactly one — that is the `read ECONNRESET` failure mode. The production guard (`NODE_ENV !== 'production'`) on the escape hatch is load-bearing and covered by a test.
+
+### Observability
+
+`getDatabaseForOrg` logs `{ orgId, dbHost }` once per resolution — **host only, never credentials**. A kiosk served from the wrong database fails silently (member lookups return "not found", check-ins land nowhere useful), so this is the only runtime detector.
+
+
 ## Environment Variables
 
 ```bash
