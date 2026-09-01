@@ -109,7 +109,7 @@ jobs:
       # Requires repo secrets DOJO_PLANNER_APP_ID and DOJO_PLANNER_APP_PRIVATE_KEY.
       - name: Mint dojo-planner read token
         id: planner-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.DOJO_PLANNER_APP_ID }}
           private-key: ${{ secrets.DOJO_PLANNER_APP_PRIVATE_KEY }}
