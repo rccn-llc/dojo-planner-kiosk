@@ -6,10 +6,12 @@ import { catalogItem, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
-import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import { member, transaction } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { computeSquareFeeBreakdown } from '@/lib/squareFees';
+import { chargeSquareCard } from '@/lib/squarePayments';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
 export interface ProcessStoreOrderBody {
@@ -118,8 +120,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const iqproConfig = await resolveIQProConfig(orgId);
-  if (!iqproConfig) {
+  // Resolve BOTH providers. A Square org resolves a null IQPro config by
+  // design (that guard is what stops its members ever charging the IQPro
+  // merchant), so requiring IQPro here would 503 a perfectly configured org.
+  const squareConfig = await resolveSquareServerConfig(orgId);
+  const iqproConfig = squareConfig ? null : await resolveIQProConfig(orgId);
+  if (!squareConfig && !iqproConfig) {
     return NextResponse.json<ProcessStoreOrderResult>(
       { success: false, status: 'declined', error: 'Payment processing is not configured' },
       { status: 503 },
@@ -145,7 +151,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const gatewayId = iqproConfig.gatewayId;
+  // IQPro-only values, resolved before the provider split because `vaulted`
+  // (derived from the signed match token just below) is what the Square branch
+  // checks in order to refuse the vault path. Null on a Square org; the IQPro
+  // branch re-asserts the config is present before using them.
+  const gatewayId = iqproConfig?.gatewayId ?? '';
 
   // Verify the signed match token unconditionally. The downstream branch
   // is gated on the *verified payload*, never on the raw request value, so a
@@ -156,7 +166,9 @@ export async function POST(request: Request) {
   // non-vaulted flow) and throws for any present-but-invalid token (→ 400).
   let payload;
   try {
-    payload = verifyMatchToken(iqproConfig, body.savedPaymentMatchToken);
+    // A Square org has no IQPro vault, so there is no signed token to verify;
+    // the Square branch refuses `vaulted` outright.
+    payload = iqproConfig ? verifyMatchToken(iqproConfig, body.savedPaymentMatchToken) : null;
   }
   catch (err) {
     const message = err instanceof Error ? err.message : 'Invalid saved payment selection';
@@ -304,6 +316,142 @@ export async function POST(request: Request) {
     return NextResponse.json<ProcessStoreOrderResult>(
       { success: false, status: 'declined', error: 'Bank account and routing number are required.' },
       { status: 400 },
+    );
+  }
+
+  // ── Square ────────────────────────────────────────────────────────────────
+  //
+  // Self-contained: everything above (catalog re-derivation, discount clamp,
+  // `authoritativeBase`) is provider-neutral and has already run, and the
+  // IQPro path below is left exactly as it was.
+  //
+  // ⚠️ Card-only. Square cannot store a bank account and charge it later, and
+  // the vaulted path is IQPro-vault-specific (signed match tokens), so both
+  // are refused rather than silently mischarged.
+  if (squareConfig) {
+    if (vaulted) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Saved cards are not available for this organization yet.' },
+        { status: 400 },
+      );
+    }
+    if (effectiveMethod !== 'card') {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'This organization accepts card payments only.' },
+        { status: 400 },
+      );
+    }
+    if (!body.cardToken) {
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Card was not tokenized. Please re-enter your card.' },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const taxStatePct = await getOrganizationTaxRate(orgId);
+      const serviceFeePct = await getOrganizationServiceFeePct();
+      // Recompute from OUR catalog-derived base, then reject a client total
+      // that disagrees — the anti-tampering invariant, preserved verbatim
+      // across the provider swap.
+      const serverFees = await computeSquareFeeBreakdown(squareConfig, {
+        baseAmount: authoritativeBase,
+        isTaxable: true,
+        taxStatePct,
+        serviceFeePct,
+      });
+
+      if (!body.feeBreakdown || typeof body.feeBreakdown.amount !== 'number') {
+        return NextResponse.json<ProcessStoreOrderResult>(
+          { success: false, status: 'declined', error: 'Missing fee breakdown' },
+          { status: 400 },
+        );
+      }
+      if (Math.abs(serverFees.amount - body.feeBreakdown.amount) > 0.01) {
+        console.error(
+          '[payment/process] Square fee mismatch — client:',
+          sanitizeForLog(body.feeBreakdown.amount),
+          'server:',
+          sanitizeForLog(serverFees.amount),
+        );
+        return NextResponse.json<ProcessStoreOrderResult>(
+          { success: false, status: 'declined', error: 'Fee breakdown has changed — please refresh and try again' },
+          { status: 400 },
+        );
+      }
+
+      const charge = await chargeSquareCard(squareConfig, {
+        sourceId: body.cardToken,
+        fees: serverFees,
+        note: body.description || 'Store purchase',
+        buyerEmail: body.email || undefined,
+      });
+
+      // Record approved AND declined, mirroring the IQPro path. Guest store
+      // orders carry a null member_id. Best-effort: a DB failure must not
+      // change the outcome the buyer sees.
+      try {
+        const db = await getDatabaseForOrg(orgId);
+        const now = new Date();
+        await db.insert(transaction).values({
+          id: randomUUID(),
+          organizationId: orgId,
+          memberId: null,
+          transactionType: 'product_purchase',
+          amount: serverFees.amount,
+          status: charge.status === 'approved' ? 'paid' : 'declined',
+          paymentMethod: 'card',
+          description: body.description || 'Store purchase',
+          providerTransactionId: charge.transactionId ?? null,
+          processedAt: charge.status === 'approved' ? now : null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      catch (err) {
+        console.error('[payment/process] Failed to record Square store transaction:', sanitizeForLog(err instanceof Error ? err.message : String(err)));
+      }
+
+      if (charge.status === 'approved' && body.email) {
+        sendStoreOrderReceipt({
+          toEmail: body.email,
+          firstName: body.firstName ?? '',
+          lastName: body.lastName ?? '',
+          items: body.items ?? [],
+          subtotal: body.subtotal,
+          discountAmount: body.discountAmount ?? 0,
+          taxAmount: serverFees.taxAmount,
+          taxPct: serverFees.taxPct,
+          serviceFeeAmount: serverFees.serviceFeeAmount,
+          serviceFeePct: serverFees.serviceFeePct,
+          total: serverFees.amount,
+          transactionId: charge.transactionId,
+        }).catch(() => {
+          // Already logged inside sendStoreOrderReceipt.
+        });
+      }
+
+      return NextResponse.json<ProcessStoreOrderResult>({
+        success: charge.status === 'approved',
+        status: charge.status,
+        transactionId: charge.transactionId ?? '',
+        declineReason: charge.status === 'declined' ? charge.error : undefined,
+      });
+    }
+    catch (error) {
+      console.error('[payment/process] Square error:', sanitizeForLog(error instanceof Error ? error.message : String(error)));
+      return NextResponse.json<ProcessStoreOrderResult>(
+        { success: false, status: 'declined', error: 'Payment could not be processed. Please try again.' },
+        { status: 402 },
+      );
+    }
+  }
+
+  // ── IQPro ─────────────────────────────────────────────────────────────────
+  if (!iqproConfig) {
+    return NextResponse.json<ProcessStoreOrderResult>(
+      { success: false, status: 'declined', error: 'Payment processing is not configured' },
+      { status: 503 },
     );
   }
 

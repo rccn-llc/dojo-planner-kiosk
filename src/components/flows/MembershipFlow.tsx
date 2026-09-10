@@ -1,12 +1,12 @@
 'use client';
 
-import type { TokenizationIframeConfig } from '../../lib/iqpro';
 import type { MembershipPlan } from '../../lib/types';
+import type { ClientTokenizationConfig } from '../../types/tokenization';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
+import { useCardTokenizer } from '../../hooks/useCardTokenizer';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
-import { useTokenExIframe } from '../../hooks/useTokenExIframe';
 import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
@@ -105,7 +105,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
   })();
 
   // Tokenization state
-  const [tokenizationConfig, setTokenizationConfig] = useState<TokenizationIframeConfig | null>(null);
+  const [tokenizationConfig, setTokenizationConfig] = useState<ClientTokenizationConfig | null>(null);
   const [tokenizationError, setTokenizationError] = useState<string | null>(null);
   const capturedTokenRef = useRef<{ token: string; firstSix: string; lastFour: string } | null>(null);
   const feeCalcInFlightRef = useRef(false);
@@ -114,11 +114,15 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
 
   const isCardPayment = state.context.paymentMethod === 'card';
 
-  const { isLoaded: iframeLoaded, isValid: iframeValid, isCvvValid: iframeCvvValid, error: iframeError, tokenize: iframeTokenize } = useTokenExIframe({
+  const { isLoaded: iframeLoaded, isValid: iframeValid, isCvvValid: iframeCvvValid, error: iframeError, tokenize: iframeTokenize, layout, provider, backgroundColor: cardBackgroundColor } = useCardTokenizer({
     containerId: TOKENEX_CARD_ID,
     cvvContainerId: TOKENEX_CVV_ID,
     config: isCardPayment && state.matches('collectingPayment') ? tokenizationConfig : null,
   });
+
+  // Square renders number, expiry and CVV as ONE widget and cannot take ACH.
+  const isUnifiedCard = layout === 'unified';
+  const isCardOnlyProvider = provider === 'square';
 
   // Fetch programs and plans when entering selectingProgram state
   useEffect(() => {
@@ -308,7 +312,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     if (state.matches('collectingPayment') && !tokenizationConfig && !tokenizationError) {
       fetch(withOrgQuery('/api/payment/tokenization-config', orgSlug))
         .then(r => r.json())
-        .then((data: { config: TokenizationIframeConfig }) => {
+        .then((data: { config: ClientTokenizationConfig }) => {
           if (data.config) {
             setTokenizationConfig(data.config);
           }
@@ -390,6 +394,13 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       return;
     }
     if (!isCardPayment || !tokenizationConfig) {
+      return;
+    }
+    // ⚠️ Square nonces are single-use and short-lived, so minting one the
+    // moment the form looks valid risks it expiring before the user submits.
+    // Square therefore tokenizes on submit instead. IQPro tokens have no such
+    // limit, so its eager capture (which keeps submit instant) is unchanged.
+    if (isUnifiedCard) {
       return;
     }
     if (!iframeLoaded || !iframeValid || !iframeCvvValid) {
@@ -503,11 +514,25 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       kioskAttestationToken: attestationTokenRef.current ?? undefined,
     };
 
-    fetch(withOrgQuery('/api/payment/membership', orgSlug), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(paymentBody),
-    })
+    // Square did not tokenize eagerly (its nonce would expire), so mint one
+    // here. IQPro already captured a token above and resolves immediately, so
+    // its request is unchanged.
+    const withToken = isUnifiedCard && ctx.paymentMethod === 'card' && !paymentBody.cardToken
+      ? iframeTokenize().then((result) => {
+          paymentBody.cardToken = result.token;
+          // Square exposes no BIN to the browser; the server reads last_4 off
+          // its own POST /v2/cards response.
+          paymentBody.cardFirstSix = '';
+          paymentBody.cardLastFour = '';
+        })
+      : Promise.resolve();
+
+    withToken
+      .then(() => fetch(withOrgQuery('/api/payment/membership', orgSlug), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(paymentBody),
+      }))
       .then(r => r.json())
       .then((data) => {
         if (data.success && data.status !== 'declined') {
@@ -1225,17 +1250,21 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                   >
                     Credit / Debit Card
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleInputChange('paymentMethod', 'ach')}
-                    className={`flex-1 cursor-pointer rounded-xl border-2 py-4 text-center text-lg font-bold transition-all ${
-                      state.context.paymentMethod === 'ach'
-                        ? 'border-black bg-black text-white'
-                        : 'border-gray-300 bg-white text-gray-500 hover:border-black'
-                    }`}
-                  >
-                    Bank Account (ACH)
-                  </button>
+                  {/* Square cannot store a bank account for later charging,
+                      so ACH is offered only on IQPro. */}
+                  {!isCardOnlyProvider && (
+                    <button
+                      type="button"
+                      onClick={() => handleInputChange('paymentMethod', 'ach')}
+                      className={`flex-1 cursor-pointer rounded-xl border-2 py-4 text-center text-lg font-bold transition-all ${
+                        state.context.paymentMethod === 'ach'
+                          ? 'border-black bg-black text-white'
+                          : 'border-gray-300 bg-white text-gray-500 hover:border-black'
+                      }`}
+                    >
+                      Bank Account (ACH)
+                    </button>
+                  )}
                 </div>
 
                 {/* Card fields */}
@@ -1288,46 +1317,49 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                                   )}
                                   <div
                                     id={TOKENEX_CARD_ID}
-                                    className={`w-full overflow-hidden rounded-xl border-2 border-gray-300 bg-white [&_iframe]:border-none ${!iframeLoaded && !iframeError ? 'hidden' : ''}`}
-                                    style={{ height: '56px' }}
+                                    className={`w-full rounded-xl [&_iframe]:border-none ${isUnifiedCard ? '' : 'overflow-hidden border-2 border-gray-300 bg-white'} ${!iframeLoaded && !iframeError ? 'invisible' : ''}`}
+                                    style={isUnifiedCard ? ({ '--sq-bg': cardBackgroundColor ?? '#ffffff' } as React.CSSProperties) : { height: '56px' }}
                                   />
                                 </>
                               )}
                     </div>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className={labelClass} htmlFor="cardExpiry">
-                          Expiry (MM/YY)
-                          <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          id="cardExpiry"
-                          type="text"
-                          value={state.context.cardExpiry || ''}
-                          onChange={e => handleInputChange('cardExpiry', e.target.value)}
-                          className={inputClass('cardExpiry')}
-                          placeholder="MM/YY"
-                          maxLength={5}
-                        />
+                    {/* Square's widget collects expiry and CVV itself. */}
+                    {!isUnifiedCard && (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div>
+                          <label className={labelClass} htmlFor="cardExpiry">
+                            Expiry (MM/YY)
+                            <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            id="cardExpiry"
+                            type="text"
+                            value={state.context.cardExpiry || ''}
+                            onChange={e => handleInputChange('cardExpiry', e.target.value)}
+                            className={inputClass('cardExpiry')}
+                            placeholder="MM/YY"
+                            maxLength={5}
+                          />
+                        </div>
+                        <div>
+                          <p className={labelClass}>
+                            CVV
+                            <span className="text-red-500">*</span>
+                          </p>
+                          {tokenizationConfig
+                            ? (
+                                <div
+                                  id={TOKENEX_CVV_ID}
+                                  className={`w-full overflow-hidden rounded-xl border-2 border-gray-300 bg-white [&_iframe]:border-none ${!iframeLoaded ? 'opacity-0' : ''}`}
+                                  style={{ height: '56px' }}
+                                />
+                              )
+                            : (
+                                <div className="h-14 rounded-xl border-2 border-gray-300 bg-white" />
+                              )}
+                        </div>
                       </div>
-                      <div>
-                        <p className={labelClass}>
-                          CVV
-                          <span className="text-red-500">*</span>
-                        </p>
-                        {tokenizationConfig
-                          ? (
-                              <div
-                                id={TOKENEX_CVV_ID}
-                                className={`w-full overflow-hidden rounded-xl border-2 border-gray-300 bg-white [&_iframe]:border-none ${!iframeLoaded ? 'opacity-0' : ''}`}
-                                style={{ height: '56px' }}
-                              />
-                            )
-                          : (
-                              <div className="h-14 rounded-xl border-2 border-gray-300 bg-white" />
-                            )}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
@@ -1480,7 +1512,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                   state.context.isSubmitting
                   || !state.context.feeBreakdown
                   || (isCardPayment
-                    ? (!tokenizationConfig || !iframeLoaded || !iframeValid || !iframeCvvValid || !state.context.cardholderName || !state.context.cardExpiry || !capturedTokenRef.current)
+                    ? (isUnifiedCard
+                        // Square owns expiry/CVV and tokenizes at submit, so
+                        // neither a cardExpiry nor a pre-captured token exists.
+                        ? (!tokenizationConfig || !iframeLoaded || !iframeValid || !state.context.cardholderName)
+                        : (!tokenizationConfig || !iframeLoaded || !iframeValid || !iframeCvvValid || !state.context.cardholderName || !state.context.cardExpiry || !capturedTokenRef.current))
                     : (!state.context.achAccountHolder || !state.context.achRoutingNumber || !state.context.achAccountNumber))
                 }
                 onClick={() => {

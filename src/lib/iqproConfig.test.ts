@@ -140,6 +140,63 @@ describe('resolveIQProConfig', () => {
     await expect(mod.resolveIQProConfig('org_sq')).resolves.toBeNull();
   });
 
+  it('resolves a Square org to a browser-safe card config', async () => {
+    setEnv({ IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX });
+    nextRow = {
+      paymentProvider: 'square',
+      configEnc: blob({ accessToken: 'sq-secret', locationId: 'loc-1', applicationId: 'app-1', environment: 'sandbox', webhookSignatureKey: 'sig-secret' }, 'square'),
+      locationTaxRate: 0,
+    };
+    const mod = await importFresh();
+
+    const square = await mod.resolveSquareCardConfig('org_sq');
+
+    expect(square).toEqual({ applicationId: 'app-1', locationId: 'loc-1', environment: 'sandbox' });
+  });
+
+  it('nEVER exposes Square merchant secrets, which reach the browser from here', async () => {
+    // This config is returned to the client by the tokenization-config route.
+    // accessToken would let anyone charge the dojo's merchant account.
+    setEnv({ IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX });
+    nextRow = {
+      paymentProvider: 'square',
+      configEnc: blob({ accessToken: 'sq-secret', locationId: 'loc-1', applicationId: 'app-1', environment: 'sandbox', webhookSignatureKey: 'sig-secret' }, 'square'),
+      locationTaxRate: 0,
+    };
+    const mod = await importFresh();
+
+    const serialized = JSON.stringify(await mod.resolveSquareCardConfig('org_sq'));
+
+    expect(serialized).not.toContain('sq-secret');
+    expect(serialized).not.toContain('sig-secret');
+  });
+
+  it('refuses a Square org whose stored credentials are unusable', async () => {
+    // Better a clear "not configured" than mounting a card form that cannot
+    // tokenize.
+    setEnv({ IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX });
+    nextRow = {
+      paymentProvider: 'square',
+      configEnc: blob({ accessToken: 'sq-secret' }, 'square'),
+      locationTaxRate: 0,
+    };
+    const mod = await importFresh();
+
+    await expect(mod.resolveSquareCardConfig('org_sq')).resolves.toBeNull();
+  });
+
+  it('resolves no Square config for an IQPro org', async () => {
+    setEnv({ IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX });
+    nextRow = {
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'c', clientSecret: 's', gatewayId: 'g' }, 'iqpro'),
+      locationTaxRate: 0,
+    };
+    const mod = await importFresh();
+
+    await expect(mod.resolveSquareCardConfig('org_iq')).resolves.toBeNull();
+  });
+
   it('falls back to env when the org has no stored blob', async () => {
     setEnv({
       IQPRO_CLIENT_ID: 'env-client',

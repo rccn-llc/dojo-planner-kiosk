@@ -3,8 +3,9 @@ import type { FeeBreakdown } from '@/lib/types';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { computeFeeBreakdown, getGatewayProcessors } from '@/lib/iqpro';
-import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { computeSquareFeeBreakdown } from '@/lib/squareFees';
 
 export interface CalculateFeesRequest {
   baseAmount: number;
@@ -52,14 +53,6 @@ export async function POST(request: Request) {
     return NextResponse.json<CalculateFeesResponse>({ success: false, error: 'Too many requests' }, { status: 429 });
   }
 
-  const iqproConfig = await resolveIQProConfig(orgId);
-  if (!iqproConfig) {
-    return NextResponse.json<CalculateFeesResponse>(
-      { success: false, error: 'Payment processing is not configured' },
-      { status: 503 },
-    );
-  }
-
   let body: CalculateFeesRequest;
   try {
     body = await request.json() as CalculateFeesRequest;
@@ -90,6 +83,46 @@ export async function POST(request: Request) {
     );
   }
 
+  // Both providers price off the same org-level rates; only who computes the
+  // resulting money differs.
+  const taxStatePct = await getOrganizationTaxRate(orgId);
+  const serviceFeePct = await getOrganizationServiceFeePct();
+
+  // ── Square ────────────────────────────────────────────────────────────────
+  // A Square org resolves a NULL IQPro config by design, so this branch must
+  // come FIRST: falling through would 503 with "not configured" even though
+  // the org is perfectly well configured — just on the other provider. That
+  // was the bug where a filled-in checkout left Place Order disabled forever,
+  // because the button waits on a fee breakdown that could never arrive.
+  const squareConfig = await resolveSquareServerConfig(orgId);
+  if (squareConfig) {
+    try {
+      const feeBreakdown = await computeSquareFeeBreakdown(squareConfig, {
+        baseAmount: body.baseAmount,
+        isTaxable: body.isTaxable,
+        taxStatePct,
+        serviceFeePct,
+      });
+      return NextResponse.json<CalculateFeesResponse>({ success: true, feeBreakdown });
+    }
+    catch (error) {
+      console.error('[calculate-fees] Square fee calculation failed', error);
+      return NextResponse.json<CalculateFeesResponse>(
+        { success: false, error: error instanceof Error ? error.message : 'Fee calculation failed' },
+        { status: 502 },
+      );
+    }
+  }
+
+  // ── IQPro ─────────────────────────────────────────────────────────────────
+  const iqproConfig = await resolveIQProConfig(orgId);
+  if (!iqproConfig) {
+    return NextResponse.json<CalculateFeesResponse>(
+      { success: false, error: 'Payment processing is not configured' },
+      { status: 503 },
+    );
+  }
+
   try {
     const processors = await getGatewayProcessors(iqproConfig);
     const processorId = body.paymentMethod === 'card'
@@ -102,9 +135,6 @@ export async function POST(request: Request) {
         { status: 503 },
       );
     }
-
-    const taxStatePct = await getOrganizationTaxRate(orgId);
-    const serviceFeePct = await getOrganizationServiceFeePct();
 
     const feeBreakdown: FeeBreakdown = await computeFeeBreakdown(
       iqproConfig,

@@ -396,3 +396,32 @@ export const auditEvent = pgTable(
     index('audit_timestamp_idx').on(table.timestamp),
   ],
 );
+
+/**
+ * Square catalog plan variations, mirroring dojo-planner's
+ * `squarePlanVariationSchema`.
+ *
+ * At most FOUR rows per org — one per cadence, not one per membership plan —
+ * because Square sets `price_override_money` and `tax_percentage` per
+ * subscription, so a single variation serves every member on that cadence.
+ *
+ * The unique index on (organization_id, cadence) is the real guard: two
+ * concurrent first-charges both miss the cache, and the loser's
+ * onConflictDoNothing insert re-reads the winner's row instead of minting a
+ * second catalog object in the merchant's Square account.
+ */
+export const squarePlanVariation = pgTable(
+  'square_plan_variation',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    cadence: text('cadence').notNull(),
+    planVariationId: text('plan_variation_id').notNull(),
+    planId: text('plan_id'),
+    createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),
+  },
+  table => [
+    uniqueIndex('square_plan_variation_org_cadence_idx').on(table.organizationId, table.cadence),
+  ],
+);
