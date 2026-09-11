@@ -21,7 +21,7 @@ interface UseTokenExIframeOptions {
   config: TokenizationIframeConfig | null;
 }
 
-interface TokenizeResult {
+export interface TokenizeResult {
   token: string;
   firstSix?: string;
   lastFour?: string;

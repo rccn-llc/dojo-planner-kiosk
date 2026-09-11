@@ -29,15 +29,23 @@ const nextConfig = {
     // Determine IQPro domain based on env (sandbox vs production)
     // Both are included so the same build works in preview and production
     const iqproDomains = 'https://sandbox.api.basyspro.com https://api.basyspro.com';
+    // Square's SDK host differs per environment and an org's environment is only
+    // known at request time, so BOTH are listed — this header is built once.
+    const squareCdnDomains = 'https://sandbox.web.squarecdn.com https://web.squarecdn.com';
+    const squareApiDomains = 'https://pci-connect.squareupsandbox.com https://pci-connect.squareup.com';
 
-    // CSP for TokenEx + IQPro iframe scripts
+    // CSP for TokenEx + IQPro iframe scripts, and Square's Web Payments SDK.
+    // default-src 'self' means anything omitted here is denied.
     const csp = [
       `default-src 'self'`,
-      `script-src 'self' 'unsafe-inline' ${iqproDomains}`,
-      `frame-src ${iqproDomains} https://*.tokenex.com`,
-      `connect-src 'self' ${iqproDomains}`,
-      `style-src 'self' 'unsafe-inline'`,
+      `script-src 'self' 'unsafe-inline' ${iqproDomains} ${squareCdnDomains}`,
+      `frame-src ${iqproDomains} https://*.tokenex.com ${squareCdnDomains}`,
+      `connect-src 'self' ${iqproDomains} ${squareApiDomains}`,
+      `style-src 'self' 'unsafe-inline' ${squareCdnDomains}`,
       `img-src 'self' data: https:`,
+      // Square's docs list two external font hosts. We do NOT add them on spec:
+      // the card widget renders in its own iframe and falls back to system
+      // fonts. Add them only if the sandbox check shows the form is broken.
       `font-src 'self'`,
       // In dev, skip upgrade-insecure-requests to avoid breaking TokenEx postMessage on http://localhost
       ...(!isDev ? [`upgrade-insecure-requests`] : []),

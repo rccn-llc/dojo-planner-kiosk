@@ -1,4 +1,5 @@
 import type { Buffer } from 'node:buffer';
+import type { SquareServerConfig } from '@/lib/iqproConfig';
 import type { FeeBreakdown } from '@/lib/types';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq } from 'drizzle-orm';
@@ -6,7 +7,7 @@ import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
-import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
+import { getOrganizationServiceFeePct, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import {
   address,
@@ -20,6 +21,8 @@ import {
   waiverTemplate,
 } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
+import { computeSquareFeeBreakdown } from '@/lib/squareFees';
+import { chargeSquareCard, createSquareCustomerWithCard, createSquareSubscription, ensureSquarePlanVariation, toSquareCadence } from '@/lib/squarePayments';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { generatePdfFilename, generateWaiverPdfBuffer } from '@/lib/waiverPdf';
 
@@ -107,7 +110,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: 'Too many attempts. Please wait a moment and try again.' }, { status: 429 });
     }
 
-    const iqproConfig = await resolveIQProConfig(orgId);
+    // Resolve BOTH providers. A Square org resolves a null IQPro config by
+    // design, so gating on IQPro alone would silently skip payment entirely
+    // and create an unpaid active membership.
+    const squareConfig = await resolveSquareServerConfig(orgId);
+    const iqproConfig = squareConfig ? null : await resolveIQProConfig(orgId);
     // iqproConfig may be null when this org has no IQPro credentials; the
     // payment stage below is gated on it. We continue so the member/waiver
     // records still write for $0 plans / plans without payment.
@@ -164,7 +171,42 @@ export async function POST(request: Request) {
     // leave a phantom active member/membership/waiver behind.
     let payment: PaymentResult | undefined;
 
-    if (plan.price > 0 && iqproConfig && gatewayId) {
+    if (plan.price > 0 && squareConfig) {
+      // ── Square ────────────────────────────────────────────────────────────
+      // Card-only: Square cannot store a bank account and charge it later.
+      if (body.paymentMethod === 'ach') {
+        return NextResponse.json(
+          { success: false, error: 'This organization accepts card payments only.' },
+          { status: 400 },
+        );
+      }
+      if (!body.cardToken) {
+        return NextResponse.json(
+          { success: false, error: 'Card was not tokenized. Please re-enter your card.' },
+          { status: 400 },
+        );
+      }
+      try {
+        payment = await runSquarePayment({
+          config: squareConfig,
+          db,
+          orgId,
+          body,
+          plan,
+          phone,
+          isRecurring,
+          now,
+        });
+      }
+      catch (payErr) {
+        console.error('[payment/membership] Square payment error:', sanitizeForLog(payErr instanceof Error ? payErr.message : String(payErr)));
+        return NextResponse.json(
+          { success: false, status: 'declined', error: 'Payment could not be processed. Please try again.' },
+          { status: 402 },
+        );
+      }
+    }
+    else if (plan.price > 0 && iqproConfig && gatewayId) {
       try {
         payment = await runPayment({
           config: iqproConfig,
@@ -447,6 +489,95 @@ interface RunPaymentArgs {
  * and returns the ids needed to persist. Performs NO database writes and
  * throws on any failure or decline — the caller persists only on success.
  */
+/**
+ * The Square equivalent of `runPayment`: side-effect-free apart from the
+ * charge itself, so Stage 2 can persist only after an approval.
+ *
+ * ⚠️ Deliberately mirrors the IQPro path's money decisions rather than
+ * improving on them — memberships are NOT taxed (only the service fee
+ * applies), and the charge base is `plan.price - coupon discount`. Diverging
+ * here would mean the two providers quote different totals for one plan.
+ */
+async function runSquarePayment(args: {
+  config: SquareServerConfig;
+  db: Awaited<ReturnType<typeof getDatabaseForOrg>>;
+  orgId: string;
+  body: MembershipPaymentBody;
+  plan: { name: string; price: number; frequency: string | null };
+  phone?: string | null;
+  isRecurring: boolean;
+  now: Date;
+}): Promise<PaymentResult> {
+  const { config, db, orgId, body, plan, phone, isRecurring, now } = args;
+
+  const baseAmount = Math.round(plan.price * 100) / 100;
+  const discountAmount = body.couponDiscount ? Math.round(body.couponDiscount * 100) / 100 : 0;
+  const discountedBase = Math.max(0, Math.round((baseAmount - discountAmount) * 100) / 100);
+
+  const serviceFeePct = await getOrganizationServiceFeePct();
+  const fees = await computeSquareFeeBreakdown(config, {
+    baseAmount: discountedBase,
+    isTaxable: false,
+    taxStatePct: 0,
+    serviceFeePct,
+  });
+
+  // Same anti-tampering check as the IQPro path.
+  if (body.feeBreakdown && Math.abs(fees.amount - body.feeBreakdown.amount) > 0.01) {
+    const safeClientFeeAmount = Number.isFinite(body.feeBreakdown.amount) ? body.feeBreakdown.amount : 'invalid';
+    console.error('[payment/membership] Square fee mismatch — client:', sanitizeForLog(safeClientFeeAmount), 'server:', fees.amount);
+    throw new Error('Fee breakdown has changed — please refresh and try again');
+  }
+
+  const { customerId, cardId } = await createSquareCustomerWithCard(config, {
+    firstName: body.firstName,
+    lastName: body.lastName,
+    email: body.email,
+    phone: phone ?? undefined,
+    sourceId: body.cardToken as string,
+    referenceId: body.existingMemberId ?? undefined,
+  });
+
+  // Charge the first period immediately. Square subscriptions do not charge on
+  // creation, so — as on IQPro — the initial payment is a separate sale.
+  const charge = await chargeSquareCard(config, {
+    sourceId: cardId,
+    fees,
+    note: plan.name,
+    buyerEmail: body.email,
+  });
+  if (!charge.success) {
+    throw new Error(charge.error ?? 'Square declined the payment.');
+  }
+
+  let providerSubscriptionId: string | undefined;
+  if (isRecurring) {
+    const cadence = toSquareCadence(plan.frequency);
+    if (!cadence) {
+      throw new Error(`Plan frequency "${plan.frequency ?? 'none'}" cannot be billed recurringly on Square.`);
+    }
+    const planVariationId = await ensureSquarePlanVariation(config, db, orgId, cadence);
+    // Recurring cycles bill the plan price, NOT the discounted first period —
+    // matching the IQPro path, where a coupon applies to the initial charge.
+    const sub = await createSquareSubscription(config, {
+      planVariationId,
+      customerId,
+      cardId,
+      amount: baseAmount,
+      startDate: now,
+    });
+    providerSubscriptionId = sub.subscriptionId;
+  }
+
+  return {
+    providerCustomerId: customerId,
+    paymentMethodId: cardId,
+    providerSubscriptionId,
+    txId: charge.transactionId ?? '',
+    fees,
+  };
+}
+
 async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
   const { config, gatewayId, body, plan, phone, isRecurring, now } = args;
 

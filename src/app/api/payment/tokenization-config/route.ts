@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { getTokenizationConfig } from '@/lib/iqpro';
-import { resolveIQProConfig } from '@/lib/iqproConfig';
+import { resolveIQProConfig, resolveSquareCardConfig } from '@/lib/iqproConfig';
 
 /**
  * GET /api/payment/tokenization-config?org=<slug>
  *
- * Returns the TokenEx iframe configuration needed to initialize the card
- * entry iframe on the client. The `origin` header from the request is
- * forwarded to IQPro so the tokenization context is scoped to this kiosk's
- * origin. IQPro credentials are resolved per-org from the URL's `?org=`.
+ * Returns what the client needs to collect a card, as a discriminated union on
+ * `provider`. IQPro hosts a TokenEx iframe (whose context is scoped to this
+ * kiosk's `origin`); Square runs its own Web Payments SDK and needs only its
+ * application/location ids. Credentials are resolved per-org from `?org=`.
  */
 export async function GET(request: Request) {
   try {
@@ -19,6 +19,13 @@ export async function GET(request: Request) {
         { error: 'Organization not found. Pass ?org=<slug>.' },
         { status: 400 },
       );
+    }
+
+    // Square first: a Square org has a null IQPro config by construction, so
+    // checking IQPro first would 503 it.
+    const squareConfig = await resolveSquareCardConfig(orgId);
+    if (squareConfig) {
+      return NextResponse.json({ config: { provider: 'square', square: squareConfig } });
     }
 
     const iqproConfig = await resolveIQProConfig(orgId);
@@ -39,7 +46,7 @@ export async function GET(request: Request) {
       );
     }
 
-    return NextResponse.json({ config: tokenizationConfig });
+    return NextResponse.json({ config: { provider: 'iqpro', iqpro: tokenizationConfig } });
   }
   catch (error) {
     console.error('[tokenization-config] Error:', error);

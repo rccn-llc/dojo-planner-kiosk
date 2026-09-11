@@ -59,3 +59,34 @@ body {
     'Segoe UI',
     sans-serif;
 }
+
+/*
+ * Square Web Payments SDK — card widget. Mirrors dojo-planner's global.css.
+ *
+ * ⚠️ Plain CSS, NOT Tailwind arbitrary variants: those are built inside
+ * template literals, which the JIT never sees, so they compile to nothing.
+ */
+.sq-card-iframe-container {
+  background-color: var(--sq-bg, transparent);
+}
+
+/* The iframe is inline by default and sits on the text baseline, leaving a
+   pale strip of container visible below it. Block-level removes that gap. */
+.sq-card-iframe-container iframe {
+  display: block;
+  width: 100%;
+}
+
+.sq-card-message:empty {
+  display: none;
+}
+
+/* Square gives this row a 28px line-height plus 11px margins, so one line of
+   helper text costs 50px. Retuned to match our own field-error styling. */
+.sq-card-message {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+/* Height is left at Square's own 48px — see dojo-planner's global.css. */

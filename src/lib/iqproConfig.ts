@@ -67,8 +67,32 @@ export interface IQProConfig {
   source: 'org' | 'env' | 'mixed';
 }
 
+/**
+ * A Square org's browser-safe card config. Deliberately does NOT include
+ * `accessToken` or `webhookSignatureKey` — those are server-only secrets. The
+ * tokenization route returns this shape straight to the client.
+ */
+export interface SquareCardConfig {
+  applicationId: string;
+  locationId: string;
+  environment: 'sandbox' | 'production';
+}
+
+/**
+ * Server-side Square credentials.
+ *
+ * ⚠️ Deliberately a SEPARATE type from `SquareCardConfig`, which is handed to
+ * the browser for the Web Payments SDK and must never carry the access token.
+ * Only server routes may resolve this one.
+ */
+export interface SquareServerConfig extends SquareCardConfig {
+  accessToken: string;
+}
+
 interface CacheEntry {
   config: IQProConfig | null;
+  squareConfig: SquareCardConfig | null;
+  squareServerConfig: SquareServerConfig | null;
   taxRate: number;
   expiresAt: number;
 }
@@ -150,7 +174,7 @@ function buildConfig(
   return { clientId, clientSecret, gatewayId, scope, oauthUrl, baseUrl, source };
 }
 
-async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; taxRate: number }> {
+async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; squareConfig: SquareCardConfig | null; squareServerConfig: SquareServerConfig | null; taxRate: number }> {
   const rows = await withOrgRetry(orgId, db =>
     db
       .select({
@@ -164,12 +188,41 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const row = rows[0];
   const taxRate = row?.locationTaxRate ?? 0;
 
-  // An org on a non-IQPro provider gets a null config: the kiosk has no Square
-  // implementation yet (B5k), and silently using IQPro credentials would send
-  // the money to the wrong merchant account.
+  // A Square org resolves a Square card config and a NULL IQPro config. Both
+  // being separate fields is what stops IQPro credentials ever being used to
+  // charge a Square merchant, and vice versa.
+  if (row?.paymentProvider === 'square') {
+    const squareBlob = readConfigBlob(row?.configEnc);
+    const creds = squareBlob?.provider === 'square' ? squareBlob.credentials : null;
+    if (!creds?.applicationId || !creds?.locationId) {
+      console.warn(`[iqproConfig] org ${orgId} is on Square but has no usable card credentials.`);
+      return { config: null, squareConfig: null, squareServerConfig: null, taxRate };
+    }
+    const environment = creds.environment === 'production' ? 'production' : 'sandbox';
+    const cardConfig: SquareCardConfig = {
+      applicationId: creds.applicationId,
+      locationId: creds.locationId,
+      environment,
+    };
+    return {
+      config: null,
+      squareConfig: cardConfig,
+      // Server-only. Absent an access token the org can still COLLECT a card
+      // (that needs only the public ids) but cannot be charged, so the two
+      // configs resolve independently rather than one gating the other.
+      squareServerConfig: creds.accessToken
+        ? { ...cardConfig, accessToken: creds.accessToken }
+        : null,
+      taxRate,
+    };
+  }
+
+  // Any OTHER non-IQPro provider is one the kiosk cannot transact on. Fail
+  // closed rather than reaching for IQPro credentials, which would send the
+  // money to the wrong merchant account.
   if (row?.paymentProvider && row.paymentProvider !== 'iqpro') {
     console.warn(`[iqproConfig] org ${orgId} uses payment provider "${row.paymentProvider}", which the kiosk cannot process yet.`);
-    return { config: null, taxRate };
+    return { config: null, squareConfig: null, squareServerConfig: null, taxRate };
   }
 
   const blob = readConfigBlob(row?.configEnc);
@@ -186,12 +239,12 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
     console.warn(`[iqproConfig] org ${orgId} resolved to env-fallback credentials — populate Payment Settings in the main app to use this org's merchant.`);
   }
 
-  return { config, taxRate };
+  return { config, squareConfig: null, squareServerConfig: null, taxRate };
 }
 
 // In-flight loads, so concurrent cold calls for the same org (e.g. resolve
 // config + tax back-to-back on a cold cache) collapse to one DB round-trip.
-const inFlight = new Map<string, Promise<{ config: IQProConfig | null; taxRate: number }>>();
+const inFlight = new Map<string, Promise<{ config: IQProConfig | null; squareConfig: SquareCardConfig | null; squareServerConfig: SquareServerConfig | null; taxRate: number }>>();
 
 async function getCached(orgId: string): Promise<CacheEntry> {
   const cached = cacheGet(orgId);
@@ -210,6 +263,19 @@ async function getCached(orgId: string): Promise<CacheEntry> {
 
 export async function resolveIQProConfig(orgId: string): Promise<IQProConfig | null> {
   return (await getCached(orgId)).config;
+}
+
+/** A Square org's browser-safe card config, or null for any other provider. */
+export async function resolveSquareCardConfig(orgId: string): Promise<SquareCardConfig | null> {
+  return (await getCached(orgId)).squareConfig;
+}
+
+/**
+ * Square credentials INCLUDING the access token. Server routes only — never
+ * return this to the browser.
+ */
+export async function resolveSquareServerConfig(orgId: string): Promise<SquareServerConfig | null> {
+  return (await getCached(orgId)).squareServerConfig;
 }
 
 export async function getOrganizationTaxRate(orgId: string): Promise<number> {
