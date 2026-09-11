@@ -21,7 +21,7 @@ import { squarePost, toMinorUnits } from './square';
 /** The org-scoped drizzle handle these helpers operate on. */
 type KioskDb = Awaited<ReturnType<typeof getDatabaseForOrg>>;
 
-export interface SquareChargeResult {
+interface SquareChargeResult {
   success: boolean;
   status: 'approved' | 'declined' | 'processing';
   transactionId?: string;

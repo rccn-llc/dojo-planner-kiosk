@@ -39,7 +39,7 @@ const SQUARE_API_VERSION = '2025-01-23';
  * cannot silently mean production — IQPro's habit of sniffing
  * `baseUrl.includes('sandbox')` is what this avoids.
  */
-export function squareBaseUrl(config: SquareServerConfig): string {
+function squareBaseUrl(config: SquareServerConfig): string {
   return config.environment === 'production'
     ? 'https://connect.squareup.com'
     : 'https://connect.squareupsandbox.com';
@@ -61,7 +61,7 @@ export function fromMinorUnits(minor: number): number {
 }
 
 /** A Square API error, carrying the category/code Square returned. */
-export class SquareApiError extends Error {
+class SquareApiError extends Error {
   readonly status: number;
   readonly category?: string;
   readonly code?: string;
@@ -147,19 +147,4 @@ export async function squarePost<T = Record<string, unknown>>(
   body: unknown,
 ): Promise<T> {
   return squareRequest<T>(config, 'POST', path, body);
-}
-
-export async function squareGet<T = Record<string, unknown>>(
-  config: SquareServerConfig,
-  path: string,
-): Promise<T> {
-  return squareRequest<T>(config, 'GET', path);
-}
-
-export async function squarePut<T = Record<string, unknown>>(
-  config: SquareServerConfig,
-  path: string,
-  body: unknown,
-): Promise<T> {
-  return squareRequest<T>(config, 'PUT', path, body);
 }

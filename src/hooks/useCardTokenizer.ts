@@ -21,7 +21,7 @@ import { useTokenExIframe } from './useTokenExIframe';
  *
  * Flows branch on THIS rather than on the provider name.
  */
-export type CardFormLayout = 'split' | 'unified';
+type CardFormLayout = 'split' | 'unified';
 
 interface UseCardTokenizerOptions {
   /** PAN container for IQPro; the whole widget's container for Square. */
