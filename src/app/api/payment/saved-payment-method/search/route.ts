@@ -1,9 +1,10 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
-import { searchCustomersByPhone, signMatchToken } from '@/lib/iqpro';
-import { resolveIQProConfig } from '@/lib/iqproConfig';
-import { member } from '@/lib/memberSchema';
+import { searchCustomersByPhone } from '@/lib/iqpro';
+import { resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
+import { signMatchToken } from '@/lib/matchToken';
+import { member, paymentMethod } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidPhoneNumber, sanitizePhoneInput } from '@/lib/utils';
@@ -56,14 +57,6 @@ export async function GET(request: Request) {
     );
   }
 
-  const iqproConfig = await resolveIQProConfig(orgId);
-  if (!iqproConfig) {
-    return NextResponse.json<SavedPaymentMethodSearchResponse>(
-      { matches: [], error: 'Payment processing is not configured' },
-      { status: 503 },
-    );
-  }
-
   const url = new URL(request.url);
   const rawPhone = url.searchParams.get('phone') ?? '';
   const phone = sanitizePhoneInput(rawPhone);
@@ -72,6 +65,76 @@ export async function GET(request: Request) {
     return NextResponse.json<SavedPaymentMethodSearchResponse>(
       { matches: [], error: 'A valid 10-digit phone number is required' },
       { status: 400 },
+    );
+  }
+
+  // ── Square ────────────────────────────────────────────────────────────────
+  //
+  // No provider search. `member.provider_customer_id` and
+  // `payment_method.provider_payment_method_id` are already stored locally and
+  // are provider-neutral, so the saved card is found with a join — which is
+  // both faster and the reason this branch needs no Square API call at all.
+  const squareConfig = await resolveSquareServerConfig(orgId);
+  if (squareConfig) {
+    try {
+      const db = await getDatabaseForOrg(orgId);
+      const rows = await db
+        .select({
+          customerId: member.providerCustomerId,
+          paymentMethodId: paymentMethod.providerPaymentMethodId,
+          last4: paymentMethod.last4,
+          firstName: member.firstName,
+          lastName: member.lastName,
+        })
+        .from(member)
+        .innerJoin(paymentMethod, eq(paymentMethod.memberId, member.id))
+        .where(and(
+          eq(member.organizationId, orgId),
+          // Phones are stored in three shapes historically; match all of
+          // them, same as /api/members/lookup does.
+          or(
+            eq(member.phone, phone),
+            eq(member.phone, `+1${phone}`),
+            eq(member.phone, `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`),
+          ),
+          isNotNull(member.providerCustomerId),
+          isNotNull(paymentMethod.providerPaymentMethodId),
+          // Square is card-only: it cannot store a bank account and charge it
+          // later, so an ACH row here could never be charged.
+          eq(paymentMethod.type, 'card'),
+        ))
+        .limit(10);
+
+      const matches: SavedPaymentMethodMatch[] = rows
+        .filter(r => r.customerId && r.paymentMethodId)
+        .map(r => ({
+          matchToken: signMatchToken({
+            orgId,
+            customerId: r.customerId!,
+            customerPaymentMethodId: r.paymentMethodId!,
+            paymentMethodType: 'card',
+            cardMaskedNumber: r.last4 ?? undefined,
+          }),
+          fullName: `${r.firstName} ${r.lastName}`.trim(),
+        }));
+
+      return NextResponse.json<SavedPaymentMethodSearchResponse>({ matches });
+    }
+    catch (err) {
+      console.error('[payment/saved-payment-method/search] Square lookup failed:', err);
+      return NextResponse.json<SavedPaymentMethodSearchResponse>(
+        { matches: [], error: 'Search failed' },
+        { status: 500 },
+      );
+    }
+  }
+
+  // ── IQPro ─────────────────────────────────────────────────────────────────
+  const iqproConfig = await resolveIQProConfig(orgId);
+  if (!iqproConfig) {
+    return NextResponse.json<SavedPaymentMethodSearchResponse>(
+      { matches: [], error: 'Payment processing is not configured' },
+      { status: 503 },
     );
   }
 
@@ -115,7 +178,8 @@ export async function GET(request: Request) {
         continue;
       }
       matches.push({
-        matchToken: signMatchToken(iqproConfig, {
+        matchToken: signMatchToken({
+          orgId,
           customerId: vm.customerId,
           customerPaymentMethodId: vm.customerPaymentMethodId,
           paymentMethodType: vm.paymentMethodType,

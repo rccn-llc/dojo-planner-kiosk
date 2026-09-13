@@ -77,7 +77,7 @@ interface LookupResult {
 
 export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberData }: MembershipFlowProps) {
   const [state, send] = useMembershipMachine();
-  const { slug: orgSlug } = useOrgSlug();
+  const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
   const [planPage, setPlanPage] = useState(0);
   const [successCountdown, setSuccessCountdown] = useState(60);
   const [lookupResults, setLookupResults] = useState<LookupResult[]>([]);
@@ -129,7 +129,12 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
     if (!state.matches('selectingProgram') || !state.context.isLoadingPrograms) {
       return;
     }
-    fetch('/api/programs')
+    // Wait for useOrgSlug to read window.location.search; without the slug
+    // this is a guaranteed 400 and the program list never loads.
+    if (!orgSlugResolved) {
+      return;
+    }
+    fetch(withOrgQuery('/api/programs', orgSlug))
       .then(r => r.json())
       .then((data) => {
         const programs = (data.programs ?? []).map((p: Record<string, unknown>) => ({
@@ -153,8 +158,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
         send({ type: 'PROGRAMS_LOADED', programs, plansByProgram });
       })
       .catch(() => send({ type: 'PROGRAMS_FAILED' }));
+  // `orgSlugResolved` is in the deps deliberately: if this state is entered
+  // before the slug resolves, the effect bails, and without a re-trigger the
+  // program list would never load.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value]);
+  }, [state.value, orgSlugResolved]);
 
   const dispatchMemberFound = (m: LookupResult) => {
     send({
@@ -186,7 +194,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       return;
     }
     const phone = state.context.memberLookupPhone;
-    fetch('/api/members/lookup', {
+    fetch(withOrgQuery('/api/members/lookup', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -235,7 +243,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
       send({ type: 'WAIVER_FAILED' });
       return;
     }
-    fetch('/api/waiver-content', {
+    fetch(withOrgQuery('/api/waiver-content', orgSlug), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planId }),
@@ -697,7 +705,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                   type="button"
                   onClick={() => setPlanPage(p => Math.max(0, p - 1))}
                   disabled={planPage === 0}
-                  className="cursor-pointer rounded-xl border-2 border-black px-6 py-3 text-lg font-bold disabled:opacity-30"
+                  className="cursor-pointer rounded-xl border-2 border-black bg-white px-6 py-3 text-lg font-bold text-black transition-colors hover:bg-gray-100 disabled:opacity-30"
                 >
                   ← Prev
                 </button>
@@ -712,7 +720,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                   type="button"
                   onClick={() => setPlanPage(p => Math.min(totalPlanPages - 1, p + 1))}
                   disabled={planPage === totalPlanPages - 1}
-                  className="cursor-pointer rounded-xl border-2 border-black px-6 py-3 text-lg font-bold disabled:opacity-30"
+                  className="cursor-pointer rounded-xl border-2 border-black bg-white px-6 py-3 text-lg font-bold text-black transition-colors hover:bg-gray-100 disabled:opacity-30"
                 >
                   Next →
                 </button>

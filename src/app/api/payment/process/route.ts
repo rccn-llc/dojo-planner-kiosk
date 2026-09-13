@@ -5,9 +5,10 @@ import { NextResponse } from 'next/server';
 import { catalogItem, catalogItemVariant } from '@/lib/catalogSchema';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendStoreOrderReceipt } from '@/lib/email';
-import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch, verifyMatchToken } from '@/lib/iqpro';
+import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
+import { verifyMatchToken } from '@/lib/matchToken';
 import { member, transaction } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { computeSquareFeeBreakdown } from '@/lib/squareFees';
@@ -168,7 +169,9 @@ export async function POST(request: Request) {
   try {
     // A Square org has no IQPro vault, so there is no signed token to verify;
     // the Square branch refuses `vaulted` outright.
-    payload = iqproConfig ? verifyMatchToken(iqproConfig, body.savedPaymentMatchToken) : null;
+    // Verified against THIS org: a token minted at another dojo has a valid
+    // signature but does not belong here.
+    payload = verifyMatchToken(orgId, body.savedPaymentMatchToken);
   }
   catch (err) {
     const message = err instanceof Error ? err.message : 'Invalid saved payment selection';
@@ -325,23 +328,20 @@ export async function POST(request: Request) {
   // `authoritativeBase`) is provider-neutral and has already run, and the
   // IQPro path below is left exactly as it was.
   //
-  // ⚠️ Card-only. Square cannot store a bank account and charge it later, and
-  // the vaulted path is IQPro-vault-specific (signed match tokens), so both
-  // are refused rather than silently mischarged.
+  // ⚠️ Card-only. Square cannot store a bank account and charge it later, so
+  // ACH is refused rather than silently mischarged.
   if (squareConfig) {
-    if (vaulted) {
-      return NextResponse.json<ProcessStoreOrderResult>(
-        { success: false, status: 'declined', error: 'Saved cards are not available for this organization yet.' },
-        { status: 400 },
-      );
-    }
     if (effectiveMethod !== 'card') {
       return NextResponse.json<ProcessStoreOrderResult>(
         { success: false, status: 'declined', error: 'This organization accepts card payments only.' },
         { status: 400 },
       );
     }
-    if (!body.cardToken) {
+    // A saved Square card charges by its `ccof:` card id in the same
+    // `source_id` field a fresh nonce uses, so the vaulted path needs no new
+    // Square capability — only a different id.
+    const squareSourceId = vaulted ? vaulted.customerPaymentMethodId : body.cardToken;
+    if (!squareSourceId) {
       return NextResponse.json<ProcessStoreOrderResult>(
         { success: false, status: 'declined', error: 'Card was not tokenized. Please re-enter your card.' },
         { status: 400 },
@@ -381,7 +381,8 @@ export async function POST(request: Request) {
       }
 
       const charge = await chargeSquareCard(squareConfig, {
-        sourceId: body.cardToken,
+        sourceId: squareSourceId,
+        ...(vaulted ? { customerId: vaulted.customerId } : {}),
         fees: serverFees,
         note: body.description || 'Store purchase',
         buyerEmail: body.email || undefined,
@@ -777,7 +778,14 @@ export async function POST(request: Request) {
         const rows = await db
           .select({ id: member.id, email: member.email, firstName: member.firstName, lastName: member.lastName })
           .from(member)
-          .where(eq(member.providerCustomerId, vaulted.customerId))
+          // ⚠️ Org-scoped. Filtering on providerCustomerId alone is a
+          // cross-tenant read: the column is unique per provider, not per
+          // deployment, so another org's member could match and receive this
+          // receipt. dojo-planner's equivalent scopes it for the same reason.
+          .where(and(
+            eq(member.organizationId, orgId),
+            eq(member.providerCustomerId, vaulted.customerId),
+          ))
           .limit(1);
         const m = rows[0];
         if (m) {
