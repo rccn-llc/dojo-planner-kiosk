@@ -9,8 +9,6 @@
  */
 
 import type { IQProConfig } from '@/lib/iqproConfig';
-import { Buffer } from 'node:buffer';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -621,86 +619,7 @@ export async function searchCustomersByPhone(config: IQProConfig, phone: string)
   return matches;
 }
 
-// ── Match token (HMAC envelope for vaulted-customer chooser) ─────────────────
-
-interface MatchTokenPayload {
-  customerId: string;
-  customerPaymentMethodId: string;
-  paymentMethodType: 'card' | 'ach';
-  cardMaskedNumber?: string;
-  exp: number;
-}
-
-const MATCH_TOKEN_TTL_MS = 5 * 60 * 1000;
-
-function getMatchTokenSecret(config: IQProConfig): string {
-  const dedicated = process.env.KIOSK_MATCH_TOKEN_SECRET;
-  if (dedicated) {
-    return dedicated;
-  }
-  // Falling back to the IQPro client secret couples two trust domains and means
-  // rotating the merchant credential silently invalidates in-flight match
-  // tokens. Tolerated only outside production — require a dedicated secret in
-  // prod so the HMAC key is independent of the payment credential.
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('KIOSK_MATCH_TOKEN_SECRET is required in production');
-  }
-  return config.clientSecret;
-}
-
-function base64UrlEncode(buf: Buffer): string {
-  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function base64UrlDecode(s: string): Buffer {
-  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
-  return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/') + pad, 'base64');
-}
-
-export function signMatchToken(config: IQProConfig, payload: Omit<MatchTokenPayload, 'exp'>): string {
-  const full: MatchTokenPayload = { ...payload, exp: Date.now() + MATCH_TOKEN_TTL_MS };
-  const body = base64UrlEncode(Buffer.from(JSON.stringify(full), 'utf8'));
-  const sig = base64UrlEncode(createHmac('sha256', getMatchTokenSecret(config)).update(body).digest());
-  return `${body}.${sig}`;
-}
-
-/**
- * Verify a signed match token.
- *
- * Returns `null` when the input is missing or not a string. Throws on a
- * present-but-invalid token.
- */
-export function verifyMatchToken(config: IQProConfig, token: unknown): MatchTokenPayload | null {
-  if (typeof token !== 'string' || token.length === 0) {
-    return null;
-  }
-  const parts = token.split('.');
-  if (parts.length !== 2) {
-    throw new Error('Invalid match token');
-  }
-  const body = parts[0];
-  const sig = parts[1];
-  if (!body || !sig) {
-    throw new Error('Invalid match token');
-  }
-  const expected = base64UrlEncode(createHmac('sha256', getMatchTokenSecret(config)).update(body).digest());
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    throw new Error('Invalid match token signature');
-  }
-  let payload: MatchTokenPayload;
-  try {
-    payload = JSON.parse(base64UrlDecode(body).toString('utf8')) as MatchTokenPayload;
-  }
-  catch {
-    throw new Error('Invalid match token body');
-  }
-  if (typeof payload.exp !== 'number' || Date.now() > payload.exp) {
-    throw new Error('Match token expired');
-  }
-  if (!payload.customerId || !payload.customerPaymentMethodId) {
-    throw new Error('Match token missing required fields');
-  }
-  return payload;
-}
+// Match-token signing moved to `lib/matchToken.ts`: it is provider-neutral
+// (the HMAC key is KIOSK_MATCH_TOKEN_SECRET, not a payment credential), and
+// keeping it here forced the whole saved-card flow to resolve an IQPro config
+// even for a Square org.

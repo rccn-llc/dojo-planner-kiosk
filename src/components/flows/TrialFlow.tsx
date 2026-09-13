@@ -34,12 +34,18 @@ interface DefaultTrialSelection {
 
 export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const [state, send] = useTrialMachine();
-  const { slug: orgSlug } = useOrgSlug();
+  const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
   const [defaultTrial, setDefaultTrial] = useState<DefaultTrialSelection | null>(null);
   const [createdMembers, setCreatedMembers] = useState<TrialCheckinMember[]>([]);
 
   // Load the first available trial program + plan once when the flow mounts
   useEffect(() => {
+    // Wait for useOrgSlug to finish reading window.location.search on the
+    // client. Without this we'd fire a guaranteed-400 request during SSR /
+    // first paint before the `?org=` query has been read.
+    if (!orgSlugResolved) {
+      return;
+    }
     fetch(withOrgQuery('/api/trial/programs', orgSlug))
       .then(r => r.json())
       .then((data: { programs?: Array<{ id: string; name: string; trialPlans: Array<{ id: string; name: string }> }> }) => {
@@ -55,7 +61,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         }
       })
       .catch(() => {});
-  }, [orgSlug]);
+  }, [orgSlug, orgSlugResolved]);
 
   // Track session IDs so effects re-run on each new session but not on re-renders
   const programsLoadedRef = useRef<string>('');
@@ -64,6 +70,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   // Load programs when entering selectingAge (re-fetches on each new session)
   useEffect(() => {
     if (!state.matches('selectingAge')) {
+      return;
+    }
+    // Same guard as the mount effect: without the slug this is a guaranteed
+    // 400, and marking the session loaded would stop it being retried.
+    if (!orgSlugResolved) {
       return;
     }
     if (programsLoadedRef.current === state.context.sessionId) {
@@ -81,8 +92,11 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
       .catch(() => {
         // Non-fatal — proceed without a pre-selected plan
       });
+  // `orgSlugResolved` is in the deps deliberately: if `selectingAge` is
+  // entered before the slug resolves, this effect bails, and without a
+  // re-trigger the programs would never load for that session.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.value]);
+  }, [state.value, orgSlugResolved]);
 
   const handleInputChange = (field: string, value: string) => {
     if (field === 'phoneNumber') {

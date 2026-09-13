@@ -62,6 +62,11 @@ export async function chargeSquareCard(
   config: SquareServerConfig,
   params: {
     sourceId: string;
+    /**
+     * Required when `sourceId` is a SAVED card (`ccof:` id) rather than a
+     * fresh nonce — Square rejects a stored-card charge with no customer.
+     */
+    customerId?: string;
     fees: FeeBreakdown;
     note?: string;
     buyerEmail?: string;
@@ -74,6 +79,7 @@ export async function chargeSquareCard(
       {
         idempotency_key: randomUUID(),
         source_id: params.sourceId,
+        ...(params.customerId ? { customer_id: params.customerId } : {}),
         location_id: config.locationId,
         amount_money: { amount: toMinorUnits(params.fees.amount), currency: 'USD' },
         ...(params.note ? { note: params.note.slice(0, 500) } : {}),

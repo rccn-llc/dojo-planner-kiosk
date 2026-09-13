@@ -394,13 +394,11 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: rawPhone }),
       }).then(r => r.json()),
-      // The saved-card path is IQPro-vault-only (signed match tokens). A Square
-      // org has no equivalent yet, so skip the lookup rather than offering a
-      // saved card the charge could not use. Square saved cards are B5k.
-      isCardOnlyProvider
-        ? Promise.resolve({ matches: [] as Array<{ matchToken: string; fullName: string }> })
-        : fetch(withOrgQuery(`/api/payment/saved-payment-method/search?phone=${encodeURIComponent(phone)}`, orgSlug))
-            .then(r => r.json() as Promise<{ matches?: Array<{ matchToken: string; fullName: string }>; error?: string }>),
+      // Saved cards work on BOTH providers now: the route branches internally,
+      // and a Square org's saved cards are found from local columns rather than
+      // a provider search.
+      fetch(withOrgQuery(`/api/payment/saved-payment-method/search?phone=${encodeURIComponent(phone)}`, orgSlug))
+        .then(r => r.json() as Promise<{ matches?: Array<{ matchToken: string; fullName: string }>; error?: string }>),
     ])
       .then(([memberRes, vaultRes]) => {
         if (memberRes.status === 'fulfilled') {

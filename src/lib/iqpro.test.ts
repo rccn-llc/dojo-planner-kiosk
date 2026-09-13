@@ -180,34 +180,3 @@ describe('getGatewayProcessors', () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
   });
 });
-
-describe('match token', () => {
-  it('signs and verifies a token round-trip using config.clientSecret', async () => {
-    const { signMatchToken, verifyMatchToken } = await import('./iqpro');
-    const config = makeConfig();
-    const token = signMatchToken(config, {
-      customerId: 'cust-1',
-      customerPaymentMethodId: 'pm-1',
-      paymentMethodType: 'card',
-    });
-    const payload = verifyMatchToken(config, token);
-    expect(payload?.customerId).toBe('cust-1');
-    expect(payload?.customerPaymentMethodId).toBe('pm-1');
-  });
-
-  it('rejects a token signed with a different clientSecret', async () => {
-    const { signMatchToken, verifyMatchToken } = await import('./iqpro');
-    const token = signMatchToken(makeConfig({ clientSecret: 'one' }), {
-      customerId: 'cust-1',
-      customerPaymentMethodId: 'pm-1',
-      paymentMethodType: 'card',
-    });
-    expect(() => verifyMatchToken(makeConfig({ clientSecret: 'two' }), token)).toThrow();
-  });
-
-  it('returns null for absent input (not an error)', async () => {
-    const { verifyMatchToken } = await import('./iqpro');
-    expect(verifyMatchToken(makeConfig(), undefined)).toBeNull();
-    expect(verifyMatchToken(makeConfig(), '')).toBeNull();
-  });
-});
