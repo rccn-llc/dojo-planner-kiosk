@@ -8,6 +8,8 @@ export interface StoreProductVariant {
   id: string;
   name: string;
   price: number;
+  /** Units left, or null when the item does not track inventory. */
+  stockQuantity: number | null;
 }
 
 export interface StoreProductResponse {
@@ -18,6 +20,15 @@ export interface StoreProductResponse {
   variants?: StoreProductVariant[];
   basePrice: number;
   priceRange?: { min: number; max: number };
+  /** False for made-to-order / unlimited items; their stock is always null. */
+  trackInventory: boolean;
+  /** Units of this product a single order may contain. */
+  maxPerOrder: number;
+  /**
+   * Total units purchasable right now across every variant, or null when
+   * inventory is not tracked. Zero means the whole product is sold out.
+   */
+  availableStock: number | null;
 }
 
 export async function GET(request: Request) {
@@ -97,10 +108,16 @@ export async function GET(request: Request) {
 
       const imageUrls = sortedImages.map(img => img.url);
 
+      // `track_inventory` defaults to true upstream, so a NULL here means the
+      // planner never set it — treat that as "tracked", the safe reading. The
+      // unsafe reading sells stock the dojo does not have.
+      const tracksInventory = item.trackInventory !== false;
+
       const mappedVariants: StoreProductVariant[] = itemVariants.map(v => ({
         id: v.id,
         name: v.name,
         price: v.price,
+        stockQuantity: tracksInventory ? v.stockQuantity ?? 0 : null,
       }));
 
       const priceRange = mappedVariants.length > 0
@@ -110,6 +127,16 @@ export async function GET(request: Request) {
           }
         : undefined;
 
+      let availableStock: number | null = null;
+      if (tracksInventory) {
+        availableStock = mappedVariants.length > 0
+          ? mappedVariants.reduce((sum, v) => sum + Math.max(0, v.stockQuantity ?? 0), 0)
+          // A variant-less tracked item has nowhere to store a count in this
+          // schema (stock lives on the variant row). Treat it as available
+          // rather than hiding a product the dojo does stock.
+          : null;
+      }
+
       return {
         id: item.id,
         name: item.name,
@@ -118,6 +145,9 @@ export async function GET(request: Request) {
         variants: mappedVariants.length > 0 ? mappedVariants : undefined,
         basePrice: item.basePrice,
         priceRange,
+        trackInventory: tracksInventory,
+        maxPerOrder: item.maxPerOrder ?? 10,
+        availableStock,
       };
     });
 

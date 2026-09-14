@@ -3,9 +3,11 @@
 import type { CheckinClass, CheckinMember } from '../../machines/types';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useState } from 'react';
+import { useIdleTimeout } from '../../hooks/useIdleTimeout';
 import { useCheckinMachine } from '../../hooks/useKioskMachines';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { IdleWarning } from '../IdleWarning';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { StepIndicator } from '../StepIndicator';
 
@@ -40,6 +42,25 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
   const [state, send] = useCheckinMachine();
   const { slug: orgSlug } = useOrgSlug();
   const [phoneInput, setPhoneInput] = useState('');
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
+
+  // Idle session reset. The check-in machine has no dedicated `timeout` state;
+  // `idle` IS its clean slate and its entry action wipes the context, so RESET
+  // is the equivalent transition. Suspended on the terminal screens, which the
+  // flow already returns home from on its own timers.
+  const idleEnabled = !state.matches('idle')
+    && !state.matches('processingCheckin')
+    && !state.matches('checkinComplete');
+
+  const { reset: resetIdle } = useIdleTimeout({
+    enabled: idleEnabled,
+    onWarn: setIdleSeconds,
+    onTimeout: () => {
+      setIdleSeconds(null);
+      setPhoneInput('');
+      send({ type: 'RESET' });
+    },
+  });
 
   // If the caller supplied already-known members (e.g. from a just-created trial),
   // skip the phone lookup and jump straight to member selection / class selection.
@@ -470,6 +491,14 @@ export function CheckinFlow({ onComplete, onBack, onSignUp, preseededMembers }: 
 
         </div>
       </main>
+
+      <IdleWarning
+        secondsRemaining={idleEnabled ? idleSeconds : null}
+        onStay={() => {
+          setIdleSeconds(null);
+          resetIdle();
+        }}
+      />
     </div>
   );
 }

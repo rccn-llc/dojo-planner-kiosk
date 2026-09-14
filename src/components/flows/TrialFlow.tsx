@@ -2,11 +2,14 @@
 
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useIdleTimeout } from '../../hooks/useIdleTimeout';
 import { useTrialMachine } from '../../hooks/useKioskMachines';
 import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { formatNameList, formatPhoneForDisplay, sanitizePhoneInput, todayLocalISO } from '../../lib/utils';
+import { FormErrorSummary } from '../FormErrorSummary';
+import { IdleWarning } from '../IdleWarning';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 import { SignatureCapture } from '../SignatureCapture';
@@ -37,6 +40,39 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
   const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
   const [defaultTrial, setDefaultTrial] = useState<DefaultTrialSelection | null>(null);
   const [createdMembers, setCreatedMembers] = useState<TrialCheckinMember[]>([]);
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
+
+  // Who the success screen should name. The server echoes back exactly the
+  // members it enrolled (the children on the youth flow, the adult otherwise);
+  // the context fallback keeps the copy correct if that list is ever absent.
+  const enrolledNames = useMemo(() => {
+    if (createdMembers.length > 0) {
+      return createdMembers.map(m => `${m.firstName} ${m.lastName}`.trim()).filter(Boolean);
+    }
+    if (state.context.ageGroup === 'youth') {
+      return state.context.children.map(c => `${c.firstName} ${c.lastName}`.trim()).filter(Boolean);
+    }
+    const adult = `${state.context.firstName} ${state.context.lastName}`.trim();
+    return adult ? [adult] : [];
+  }, [createdMembers, state.context.ageGroup, state.context.children, state.context.firstName, state.context.lastName]);
+
+  // Idle session reset. Suspended once the flow has left the data-entry steps:
+  // wiping a submit in flight, or a success screen the member is still reading,
+  // would be worse than leaving it up.
+  const idleEnabled = !state.matches('creatingTrial')
+    && !state.matches('success')
+    && !state.matches('timeout')
+    && !state.matches('selectingAge');
+
+  const { reset: resetIdle } = useIdleTimeout({
+    enabled: idleEnabled,
+    onWarn: setIdleSeconds,
+    onTimeout: () => {
+      setIdleSeconds(null);
+      setCreatedMembers([]);
+      send({ type: 'TIMEOUT' });
+    },
+  });
 
   // Load the first available trial program + plan once when the flow mounts
   useEffect(() => {
@@ -284,6 +320,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingYouthParentInfo') || state.matches('validatingYouthParent')) && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Please fill in your information</p>
+
+            <FormErrorSummary errors={state.context.errors} />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
 
               <div>
@@ -429,6 +467,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 label="Date of Birth"
                 error={state.context.errors?.parentDateOfBirth}
                 placeholder="Select date of birth"
+                maxDate={todayLocalISO()}
               />
 
             </div>
@@ -445,18 +484,9 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_PARENT' })}
-                disabled={
-                  state.context.isSubmitting
-                  || !state.context.parentFirstName?.trim()
-                  || !state.context.parentLastName?.trim()
-                  || !state.context.parentEmail?.trim()
-                  || !state.context.parentPhone?.trim()
-                  || !state.context.parentAddress?.trim()
-                  || !state.context.parentCity?.trim()
-                  || !state.context.parentState?.trim()
-                  || !state.context.parentZip?.trim()
-                  || !state.context.parentDateOfBirth?.trim()
-                }
+                // See the adult step: submit is always live so the machine can
+                // report which field is missing instead of silently blocking.
+                disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -470,6 +500,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingYouthChildInfo') || state.matches('validatingYouthChild')) && (
           <div className="w-full max-w-2xl">
             <p className="mb-6 text-center text-xl text-gray-500">Please fill in your child's information</p>
+
+            <FormErrorSummary errors={state.context.errors} />
 
             {state.context.children.length > 0 && (
               <div className="mb-6 rounded-2xl border border-gray-200 bg-gray-50 p-4">
@@ -527,6 +559,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 label="Child's Date of Birth"
                 error={state.context.errors?.currentChildDateOfBirth}
                 placeholder="Select date of birth"
+                maxDate={todayLocalISO()}
               />
             </div>
 
@@ -543,12 +576,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_YOUTH_CHILD' })}
-                disabled={
-                  state.context.isSubmitting
-                  || !state.context.currentChildFirstName?.trim()
-                  || !state.context.currentChildLastName?.trim()
-                  || !state.context.currentChildDateOfBirth?.trim()
-                }
+                disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -605,6 +633,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingInfo') || state.matches('validatingContact')) && (
           <div className="w-full max-w-4xl">
             <p className="mb-8 text-center text-xl text-gray-500">Please fill in your information</p>
+
+            <FormErrorSummary errors={state.context.errors} />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5">
 
               <div>
@@ -764,6 +794,7 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
                 label="Date of Birth"
                 error={state.context.errors?.dateOfBirth}
                 placeholder="Select date of birth"
+                maxDate={todayLocalISO()}
               />
 
             </div>
@@ -781,18 +812,12 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
-                disabled={
-                  state.context.isSubmitting
-                  || !state.context.firstName?.trim()
-                  || !state.context.lastName?.trim()
-                  || !state.context.email?.trim()
-                  || !state.context.phoneNumber?.trim()
-                  || !state.context.dateOfBirth?.trim()
-                  || !state.context.address?.trim()
-                  || !state.context.city?.trim()
-                  || !state.context.state?.trim()
-                  || !state.context.zip?.trim()
-                }
+                // Deliberately NOT disabled on missing fields. A greyed-out
+                // button tells the member nothing about WHICH field is wrong;
+                // letting the submit through routes it into the machine's
+                // validating state, which bounces straight back with per-field
+                // messages and red borders. Only an in-flight submit disables.
+                disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -806,6 +831,8 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         {(state.matches('collectingWaiver') || state.matches('validatingWaiver')) && (
           <div className="w-full max-w-4xl">
             <p className="mb-6 text-center text-xl text-gray-500">Please read and sign the forms below</p>
+
+            <FormErrorSummary errors={state.context.errors} />
 
             <div className="mb-6 max-h-72 overflow-y-auto rounded-2xl border-2 border-gray-300 bg-gray-50 p-8 text-base leading-relaxed text-gray-800">
               {state.context.isLoadingWaiver
@@ -881,11 +908,12 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_WAIVER' })}
-                disabled={
-                  state.context.isSubmitting
-                  || !state.context.waiverAgreed
-                  || !state.context.signature?.trim()
-                }
+                // Live even with the box unticked / signature blank: the
+                // machine's validatingWaiver state bounces back with
+                // "You must agree to the waiver to continue" and
+                // "Signature is required", which is what the member needs to
+                // see. A disabled button just looks broken.
+                disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-400"
               >
                 Continue Signup →
@@ -914,12 +942,36 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
             <div className="rounded-3xl border-2 border-black bg-white p-8 sm:p-12 md:p-16">
               <CheckCircleOutlineIcon sx={{ fontSize: 80, color: '#16a34a' }} className="mb-6" />
               <h2 className="mb-4 text-2xl font-bold text-black sm:text-3xl md:text-4xl">Welcome to the Dojo!</h2>
-              <p className="mb-2 text-xl text-gray-600">
-                Your free trial has been set up,
-                {' '}
-                <span className="font-semibold text-black">{state.context.firstName}</span>
-                !
-              </p>
+              {/* Name the people who were actually enrolled. On the youth flow
+                  that is the CHILDREN, not the parent whose contact details
+                  were collected — `context.firstName` is blank there, which is
+                  why this sentence used to trail off into nothing. Prefer the
+                  server's echoed member list, and fall back to the machine
+                  context so the copy still reads correctly if the response
+                  omitted it. */}
+              {enrolledNames.length > 0
+                ? (
+                    <p className="mb-2 text-xl text-gray-600">
+                      {enrolledNames.length === 1 ? 'Your free trial has been set up, ' : 'Free trials have been set up for '}
+                      <span className="font-semibold text-black">{formatNameList(enrolledNames)}</span>
+                      !
+                    </p>
+                  )
+                : (
+                    <p className="mb-2 text-xl text-gray-600">Your free trial has been set up!</p>
+                  )}
+              {enrolledNames.length > 1 && (
+                <div className="mx-auto mb-6 max-w-sm rounded-2xl border border-gray-200 bg-gray-50 p-4 text-left">
+                  <p className="mb-2 text-sm font-semibold tracking-wide text-gray-500 uppercase">Enrolled</p>
+                  {createdMembers.map(m => (
+                    <p key={m.memberId} className="text-lg text-black">
+                      {m.firstName}
+                      {' '}
+                      {m.lastName}
+                    </p>
+                  ))}
+                </div>
+              )}
               <p className="mb-10 text-lg text-gray-500">
                 Check your email for next steps. We look forward to training with you.
               </p>
@@ -982,6 +1034,14 @@ export function TrialFlow({ onComplete, onBack, onCheckIn }: TrialFlowProps) {
         )}
 
       </main>
+
+      <IdleWarning
+        secondsRemaining={idleEnabled ? idleSeconds : null}
+        onStay={() => {
+          setIdleSeconds(null);
+          resetIdle();
+        }}
+      />
     </div>
   );
 }

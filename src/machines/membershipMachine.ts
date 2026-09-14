@@ -1,6 +1,6 @@
 import type { MembershipContext, MembershipEvent } from './types';
 import { assign, createMachine } from 'xstate';
-import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
+import { dateOfBirthError, generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -29,12 +29,13 @@ function validateContactInfo(context: MembershipContext): Record<string, string>
     errors.dateOfBirth = 'Date of birth is required';
   }
   else {
-    const dob = new Date(context.dateOfBirth);
-    if (Number.isNaN(dob.getTime())) {
-      errors.dateOfBirth = 'Please enter a valid date';
-    }
-    else if (dob > new Date()) {
-      errors.dateOfBirth = 'Date of birth cannot be in the future';
+    // Shared with the trial flow via [[utils]]. The previous inline check used
+    // `new Date('YYYY-MM-DD')`, which JS parses as UTC midnight — so a kiosk
+    // west of UTC compared against a local `new Date()` and could accept a date
+    // that is still in the future locally.
+    const dobError = dateOfBirthError(context.dateOfBirth);
+    if (dobError) {
+      errors.dateOfBirth = dobError;
     }
   }
   if (!context.address?.trim()) {
@@ -101,6 +102,65 @@ const emptyContext: MembershipContext = {
   sessionId: '',
 };
 
+/**
+ * True when the member is under 18 as of today, based on their date of birth.
+ * Mirrors the same computation MembershipFlow does for its guardian fields.
+ */
+function isMinor(dateOfBirth: string): boolean {
+  if (!dateOfBirth?.trim()) {
+    return false;
+  }
+  // Parse as LOCAL midday so the date is not shifted by the timezone offset.
+  const birth = new Date(`${dateOfBirth}T12:00:00`);
+  if (Number.isNaN(birth.getTime())) {
+    return false;
+  }
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const monthDiff = today.getMonth() - birth.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+    age--;
+  }
+  return age < 18;
+}
+
+/**
+ * Validation for the commitment / waiver step.
+ *
+ * ⚠️ This step previously had NO validator: the only thing stopping an
+ * unsigned, unagreed submission was a `disabled` attribute on the button, and
+ * the machine's guard silently swallowed the event when it did fire. So the
+ * member got a dead button and no message. These messages are what the step now
+ * reports instead.
+ */
+function validateCommitment(context: MembershipContext): Record<string, string> {
+  const errors: Record<string, string> = {};
+
+  if (!context.hasAgreedToCommitment) {
+    errors.hasAgreedToCommitment = 'You must agree to the terms to continue';
+  }
+  if (!context.waiverSignature?.trim()) {
+    errors.waiverSignature = 'Signature is required';
+  }
+
+  if (isMinor(context.dateOfBirth)) {
+    if (!context.guardianFirstName?.trim()) {
+      errors.guardianFirstName = 'Parent/guardian first name is required';
+    }
+    if (!context.guardianLastName?.trim()) {
+      errors.guardianLastName = 'Parent/guardian last name is required';
+    }
+    if (!context.guardianEmail?.trim()) {
+      errors.guardianEmail = 'Parent/guardian email is required';
+    }
+    else if (!isValidEmail(context.guardianEmail)) {
+      errors.guardianEmail = 'Please enter a valid email for the parent/guardian';
+    }
+  }
+
+  return errors;
+}
+
 // ── Guards ────────────────────────────────────────────────────────────────────
 
 const membershipGuards = {
@@ -110,8 +170,8 @@ const membershipGuards = {
   isPlanSelected: ({ context }: { context: MembershipContext }) =>
     !!context.selectedPlan,
 
-  hasAgreedToCommitment: ({ context }: { context: MembershipContext }) =>
-    !!context.hasAgreedToCommitment,
+  isCommitmentValid: ({ context }: { context: MembershipContext }) =>
+    Object.keys(validateCommitment(context)).length === 0,
 };
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -196,7 +256,11 @@ export const membershipMachine = createMachine({
 
     // ── Step 3: Member info form ──────────────────────────────────────────────
     collectingInfo: {
-      entry: assign({ isSubmitting: false, errors: {} as Record<string, string> }),
+      // ⚠️ Do NOT clear `errors` here. validatingContact bounces back into this
+      // state carrying the messages it just computed; an entry-level wipe would
+      // erase them before they render, leaving a blocked step with nothing to
+      // show. Errors clear per-field on UPDATE_FIELD and wholesale on RESET.
+      entry: assign({ isSubmitting: false }),
 
       on: {
         UPDATE_FIELD: {
@@ -280,7 +344,11 @@ export const membershipMachine = createMachine({
 
     // ── Step 4: Commitment / waiver ───────────────────────────────────────────
     reviewingCommitment: {
-      entry: assign({ hasAgreedToCommitment: false, isLoadingWaiver: true }),
+      entry: assign({
+        hasAgreedToCommitment: false,
+        isLoadingWaiver: true,
+        errors: {} as Record<string, string>,
+      }),
 
       on: {
         WAIVER_LOADED: {
@@ -294,15 +362,26 @@ export const membershipMachine = createMachine({
           actions: assign({ isLoadingWaiver: false }),
         },
         UPDATE_FIELD: {
-          actions: assign(({ event, context }) => ({
-            ...context,
-            [event.field]: event.value,
-          })),
+          actions: assign(({ event, context }) => {
+            const newErrors = { ...context.errors };
+            delete newErrors[event.field];
+            return { ...context, [event.field]: event.value, errors: newErrors };
+          }),
         },
-        SUBMIT_COMMITMENT: {
-          target: 'collectingPayment',
-          guard: 'hasAgreedToCommitment',
-        },
+        SUBMIT_COMMITMENT: [
+          {
+            target: 'collectingPayment',
+            guard: 'isCommitmentValid',
+            actions: assign({ errors: {} as Record<string, string> }),
+          },
+          {
+            // Stay put, but SAY WHY. Without this branch the event was
+            // swallowed by the guard and the screen simply did not move.
+            actions: assign(({ context }) => ({
+              errors: validateCommitment(context),
+            })),
+          },
+        ],
         BACK: 'collectingInfo',
         TIMEOUT: 'timeout',
         RESET: 'selectingProgram',

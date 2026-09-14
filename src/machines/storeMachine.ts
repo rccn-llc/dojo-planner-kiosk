@@ -1,4 +1,4 @@
-import type { CartItem, StoreContext, StoreEvent } from './types';
+import type { CartItem, StoreContext, StoreEvent, StoreProduct } from './types';
 import { assign, createMachine } from 'xstate';
 import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
@@ -49,6 +49,46 @@ function validateCheckout(context: StoreContext): Record<string, string> {
   }
 
   return errors;
+}
+
+// ── Inventory ─────────────────────────────────────────────────────────────────
+
+/**
+ * Units of `variantId` (or the product as a whole) that may still be bought,
+ * or `null` when this item does not track inventory and is effectively
+ * unlimited.
+ */
+export function availableUnits(
+  product: StoreProduct | null,
+  variantId: string,
+): number | null {
+  if (!product || !product.trackInventory) {
+    return null;
+  }
+  if (variantId) {
+    const variant = product.variants?.find(v => v.id === variantId);
+    return Math.max(0, variant?.stockQuantity ?? 0);
+  }
+  // No variant chosen yet: report the product-wide figure so a fully sold-out
+  // product can be blocked before the member picks a size.
+  return product.availableStock === null ? null : Math.max(0, product.availableStock);
+}
+
+/**
+ * Units of a cart line still addable, given what is already in the cart. The
+ * cart total matters: adding 3 then 3 more of a 5-in-stock item must fail on
+ * the second add, not silently make 6.
+ */
+function remainingUnits(context: StoreContext, variantId: string): number | null {
+  const { selectedProduct, cartItems } = context;
+  const stock = availableUnits(selectedProduct, variantId);
+  if (stock === null || !selectedProduct) {
+    return null;
+  }
+  const inCart = cartItems
+    .filter(item => item.productId === selectedProduct.id && item.variantId === (variantId || undefined))
+    .reduce((sum, item) => sum + item.quantity, 0);
+  return Math.max(0, stock - inCart);
 }
 
 // ── Empty context ─────────────────────────────────────────────────────────────
@@ -109,6 +149,19 @@ const storeGuards = {
 
   hasVariantsAndNoneSelected: ({ context }: { context: StoreContext }) =>
     !!(context.selectedProduct?.variants?.length && !context.selectedVariantId),
+
+  // Sold out: nothing left of this variant (or of the product, before a variant
+  // is picked). Ordered BEFORE the happy path so it wins.
+  isSelectionOutOfStock: ({ context }: { context: StoreContext }) => {
+    const remaining = remainingUnits(context, context.selectedVariantId);
+    return remaining !== null && remaining <= 0;
+  },
+
+  // More requested than is left on the shelf.
+  exceedsAvailableStock: ({ context }: { context: StoreContext }) => {
+    const remaining = remainingUnits(context, context.selectedVariantId);
+    return remaining !== null && context.selectedQuantity > remaining;
+  },
 };
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -200,14 +253,31 @@ export const storeMachine = createMachine({
       on: {
         BACK_TO_BROWSE: 'browsing',
         SELECT_VARIANT: {
-          actions: assign(({ event, context }) => ({
-            selectedVariantId: event.variantId,
-            errors: { ...context.errors, selectedVariantId: '' },
-          })),
+          actions: assign(({ event, context }) => {
+            const nextErrors = { ...context.errors };
+            delete nextErrors.selectedVariantId;
+            // A different size may well be in stock; carrying the old sold-out
+            // message over would be wrong.
+            delete nextErrors.stock;
+            // Reset the quantity: the previous variant's stock ceiling has no
+            // bearing on this one.
+            return { selectedVariantId: event.variantId, selectedQuantity: 1, errors: nextErrors };
+          }),
         },
         UPDATE_QUANTITY: {
-          actions: assign({
-            selectedQuantity: ({ event }) => Math.max(1, event.quantity),
+          // Clamp to what's actually on the shelf (and to the per-order cap) so
+          // the stepper cannot be walked past the stock level.
+          actions: assign(({ event, context }) => {
+            const remaining = remainingUnits(context, context.selectedVariantId);
+            const perOrderCap = context.selectedProduct?.maxPerOrder ?? Number.POSITIVE_INFINITY;
+            const ceiling = Math.min(
+              remaining === null ? Number.POSITIVE_INFINITY : remaining,
+              perOrderCap,
+            );
+            const wanted = Math.max(1, event.quantity);
+            return {
+              selectedQuantity: Number.isFinite(ceiling) ? Math.min(wanted, Math.max(1, ceiling)) : wanted,
+            };
           }),
         },
         ADD_TO_CART: [
@@ -216,6 +286,30 @@ export const storeMachine = createMachine({
             guard: 'hasVariantsAndNoneSelected',
             actions: assign({
               errors: { selectedVariantId: 'Please select an option' } as Record<string, string>,
+            }),
+          },
+          // Sold out — refuse. This is the control that was missing entirely:
+          // the store had no stock concept, so out-of-stock belts and mouth
+          // guards went into the cart and all the way through checkout.
+          {
+            guard: 'isSelectionOutOfStock',
+            actions: assign({
+              errors: { stock: 'This item is out of stock.' } as Record<string, string>,
+            }),
+          },
+          // Partially available — tell them how many are left instead of
+          // quietly trimming the quantity behind their back.
+          {
+            guard: 'exceedsAvailableStock',
+            actions: assign(({ context }) => {
+              const remaining = remainingUnits(context, context.selectedVariantId) ?? 0;
+              return {
+                errors: {
+                  stock: remaining === 1
+                    ? 'Only 1 left in stock.'
+                    : `Only ${remaining} left in stock.`,
+                } as Record<string, string>,
+              };
             }),
           },
           // Happy path: add/merge item into cart and go to cart
@@ -287,11 +381,16 @@ export const storeMachine = createMachine({
           })),
         },
         UPDATE_FIELD: {
-          // Used for discount code input
-          actions: assign(({ event, context }) => ({
-            ...context,
-            [event.field]: event.value,
-          })),
+          // Used for discount code input. Editing the code clears the previous
+          // rejection message — leaving "This discount code has expired" under
+          // a freshly-typed code reads as if the new one failed too.
+          actions: assign(({ event, context }) => {
+            const nextErrors = { ...context.errors };
+            if (event.field === 'discountCode') {
+              delete nextErrors.discountCode;
+            }
+            return { ...context, [event.field]: event.value, errors: nextErrors };
+          }),
         },
         APPLY_DISCOUNT: 'applyingDiscount',
         PROCEED_TO_CHECKOUT: {
@@ -329,10 +428,13 @@ export const storeMachine = createMachine({
 
     // ── Checkout ──────────────────────────────────────────────────────────────
     checkout: {
-      entry: assign({
-        isSubmitting: false,
-        errors: {} as Record<string, string>,
-      }),
+      // ⚠️ Do NOT clear `errors` here. Two paths re-enter this state carrying
+      // messages that must survive: validatingCheckout bounces back with its
+      // per-field validation, and the fee-calculation failure writes
+      // `errors.fees` — the one thing that explains a permanently-disabled
+      // "Place order". Wiping on entry erased both. Errors clear per-field on
+      // UPDATE_FIELD and wholesale on RESET.
+      entry: assign({ isSubmitting: false }),
 
       on: {
         BACK_TO_CART: 'viewingCart',
@@ -418,16 +520,26 @@ export const storeMachine = createMachine({
           }),
         },
         CALCULATE_FEES_START: {
-          actions: assign({
-            isCalculatingFees: true,
-            feeBreakdown: null,
+          // Clear the previous failure as the retry begins — the checkout entry
+          // no longer wipes errors wholesale, so a stale
+          // "not configured" would otherwise outlive the condition that caused
+          // it (e.g. after switching from ACH back to card).
+          actions: assign(({ context }) => {
+            const nextErrors = { ...context.errors };
+            delete nextErrors.fees;
+            return { isCalculatingFees: true, feeBreakdown: null, errors: nextErrors };
           }),
         },
         CALCULATE_FEES_SUCCESS: {
-          actions: assign(({ event }) => ({
-            isCalculatingFees: false,
-            feeBreakdown: event.feeBreakdown,
-          })),
+          actions: assign(({ event, context }) => {
+            const nextErrors = { ...context.errors };
+            delete nextErrors.fees;
+            return {
+              isCalculatingFees: false,
+              feeBreakdown: event.feeBreakdown,
+              errors: nextErrors,
+            };
+          }),
         },
         CALCULATE_FEES_FAILURE: {
           actions: assign(({ event, context }) => ({
@@ -450,12 +562,23 @@ export const storeMachine = createMachine({
       on: {
         MEMBER_FOUND: {
           target: 'checkout',
-          actions: assign(({ event }) => ({
+          // Prefill everything the member record actually has. The lookup route
+          // has always returned email and the default address; the flow threw
+          // them away and sent `email: ''`, so a recognised member still had to
+          // retype their whole billing address. `??` rather than `||` so a
+          // legitimately empty stored field doesn't fall back oddly, and we
+          // keep what's already in the box when the record has nothing.
+          actions: assign(({ event, context }) => ({
             isSubmitting: false,
             firstName: event.firstName,
             lastName: event.lastName,
-            email: event.email,
+            email: event.email || context.email,
             phoneNumber: event.phone,
+            address: event.address || context.address,
+            addressLine2: event.addressLine2 || context.addressLine2,
+            city: event.city || context.city,
+            state: event.state || context.state,
+            zip: event.zip || context.zip,
             memberLookupNotFound: false,
           })),
         },

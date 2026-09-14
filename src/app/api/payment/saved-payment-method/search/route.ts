@@ -1,10 +1,11 @@
-import { and, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { searchCustomersByPhone } from '@/lib/iqpro';
 import { resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
 import { signMatchToken } from '@/lib/matchToken';
 import { member, paymentMethod } from '@/lib/memberSchema';
+import { phoneDigitsMatch } from '@/lib/phoneQuery';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 import { isValidPhoneNumber, sanitizePhoneInput } from '@/lib/utils';
@@ -90,13 +91,9 @@ export async function GET(request: Request) {
         .innerJoin(paymentMethod, eq(paymentMethod.memberId, member.id))
         .where(and(
           eq(member.organizationId, orgId),
-          // Phones are stored in three shapes historically; match all of
-          // them, same as /api/members/lookup does.
-          or(
-            eq(member.phone, phone),
-            eq(member.phone, `+1${phone}`),
-            eq(member.phone, `(${phone.slice(0, 3)}) ${phone.slice(3, 6)}-${phone.slice(6)}`),
-          ),
+          // Digit-normalized comparison — see [[phoneQuery]]. Enumerating a
+          // few historical formats missed every other shape in the table.
+          phoneDigitsMatch(member.phone, phone),
           isNotNull(member.providerCustomerId),
           isNotNull(paymentMethod.providerPaymentMethodId),
           // Square is card-only: it cannot store a bank account and charge it

@@ -1,6 +1,6 @@
 import type { TrialContext, TrialEvent } from './types';
 import { assign, createMachine } from 'xstate';
-import { generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
+import { dateOfBirthError, generateSessionId, isValidEmail, isValidPhoneNumber } from '../lib/utils';
 import { KioskAuditService } from '../services/audit';
 
 // Validation for contact / details form
@@ -42,6 +42,12 @@ function validateContactInfo(context: TrialContext): Record<string, string> {
   }
   if (!context.dateOfBirth?.trim()) {
     errors.dateOfBirth = 'Date of birth is required';
+  }
+  else {
+    const dobError = dateOfBirthError(context.dateOfBirth);
+    if (dobError) {
+      errors.dateOfBirth = dobError;
+    }
   }
 
   return errors;
@@ -87,6 +93,12 @@ function validateYouthParent(context: TrialContext): Record<string, string> {
   if (!context.parentDateOfBirth?.trim()) {
     errors.parentDateOfBirth = 'Date of birth is required';
   }
+  else {
+    const dobError = dateOfBirthError(context.parentDateOfBirth);
+    if (dobError) {
+      errors.parentDateOfBirth = dobError;
+    }
+  }
 
   return errors;
 }
@@ -102,6 +114,12 @@ function validateYouthChild(context: TrialContext): Record<string, string> {
   }
   if (!context.currentChildDateOfBirth?.trim()) {
     errors.currentChildDateOfBirth = 'Date of birth is required';
+  }
+  else {
+    const dobError = dateOfBirthError(context.currentChildDateOfBirth);
+    if (dobError) {
+      errors.currentChildDateOfBirth = dobError;
+    }
   }
   return errors;
 }
@@ -256,7 +274,13 @@ export const trialMachine = createMachine({
 
     // Youth Step 2 – Parent/Guardian details
     collectingYouthParentInfo: {
-      entry: assign({ errors: {} as Record<string, string>, isSubmitting: false }),
+      // ⚠️ Do NOT clear `errors` here. This state is re-entered by the
+      // validating state bouncing back with the messages it just computed, so
+      // an entry-level wipe would erase them before they ever render — which is
+      // precisely why a blocked step used to say nothing. Errors are cleared
+      // per-field as the member edits (see UPDATE_FIELD), and wholesale on
+      // RESET via the `selectingAge` entry.
+      entry: assign({ isSubmitting: false }),
 
       on: {
         UPDATE_FIELD: {
@@ -294,7 +318,13 @@ export const trialMachine = createMachine({
 
     // Youth Step 3 – Child details
     collectingYouthChildInfo: {
-      entry: assign({ errors: {} as Record<string, string>, isSubmitting: false }),
+      // ⚠️ Do NOT clear `errors` here. This state is re-entered by the
+      // validating state bouncing back with the messages it just computed, so
+      // an entry-level wipe would erase them before they ever render — which is
+      // precisely why a blocked step used to say nothing. Errors are cleared
+      // per-field as the member edits (see UPDATE_FIELD), and wholesale on
+      // RESET via the `selectingAge` entry.
+      entry: assign({ isSubmitting: false }),
 
       on: {
         UPDATE_FIELD: {
@@ -417,8 +447,10 @@ export const trialMachine = createMachine({
 
     // Step 3 – Waiver & Agreement (adult) / Step 4 (youth)
     collectingWaiver: {
+      // Same reasoning as the collecting* states above: clearing `errors` on
+      // entry would wipe the "You must agree to the waiver" / "Signature is
+      // required" messages that validatingWaiver just wrote on its way back.
       entry: assign(({ context }) => ({
-        errors: {} as Record<string, string>,
         // Only fetch if we don't already have content (avoid re-fetch on BACK navigation)
         isLoadingWaiver: !context.waiverContent,
       })),

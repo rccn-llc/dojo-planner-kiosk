@@ -9,12 +9,25 @@ import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
 import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { useCardTokenizer } from '../../hooks/useCardTokenizer';
+import { useIdleTimeout } from '../../hooks/useIdleTimeout';
 import { useStoreMachine } from '../../hooks/useKioskMachines';
 import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
 import { formatPhoneForDisplay, isValidEmail, isValidPhoneNumber, sanitizePhoneInput } from '../../lib/utils';
+import { availableUnits } from '../../machines/storeMachine';
+import { IdleWarning } from '../IdleWarning';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
+
+// ── Stock helpers ─────────────────────────────────────────────────────────────
+
+/** At or below this many units left, the detail page nudges with a count. */
+const LOW_STOCK_THRESHOLD = 5;
+
+/** True when an inventory-tracked product has nothing left across any variant. */
+function isProductSoldOut(product: StoreProduct): boolean {
+  return product.trackInventory && product.availableStock !== null && product.availableStock <= 0;
+}
 
 // ── Price helpers ─────────────────────────────────────────────────────────────
 
@@ -90,7 +103,26 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
   // Mirrors capturedTokenRef.current.firstSix in state so the fee-calc effect
   // re-runs once a real card BIN is available and we can drop the placeholder.
   const [capturedFirstSix, setCapturedFirstSix] = useState<string>('');
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
   const { slug: orgSlug, resolved: orgSlugResolved } = useOrgSlug();
+
+  // Idle session reset. Held off while a charge is in flight or on the terminal
+  // screens: timing out mid-payment could abandon a transaction the gateway has
+  // already taken, and the success screen runs its own 60s countdown.
+  const idleEnabled = state.matches('viewingProduct')
+    || state.matches('viewingCart')
+    || state.matches('applyingDiscount')
+    || state.matches('checkout')
+    || state.matches('lookingUpMember');
+
+  const { reset: resetIdle } = useIdleTimeout({
+    enabled: idleEnabled,
+    onWarn: setIdleSeconds,
+    onTimeout: () => {
+      setIdleSeconds(null);
+      send({ type: 'TIMEOUT' });
+    },
+  });
 
   // Fetch tokenization config when entering checkout
   useEffect(() => {
@@ -359,11 +391,16 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     })
       .then(r => r.json())
       .then((data) => {
-        if (data.valid) {
-          send({ type: 'DISCOUNT_APPLIED', discountAmount: data.discountAmount });
+        // Belt and braces against the "$NaN" report: the server now always
+        // sends a number for a valid code, but a non-numeric value here must
+        // degrade to a clear rejection rather than propagate NaN into every
+        // total downstream.
+        const amount = Number(data.discountAmount);
+        if (data.valid && Number.isFinite(amount) && amount > 0) {
+          send({ type: 'DISCOUNT_APPLIED', discountAmount: amount });
         }
         else {
-          send({ type: 'DISCOUNT_FAILED', error: data.error ?? 'Invalid coupon' });
+          send({ type: 'DISCOUNT_FAILED', error: data.error ?? 'Invalid discount code' });
         }
       })
       .catch(() => send({ type: 'DISCOUNT_FAILED', error: 'Failed to validate coupon' }));
@@ -402,15 +439,35 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     ])
       .then(([memberRes, vaultRes]) => {
         if (memberRes.status === 'fulfilled') {
-          const data = memberRes.value as { found?: boolean; members?: Array<{ firstName: string; lastName: string }> };
+          const data = memberRes.value as {
+            found?: boolean;
+            members?: Array<{
+              firstName: string;
+              lastName: string;
+              email: string | null;
+              address: string | null;
+              addressLine2: string | null;
+              city: string | null;
+              state: string | null;
+              zip: string | null;
+            }>;
+          };
           if (data.found && data.members && data.members.length > 0) {
-            const m = data.members[0];
+            const m = data.members[0]!;
             send({
               type: 'MEMBER_FOUND',
-              firstName: m!.firstName,
-              lastName: m!.lastName,
-              email: '',
+              firstName: m.firstName,
+              lastName: m.lastName,
+              // The route returns these; the flow used to discard them and
+              // hard-code an empty email, leaving a known member to retype
+              // their address and email on every purchase.
+              email: m.email ?? '',
               phone: rawPhone,
+              address: m.address ?? '',
+              addressLine2: m.addressLine2 ?? '',
+              city: m.city ?? '',
+              state: m.state ?? '',
+              zip: m.zip ?? '',
             });
           }
           else {
@@ -593,6 +650,32 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
     return 'Shop';
   };
 
+  // ── Derived stock ───────────────────────────────────────────────────────────
+  // Units left for whatever is currently selected on the detail page, minus
+  // what is already sitting in the cart — null when inventory is untracked.
+  const selectionStock = (() => {
+    const stock = availableUnits(state.context.selectedProduct, state.context.selectedVariantId);
+    if (stock === null || !state.context.selectedProduct) {
+      return null;
+    }
+    const inCart = state.context.cartItems
+      .filter(item => item.productId === state.context.selectedProduct!.id
+        && item.variantId === (state.context.selectedVariantId || undefined))
+      .reduce((sum, item) => sum + item.quantity, 0);
+    return Math.max(0, stock - inCart);
+  })();
+
+  // Upper bound for the quantity stepper: the lesser of remaining stock and the
+  // product's per-order cap.
+  const quantityCeiling = (() => {
+    const perOrder = state.context.selectedProduct?.maxPerOrder ?? null;
+    if (selectionStock === null && perOrder === null) {
+      return null;
+    }
+    const bounds = [selectionStock, perOrder].filter((n): n is number => n !== null);
+    return bounds.length > 0 ? Math.min(...bounds) : null;
+  })();
+
   // ── Derived pricing ─────────────────────────────────────────────────────────
   const subtotal = calculateSubtotal(state.context.cartItems);
   const feeBreakdown = state.context.feeBreakdown;
@@ -659,27 +742,49 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   )
                 : (
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-6 lg:grid-cols-3">
-                      {state.context.products.map((product: StoreProduct) => (
-                        <button
-                          type="button"
-                          key={product.id}
-                          onClick={() => send({ type: 'VIEW_PRODUCT', product })}
-                          className="cursor-pointer rounded-3xl bg-white p-6 text-left shadow-md transition-all hover:scale-105 hover:shadow-lg"
-                        >
-                          <div className="relative mb-4 aspect-square w-full overflow-hidden rounded-2xl bg-gray-200">
-                            <ProductImage
-                              src={product.images[0]}
-                              alt={product.name}
-                            />
-                          </div>
-                          <h3 className="text-xl font-bold text-black">{product.name}</h3>
-                          <p className="mt-1 text-lg text-gray-600">
-                            {product.priceRange
-                              ? `${formatCurrency(product.priceRange.min)} – ${formatCurrency(product.priceRange.max)}`
-                              : formatCurrency(product.basePrice)}
-                          </p>
-                        </button>
-                      ))}
+                      {state.context.products.map((product: StoreProduct) => {
+                        const soldOut = isProductSoldOut(product);
+                        return (
+                          <button
+                            type="button"
+                            key={product.id}
+                            onClick={() => send({ type: 'VIEW_PRODUCT', product })}
+                            // Sold-out products stay visible but unopenable —
+                            // hiding them makes the shelf look wrong to staff
+                            // who know the item exists.
+                            disabled={soldOut}
+                            aria-disabled={soldOut}
+                            className={`rounded-3xl bg-white p-6 text-left shadow-md transition-all ${
+                              soldOut
+                                ? 'cursor-not-allowed opacity-60'
+                                : 'cursor-pointer hover:scale-105 hover:shadow-lg'
+                            }`}
+                          >
+                            <div className="relative mb-4 aspect-square w-full overflow-hidden rounded-2xl bg-gray-200">
+                              <ProductImage
+                                src={product.images[0]}
+                                alt={product.name}
+                              />
+                              {soldOut && (
+                                <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+                                  <span className="rounded-full bg-black px-5 py-2 text-base font-bold tracking-wide text-white uppercase">
+                                    Out of stock
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                            <h3 className="text-xl font-bold text-black">{product.name}</h3>
+                            <p className="mt-1 text-lg text-gray-600">
+                              {product.priceRange
+                                ? `${formatCurrency(product.priceRange.min)} – ${formatCurrency(product.priceRange.max)}`
+                                : formatCurrency(product.basePrice)}
+                            </p>
+                            {soldOut && (
+                              <p className="mt-1 text-base font-semibold text-red-600">Out of stock</p>
+                            )}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
           </div>
@@ -728,7 +833,12 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       placeholder="Choose an option"
                       options={state.context.selectedProduct.variants.map(v => ({
                         value: v.id,
-                        label: `${v.name} — ${formatCurrency(v.price)}`,
+                        // Name the sold-out sizes rather than dropping them:
+                        // "where's the Large?" is a worse experience than
+                        // "Large — $29.99 (Out of stock)".
+                        label: v.stockQuantity !== null && v.stockQuantity <= 0
+                          ? `${v.name} — ${formatCurrency(v.price)} (Out of stock)`
+                          : `${v.name} — ${formatCurrency(v.price)}`,
                       }))}
                       error={state.context.errors?.selectedVariantId}
                     />
@@ -742,6 +852,29 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                   </p>
                 )}
 
+                {/* Stock status for the current selection */}
+                {selectionStock !== null && (
+                  selectionStock <= 0
+                    ? (
+                        <p className="rounded-xl border-2 border-red-300 bg-red-50 p-3 text-lg font-bold text-red-700">
+                          Out of stock
+                        </p>
+                      )
+                    : selectionStock <= LOW_STOCK_THRESHOLD
+                      ? (
+                          <p className="text-lg font-semibold text-orange-600">
+                            Only
+                            {' '}
+                            {selectionStock}
+                            {' '}
+                            left in stock
+                          </p>
+                        )
+                      : (
+                          <p className="text-lg font-semibold text-green-700">In stock</p>
+                        )
+                )}
+
                 {/* Quantity stepper */}
                 <div>
                   <p className={labelClass}>Quantity</p>
@@ -749,7 +882,8 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     <button
                       type="button"
                       onClick={() => send({ type: 'UPDATE_QUANTITY', quantity: state.context.selectedQuantity - 1 })}
-                      className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-xl border-2 border-black text-2xl font-bold text-black transition-colors hover:bg-gray-100"
+                      disabled={state.context.selectedQuantity <= 1}
+                      className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-xl border-2 border-black text-2xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       −
                     </button>
@@ -759,21 +893,27 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     <button
                       type="button"
                       onClick={() => send({ type: 'UPDATE_QUANTITY', quantity: state.context.selectedQuantity + 1 })}
-                      className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-xl border-2 border-black text-2xl font-bold text-black transition-colors hover:bg-gray-100"
+                      disabled={quantityCeiling !== null && state.context.selectedQuantity >= quantityCeiling}
+                      className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-xl border-2 border-black text-2xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       +
                     </button>
                   </div>
                 </div>
 
+                {state.context.errors?.stock && (
+                  <p role="alert" className="text-base font-semibold text-red-600">{state.context.errors.stock}</p>
+                )}
+
                 {/* Add to Cart */}
                 <button
                   type="button"
                   onClick={() => send({ type: 'ADD_TO_CART' })}
-                  className="min-h-16 w-full cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800"
+                  disabled={selectionStock !== null && selectionStock <= 0}
+                  className="min-h-16 w-full cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-300"
                 >
                   <ShoppingCartIcon sx={{ fontSize: 22, mr: 1 }} />
-                  Add to Cart
+                  {selectionStock !== null && selectionStock <= 0 ? 'Out of Stock' : 'Add to Cart'}
                 </button>
 
                 {/* Description */}
@@ -869,25 +1009,51 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
               <div className="lg:col-span-2">
                 <div className="sticky top-4 space-y-4 rounded-3xl border-2 border-gray-200 bg-gray-50 p-6">
                   {/* Discount code */}
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={state.context.discountCode}
-                      onChange={e => handleInputChange('discountCode', e.target.value)}
-                      placeholder="Enter discount code"
-                      className="flex-1 rounded-xl border-2 border-gray-300 p-3 text-lg placeholder:text-gray-600 focus:border-black focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => send({ type: 'APPLY_DISCOUNT' })}
-                      disabled={
-                        !state.context.discountCode.trim()
-                        || state.matches('applyingDiscount')
-                      }
-                      className="cursor-pointer rounded-xl border-2 border-black bg-black px-4 py-3 text-base font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Apply
-                    </button>
+                  <div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={state.context.discountCode}
+                        onChange={e => handleInputChange('discountCode', e.target.value.toUpperCase())}
+                        placeholder="Enter discount code"
+                        autoCapitalize="characters"
+                        autoComplete="off"
+                        spellCheck={false}
+                        // `text-black` is load-bearing: without an explicit
+                        // colour the input inherited a muted grey from the
+                        // surrounding summary card, which on the light-grey
+                        // panel made a typed code all but invisible.
+                        className={`flex-1 rounded-xl border-2 bg-white p-3 text-lg font-semibold tracking-wide text-black uppercase placeholder:font-normal placeholder:tracking-normal placeholder:text-gray-500 placeholder:normal-case focus:outline-none ${
+                          state.context.errors?.discountCode ? 'border-red-400 focus:border-red-500' : 'border-gray-300 focus:border-black'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => send({ type: 'APPLY_DISCOUNT' })}
+                        disabled={
+                          !state.context.discountCode.trim()
+                          || state.matches('applyingDiscount')
+                        }
+                        className="cursor-pointer rounded-xl border-2 border-black bg-black px-4 py-3 text-base font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {state.matches('applyingDiscount') ? '…' : 'Apply'}
+                      </button>
+                    </div>
+                    {/* The machine has always recorded the rejection reason on
+                        `errors.discountCode`; nothing rendered it, so an
+                        expired or nonexistent code looked like a no-op. */}
+                    {state.context.errors?.discountCode && (
+                      <p role="alert" className="mt-2 text-base text-red-600">{state.context.errors.discountCode}</p>
+                    )}
+                    {state.context.discountAmount > 0 && !state.context.errors?.discountCode && (
+                      <p className="mt-2 text-base font-semibold text-green-600">
+                        Discount applied —
+                        {' '}
+                        {formatCurrency(state.context.discountAmount)}
+                        {' '}
+                        off
+                      </p>
+                    )}
                   </div>
 
                   {/* Subtotal */}
@@ -1276,6 +1442,27 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     <p className="text-base text-red-600">{state.context.errors.savedPaymentMethod}</p>
                   )}
 
+                  {/* ⚠️ Payment-setup failures, shown for EVERY payment method.
+                      Both of these already existed in state and neither was
+                      rendered outside the card form — so on ACH a 503 from
+                      /calculate-fees or /tokenization-config left "Place order"
+                      permanently greyed out with nothing on screen to explain
+                      why. The button waits on a fee breakdown that can never
+                      arrive; the least we owe the member is the reason. */}
+                  {(state.context.errors.fees || (tokenizationError && state.context.paymentMethod !== 'card')) && (
+                    <div role="alert" className="rounded-xl border-2 border-red-400 bg-red-50 p-4">
+                      <p className="mb-1 text-base font-bold text-red-700">
+                        This payment method isn't available right now
+                      </p>
+                      <p className="text-base text-red-700">
+                        {state.context.errors.fees || tokenizationError}
+                      </p>
+                      <p className="mt-2 text-sm text-red-600">
+                        Please try another payment method or ask a staff member for help.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Card payment form */}
                   {state.context.paymentMethod === 'card' && (
                     <div className="space-y-4">
@@ -1417,22 +1604,36 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                     </div>
                   )}
 
-                  {/* Discount code */}
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={state.context.discountCode}
-                      onChange={e => handleInputChange('discountCode', e.target.value)}
-                      placeholder="Optional discount code"
-                      className="flex-1 rounded-xl border-2 border-gray-300 p-3 text-lg placeholder:text-gray-600 focus:border-black focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      disabled={!state.context.discountCode.trim()}
-                      className="cursor-pointer rounded-xl border-2 border-gray-300 px-4 py-3 text-base font-bold text-gray-500 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Apply
-                    </button>
+                  {/* Discount code — read-only echo of what was applied in the
+                      cart. Codes are applied there because doing it here would
+                      change the order total after the fee breakdown (and, for
+                      IQPro, the card token) had already been computed for the
+                      old total. The previously-rendered "Apply" button had no
+                      handler at all, so it looked broken; a link back to the
+                      cart is the honest affordance. */}
+                  <div>
+                    <p className={labelClass}>Discount code</p>
+                    {state.context.discountAmount > 0
+                      ? (
+                          <div className="flex items-center justify-between rounded-xl border-2 border-green-500 bg-green-50 p-3">
+                            <span className="text-lg font-semibold tracking-wide text-black uppercase">
+                              {state.context.discountCode}
+                            </span>
+                            <span className="text-base font-semibold text-green-700">
+                              −
+                              {formatCurrency(state.context.discountAmount)}
+                            </span>
+                          </div>
+                        )
+                      : (
+                          <button
+                            type="button"
+                            onClick={() => send({ type: 'BACK_TO_CART' })}
+                            className="w-full cursor-pointer rounded-xl border-2 border-gray-300 bg-white p-3 text-left text-lg text-gray-600 transition-colors hover:border-black hover:text-black"
+                          >
+                            Have a discount code? Add it in your cart →
+                          </button>
+                        )}
                   </div>
 
                   {/* Order total */}
@@ -1533,26 +1734,61 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
                       send({ type: 'PLACE_ORDER' });
                     };
 
-                    return (
-                      <button
-                        type="button"
-                        onClick={handlePlaceOrder}
-                        disabled={
-                          !isBuyerReady
-                          || !isPaymentReady
-                          || !state.context.feeBreakdown
-                          || state.context.isCalculatingFees
-                          || state.context.isSubmitting
-                          || state.matches('lookingUpMember')
+                    const isDisabled = !isBuyerReady
+                      || !isPaymentReady
+                      || !state.context.feeBreakdown
+                      || state.context.isCalculatingFees
+                      || state.context.isSubmitting
+                      || state.matches('lookingUpMember');
+
+                    // Name the blocker. A greyed-out "Place order" with a fully
+                    // filled form is the single most-reported confusion in this
+                    // flow — the member cannot tell a missing field from a
+                    // gateway outage.
+                    const blockedReason = (() => {
+                      if (!isDisabled || state.context.isSubmitting || state.context.isCalculatingFees) {
+                        return null;
+                      }
+                      if (!isBuyerReady) {
+                        return 'Please complete your name, email, phone and address above.';
+                      }
+                      if (!isPaymentReady) {
+                        if (ctx.paymentMethod === 'ach') {
+                          return 'Please enter the account holder, a 9-digit routing number, and an account number.';
                         }
-                        className="min-h-16 w-full cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {state.context.isCalculatingFees
-                          ? 'Calculating fees…'
-                          : state.context.isSubmitting
-                            ? 'Validating…'
-                            : 'Place order'}
-                      </button>
+                        if (ctx.paymentMethod === 'saved') {
+                          return 'Please look up and select a saved payment method.';
+                        }
+                        return 'Please complete your card details.';
+                      }
+                      if (!state.context.feeBreakdown) {
+                        return state.context.errors.fees
+                          ? `Taxes and fees could not be calculated: ${state.context.errors.fees}`
+                          : 'Taxes and fees could not be calculated. Please ask a staff member for help.';
+                      }
+                      return null;
+                    })();
+
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handlePlaceOrder}
+                          disabled={isDisabled}
+                          className="min-h-16 w-full cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {state.context.isCalculatingFees
+                            ? 'Calculating fees…'
+                            : state.context.isSubmitting
+                              ? 'Validating…'
+                              : 'Place order'}
+                        </button>
+                        {blockedReason && (
+                          <p role="status" className="mt-3 text-center text-base text-gray-600">
+                            {blockedReason}
+                          </p>
+                        )}
+                      </>
                     );
                   })()}
                 </div>
@@ -1739,6 +1975,14 @@ export function StoreFlow({ onComplete, onBack }: StoreFlowProps) {
         )}
 
       </main>
+
+      <IdleWarning
+        secondsRemaining={idleEnabled ? idleSeconds : null}
+        onStay={() => {
+          setIdleSeconds(null);
+          resetIdle();
+        }}
+      />
     </div>
   );
 }
