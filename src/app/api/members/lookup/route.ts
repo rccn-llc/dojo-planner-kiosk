@@ -1,7 +1,8 @@
-import { and, eq, inArray, or } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { address, familyMember, member, memberMembership, membershipPlan } from '@/lib/memberSchema';
+import { phoneDigitsMatch } from '@/lib/phoneQuery';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
@@ -37,12 +38,13 @@ export async function POST(request: Request) {
 
     const db = await getDatabaseForOrg(orgId);
 
-    // Search all common phone storage formats
-    const phoneWithCountry = `+1${rawPhone}`;
-    const phoneFormatted = rawPhone.length === 10
-      ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`
-      : rawPhone;
-
+    // ⚠️ Compare NORMALIZED digits, not string equality against a hand-written
+    // list of formats. The old query tested three shapes (`5551234567`,
+    // `+15551234567`, `(555) 123-4567`) and missed every member stored in any
+    // other shape — which is why seeded members like `555-123-4567` or
+    // `1-555-123-4567` were unfindable by phone while members created through
+    // the kiosk (which writes bare digits) worked fine. Stripping non-digits in
+    // SQL and comparing the last 10 matches every format at once.
     const members = await db
       .select({
         memberId: member.id,
@@ -58,11 +60,7 @@ export async function POST(request: Request) {
       .where(
         and(
           eq(member.organizationId, orgId),
-          or(
-            eq(member.phone, rawPhone),
-            eq(member.phone, phoneWithCountry),
-            eq(member.phone, phoneFormatted),
-          ),
+          phoneDigitsMatch(member.phone, rawPhone),
         ),
       );
 

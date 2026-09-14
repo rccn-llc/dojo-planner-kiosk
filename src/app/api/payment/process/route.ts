@@ -233,7 +233,12 @@ export async function POST(request: Request) {
     }
 
     const products = await db
-      .select({ id: catalogItem.id, basePrice: catalogItem.basePrice })
+      .select({
+        id: catalogItem.id,
+        basePrice: catalogItem.basePrice,
+        trackInventory: catalogItem.trackInventory,
+        maxPerOrder: catalogItem.maxPerOrder,
+      })
       .from(catalogItem)
       .where(and(
         inArray(catalogItem.id, productIds),
@@ -242,16 +247,22 @@ export async function POST(request: Request) {
         eq(catalogItem.showOnKiosk, true),
       ));
     const basePriceById = new Map(products.map(p => [p.id, p.basePrice]));
+    const productById = new Map(products.map(p => [p.id, p]));
 
     const variantIds = body.items.map(it => it.variantId).filter((id): id is string => !!id);
-    const variantById = new Map<string, { catalogItemId: string; price: number }>();
+    const variantById = new Map<string, { catalogItemId: string; price: number; stockQuantity: number | null }>();
     if (variantIds.length > 0) {
       const variants = await db
-        .select({ id: catalogItemVariant.id, catalogItemId: catalogItemVariant.catalogItemId, price: catalogItemVariant.price })
+        .select({
+          id: catalogItemVariant.id,
+          catalogItemId: catalogItemVariant.catalogItemId,
+          price: catalogItemVariant.price,
+          stockQuantity: catalogItemVariant.stockQuantity,
+        })
         .from(catalogItemVariant)
         .where(inArray(catalogItemVariant.id, variantIds));
       for (const v of variants) {
-        variantById.set(v.id, { catalogItemId: v.catalogItemId, price: v.price });
+        variantById.set(v.id, { catalogItemId: v.catalogItemId, price: v.price, stockQuantity: v.stockQuantity });
       }
     }
 
@@ -287,6 +298,63 @@ export async function POST(request: Request) {
       authoritativeSubtotal += unitPrice * item.quantity;
     }
     authoritativeSubtotal = Math.round(authoritativeSubtotal * 100) / 100;
+
+    // ── Stock check ─────────────────────────────────────────────────────────
+    // Same reasoning as the price re-derivation above: the client's stock view
+    // is a snapshot from page load and is not authoritative. Someone can sit on
+    // the checkout screen while the last unit sells at the front desk, and a
+    // tampered request can skip the client check outright. Sum the quantities
+    // per variant first — two lines of the same variant must be checked against
+    // the shelf together, not one at a time.
+    const requestedByVariant = new Map<string, number>();
+    for (const item of body.items) {
+      if (item.variantId) {
+        requestedByVariant.set(item.variantId, (requestedByVariant.get(item.variantId) ?? 0) + item.quantity);
+      }
+    }
+    for (const [variantId, requested] of requestedByVariant) {
+      // Every variant reaching here has already been proven to exist and to
+      // belong to its claimed product by the loop above, so a miss is
+      // impossible; skip defensively rather than throwing.
+      const variant = variantById.get(variantId);
+      if (!variant) {
+        continue;
+      }
+      const product = productById.get(variant.catalogItemId);
+      // NULL track_inventory means "unset upstream", which defaults to tracked.
+      if (product && product.trackInventory === false) {
+        continue;
+      }
+      const available = Math.max(0, variant.stockQuantity ?? 0);
+      if (requested > available) {
+        return NextResponse.json<ProcessStoreOrderResult>(
+          {
+            success: false,
+            status: 'declined',
+            error: available === 0
+              ? 'One or more items in your cart just sold out. Please review your cart.'
+              : `Only ${available} of one of your items remain. Please review your cart.`,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
+    // Per-order cap, applied across every line of the same product.
+    const requestedByProduct = new Map<string, number>();
+    for (const item of body.items) {
+      const pid = item.productId!;
+      requestedByProduct.set(pid, (requestedByProduct.get(pid) ?? 0) + item.quantity);
+    }
+    for (const [productId, requested] of requestedByProduct) {
+      const cap = productById.get(productId)?.maxPerOrder;
+      if (typeof cap === 'number' && cap > 0 && requested > cap) {
+        return NextResponse.json<ProcessStoreOrderResult>(
+          { success: false, status: 'declined', error: `You may order at most ${cap} of one item per order.` },
+          { status: 400 },
+        );
+      }
+    }
 
     if (Math.abs(authoritativeSubtotal - body.subtotal) > 0.01) {
       return NextResponse.json<ProcessStoreOrderResult>(

@@ -1,4 +1,4 @@
-import { isValidEmail } from './utils';
+import { dateOfBirthError, isValidEmail } from './utils';
 
 // Shared strict format checks used by the member-portal OTP routes.
 const UUID_RE = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
@@ -56,14 +56,11 @@ export function validateMemberEditForm(form: MemberEditForm): MemberEditFormErro
       errors.phone = 'Please enter a valid 10-digit phone number';
     }
   }
-  if (form.dateOfBirth) {
-    const dob = new Date(form.dateOfBirth);
-    if (Number.isNaN(dob.getTime())) {
-      errors.dateOfBirth = 'Please enter a valid date';
-    }
-    else if (dob > new Date()) {
-      errors.dateOfBirth = 'Date of birth cannot be in the future';
-    }
+  // Shared with the trial and membership machines via [[utils]] — one
+  // definition of "not in the future", timezone-safe.
+  const dobError = dateOfBirthError(form.dateOfBirth);
+  if (dobError) {
+    errors.dateOfBirth = dobError;
   }
 
   return errors;

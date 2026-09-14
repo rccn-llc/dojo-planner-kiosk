@@ -236,9 +236,15 @@ export interface StoreProduct {
   name: string;
   description: string;
   images: string[]; // URLs, primary first
-  variants?: Array<{ id: string; name: string; price: number }>;
+  variants?: Array<{ id: string; name: string; price: number; stockQuantity: number | null }>;
   basePrice: number;
   priceRange?: { min: number; max: number };
+  /** False when the item is unlimited; stock fields are then null. */
+  trackInventory: boolean;
+  /** Units of this product one order may contain. */
+  maxPerOrder: number;
+  /** Units purchasable now across all variants; null = untracked. */
+  availableStock: number | null;
 }
 
 export interface CartItem {
@@ -324,7 +330,18 @@ export type StoreEvent
     | { type: 'PROCEED_TO_CHECKOUT' }
     | { type: 'BACK_TO_CART' }
     | { type: 'LOOKUP_MEMBER' }
-    | { type: 'MEMBER_FOUND'; firstName: string; lastName: string; email: string; phone: string }
+    | {
+      type: 'MEMBER_FOUND';
+      firstName: string;
+      lastName: string;
+      email: string;
+      phone: string;
+      address?: string;
+      addressLine2?: string;
+      city?: string;
+      state?: string;
+      zip?: string;
+    }
     | { type: 'MEMBER_NOT_FOUND' }
     | { type: 'UPDATE_FIELD'; field: string; value: string | boolean }
     | { type: 'SAVED_LOOKUP_START'; phone: string }

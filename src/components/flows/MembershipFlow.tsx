@@ -6,10 +6,13 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import { useEffect, useRef, useState } from 'react';
 import { useCardTokenizer } from '../../hooks/useCardTokenizer';
+import { useIdleTimeout } from '../../hooks/useIdleTimeout';
 import { useMembershipMachine } from '../../hooks/useKioskMachines';
 import { US_STATE_OPTIONS } from '../../lib/constants';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
-import { formatPhoneForDisplay, sanitizePhoneInput } from '../../lib/utils';
+import { formatPhoneForDisplay, sanitizePhoneInput, todayLocalISO } from '../../lib/utils';
+import { FormErrorSummary } from '../FormErrorSummary';
+import { IdleWarning } from '../IdleWarning';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 import { SignatureCapture } from '../SignatureCapture';
@@ -84,6 +87,28 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
   const [showLookupPicker, setShowLookupPicker] = useState(false);
   const preseededRef = useRef(false);
   const [wantsNewSignature, setWantsNewSignature] = useState(false);
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
+
+  // Idle session reset. Held off while a charge is in flight and on the
+  // terminal screens (success runs its own countdown, and a failed payment
+  // needs to stay on screen for staff to read).
+  const idleEnabled = !state.matches('processingPayment')
+    && !state.matches('success')
+    && !state.matches('paymentFailed')
+    && !state.matches('error')
+    && !state.matches('timeout')
+    && !state.matches('selectingProgram');
+
+  const { reset: resetIdle } = useIdleTimeout({
+    enabled: idleEnabled,
+    onWarn: setIdleSeconds,
+    onTimeout: () => {
+      setIdleSeconds(null);
+      setShowLookupPicker(false);
+      setLookupResults([]);
+      send({ type: 'TIMEOUT' });
+    },
+  });
 
   // Determine if member is a minor
   const memberIsMinor = (() => {
@@ -755,6 +780,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
         {/* ── Step 4: Commitment / waiver ─────────────────────────────────────── */}
         {state.matches('reviewingCommitment') && (
           <div className="w-full max-w-3xl">
+            <FormErrorSummary errors={state.context.errors} />
             {state.context.selectedProgram && state.context.selectedPlan && (
               <div className="mb-6 flex items-center justify-between rounded-2xl border border-gray-200 bg-gray-50 p-5">
                 <div>
@@ -860,7 +886,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
               aria-checked={!!state.context.hasAgreedToCommitment}
               tabIndex={0}
               className={`mt-4 flex cursor-pointer items-start gap-4 rounded-2xl border-2 p-5 transition-colors ${
-                state.context.hasAgreedToCommitment ? 'border-black bg-gray-50' : 'border-gray-200 bg-white'
+                state.context.hasAgreedToCommitment
+                  ? 'border-black bg-gray-50'
+                  : state.context.errors?.hasAgreedToCommitment
+                    ? 'border-red-400 bg-red-50'
+                    : 'border-gray-200 bg-white'
               } hover:bg-gray-50`}
               onClick={() => handleInputChange('hasAgreedToCommitment', !state.context.hasAgreedToCommitment)}
               onKeyDown={(e) => {
@@ -887,6 +917,9 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                   : 'I agree to the waiver, membership agreement, and authorize recurring billing as described.'}
               </span>
             </div>
+            {state.context.errors?.hasAgreedToCommitment && (
+              <p className="mt-2 text-base text-red-600">{state.context.errors.hasAgreedToCommitment}</p>
+            )}
 
             {/* Signature: show existing or capture new */}
             <div className="mt-4 mb-2">
@@ -925,6 +958,9 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                       }}
                     />
                   )}
+              {state.context.errors?.waiverSignature && (
+                <p className="mt-1 text-base text-red-600">{state.context.errors.waiverSignature}</p>
+              )}
             </div>
 
             <div className="mt-6 flex items-center justify-between">
@@ -940,11 +976,9 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
               <button
                 type="button"
                 onClick={() => send({ type: 'SUBMIT_COMMITMENT' })}
-                disabled={
-                  !state.context.hasAgreedToCommitment
-                  || !state.context.waiverSignature?.trim()
-                  || (memberIsMinor && (!state.context.guardianFirstName?.trim() || !state.context.guardianLastName?.trim() || !state.context.guardianEmail?.trim()))
-                }
+                // Live so the machine can say "You must agree…" / "Signature is
+                // required" rather than leaving a dead button on screen.
+                disabled={state.context.isSubmitting}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-white px-12 py-4 text-xl font-bold text-black transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:bg-gray-200"
               >
                 Next →
@@ -961,6 +995,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
 
               {/* Left: form */}
               <div className="lg:col-span-3">
+                <FormErrorSummary errors={state.context.errors} />
                 {/* Pre-seeded child membership banner */}
                 {initialMemberData && (
                   <div className="mb-8 rounded-2xl border-2 border-amber-200 bg-amber-50 p-5">
@@ -1075,6 +1110,7 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                     label="Date of Birth"
                     error={state.context.errors?.dateOfBirth}
                     placeholder="Select date of birth"
+                    maxDate={todayLocalISO()}
                   />
                   <div className="col-span-2">
                     <label className={labelClass} htmlFor="address">
@@ -1214,19 +1250,11 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
                 type="button"
 
                 onClick={() => send({ type: 'SUBMIT_CONTACT' })}
-                disabled={
-                  state.context.isSubmitting
-                  || state.matches('lookingUpMember')
-                  || !state.context.firstName?.trim()
-                  || !state.context.lastName?.trim()
-                  || !state.context.email?.trim()
-                  || !state.context.phoneNumber?.trim()
-                  || !state.context.dateOfBirth?.trim()
-                  || !state.context.address?.trim()
-                  || !state.context.city?.trim()
-                  || !state.context.state?.trim()
-                  || !state.context.zip?.trim()
-                }
+                // Same reasoning as the trial flow: a button greyed out on an
+                // incomplete form names nothing, so the member cannot tell
+                // WHICH field is wrong. Let the submit through and let the
+                // machine's validating state report per-field messages.
+                disabled={state.context.isSubmitting || state.matches('lookingUpMember')}
                 className="cursor-pointer rounded-2xl border-2 border-black bg-black px-12 py-4 text-xl font-bold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {state.context.isSubmitting ? 'Validating…' : 'Next →'}
@@ -1750,6 +1778,14 @@ export function MembershipFlow({ onComplete, onBack, onCheckIn, initialMemberDat
           </div>
         </div>
       )}
+
+      <IdleWarning
+        secondsRemaining={idleEnabled ? idleSeconds : null}
+        onStay={() => {
+          setIdleSeconds(null);
+          resetIdle();
+        }}
+      />
     </div>
   );
 }

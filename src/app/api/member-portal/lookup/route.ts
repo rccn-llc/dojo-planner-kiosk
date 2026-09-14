@@ -1,7 +1,8 @@
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { NextResponse } from 'next/server';
 import { resolveOrgBySlug, resolveOrgIdFromRequest } from '@/lib/clerk';
 import { member } from '@/lib/memberSchema';
+import { phoneDigitsMatch } from '@/lib/phoneQuery';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { getDatabaseForOrg } from '@/lib/tenantDirectory';
 
@@ -42,10 +43,6 @@ export async function POST(request: Request) {
     }
 
     const db = await getDatabaseForOrg(orgId);
-    const phoneWithCountry = `+1${rawPhone}`;
-    const phoneFormatted = rawPhone.length === 10
-      ? `(${rawPhone.slice(0, 3)}) ${rawPhone.slice(3, 6)}-${rawPhone.slice(6)}`
-      : rawPhone;
 
     // This route is UNAUTHENTICATED (it precedes OTP verification), so it must
     // not return PII. It returns only opaque member ids — enough to drive the
@@ -57,11 +54,11 @@ export async function POST(request: Request) {
       .where(
         and(
           eq(member.organizationId, orgId),
-          or(
-            eq(member.phone, rawPhone),
-            eq(member.phone, phoneWithCountry),
-            eq(member.phone, phoneFormatted),
-          ),
+          // Digit-normalized comparison — see [[phoneQuery]]. The previous
+          // three-format equality test silently failed to find members whose
+          // phone was stored in any other shape, so the OTP path reported
+          // "no member found" for people who plainly exist.
+          phoneDigitsMatch(member.phone, rawPhone),
         ),
       )
       .limit(5);

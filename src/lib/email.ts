@@ -533,3 +533,79 @@ function buildReceiptHtml(params: StoreOrderReceiptParams): string {
 </body>
 </html>`;
 }
+
+// ── Signed-waiver email ──────────────────────────────────────────────────────
+
+interface SignedWaiverEmailParams {
+  toEmail: string;
+  memberFirstName: string;
+  memberLastName: string;
+  waiverName: string;
+  signedAt: Date;
+  pdfBuffer: Buffer;
+  pdfFilename: string;
+}
+
+/**
+ * Email a member a copy of a waiver they have already signed, as a PDF
+ * attachment.
+ *
+ * Unlike the other senders here this one REPORTS its failures rather than
+ * swallowing them: it is triggered by a staff member pressing "Send" and
+ * watching for a confirmation, so a silent false would read as success.
+ */
+export async function sendSignedWaiver(params: SignedWaiverEmailParams): Promise<void> {
+  if (!resend) {
+    throw new Error('Email is not configured on this kiosk (RESEND_API_KEY is unset).');
+  }
+
+  const signedOn = params.signedAt.toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  const html = `<!DOCTYPE html>
+<html>
+<body style="margin: 0; padding: 0; background-color: #f9fafb; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; padding: 40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; padding: 40px;">
+          <tr>
+            <td>
+              <h1 style="margin: 0 0 16px; color: #111827; font-size: 24px;">Your signed waiver</h1>
+              <p style="margin: 0 0 16px; color: #374151; font-size: 16px;">
+                Hi ${escapeHtml(params.memberFirstName)},
+              </p>
+              <p style="margin: 0 0 16px; color: #374151; font-size: 16px;">
+                Attached is a copy of the
+                <strong>${escapeHtml(params.waiverName)}</strong>
+                signed by ${escapeHtml(`${params.memberFirstName} ${params.memberLastName}`)} on ${escapeHtml(signedOn)}.
+              </p>
+              <p style="margin: 24px 0 0; padding-top: 24px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 12px;">
+                This is an automated message. Please do not reply to this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const { error } = await resend.emails.send({
+    from: fromEmail,
+    to: params.toEmail,
+    subject: `Your signed waiver — ${params.waiverName}`,
+    html,
+    attachments: [{ filename: params.pdfFilename, content: params.pdfBuffer }],
+  });
+
+  if (error) {
+    throw new Error(error.message || 'The email provider rejected the message.');
+  }
+
+  console.warn('[Email] Signed waiver sent', { to: params.toEmail, waiver: params.waiverName });
+}

@@ -10,6 +10,17 @@ interface TouchDatePickerProps {
   placeholder?: string;
   minYear?: number;
   maxYear?: number;
+  /**
+   * Latest selectable date as `YYYY-MM-DD`. Pass `todayLocalISO()` for a
+   * date-of-birth field.
+   *
+   * ⚠️ Capping only the YEAR is not enough and was the bug: with `maxYear`
+   * alone, the current year stays fully open, so in September someone can pick
+   * November of this year and the picker happily emits a date months in the
+   * future. This narrows the month and day columns too, once the later columns
+   * are on the boundary.
+   */
+  maxDate?: string;
 }
 
 const MONTHS = [
@@ -88,9 +99,21 @@ export function TouchDatePicker({
   placeholder = 'Select date',
   minYear = 1920,
   maxYear,
+  maxDate,
 }: TouchDatePickerProps) {
+  const parsedMax = useMemo(() => {
+    if (!maxDate) {
+      return null;
+    }
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(maxDate);
+    if (!m) {
+      return null;
+    }
+    return { year: Number(m[1]), month: Number(m[2]) - 1, day: Number(m[3]) };
+  }, [maxDate]);
+
   const currentYear = new Date().getFullYear();
-  const resolvedMaxYear = maxYear ?? currentYear;
+  const resolvedMaxYear = parsedMax?.year ?? maxYear ?? currentYear;
 
   const parsed = useMemo(() => {
     if (!value) {
@@ -121,8 +144,14 @@ export function TouchDatePicker({
     if (month < 0 || year < 0) {
       return 31;
     }
-    return daysInMonth(month, year);
-  }, [month, year]);
+    const inMonth = daysInMonth(month, year);
+    // Only the boundary month of the boundary year is clipped; every earlier
+    // month keeps all of its days.
+    if (parsedMax && year === parsedMax.year && month === parsedMax.month) {
+      return Math.min(inMonth, parsedMax.day);
+    }
+    return inMonth;
+  }, [month, year, parsedMax]);
 
   useEffect(() => {
     if (day > maxDay) {
@@ -138,20 +167,36 @@ export function TouchDatePicker({
     }
   }, [onChange]);
 
-  const handleMonthChange = (newMonth: number) => {
-    setMonth(newMonth);
-    emit(newMonth, day, year);
-  };
+  /**
+   * Clamp a (month, day, year) triple back inside `maxDate`. Without this,
+   * switching the YEAR column last leaves an already-chosen "December 31"
+   * sitting in a year where that date is still in the future.
+   */
+  const clamp = useCallback((m: number, d: number, y: number) => {
+    if (!parsedMax || y !== parsedMax.year) {
+      return { m, d };
+    }
+    const clampedMonth = m >= 0 ? Math.min(m, parsedMax.month) : m;
+    const limit = clampedMonth === parsedMax.month
+      ? Math.min(parsedMax.day, daysInMonth(clampedMonth, y))
+      : daysInMonth(clampedMonth, y);
+    const clampedDay = d > 0 ? Math.min(d, limit) : d;
+    return { m: clampedMonth, d: clampedDay };
+  }, [parsedMax]);
 
-  const handleDayChange = (newDay: number) => {
-    setDay(newDay);
-    emit(month, newDay, year);
-  };
+  const applySelection = useCallback((m: number, d: number, y: number) => {
+    const { m: cm, d: cd } = clamp(m, d, y);
+    setMonth(cm);
+    setDay(cd);
+    setYear(y);
+    emit(cm, cd, y);
+  }, [clamp, emit]);
 
-  const handleYearChange = (newYear: number) => {
-    setYear(newYear);
-    emit(month, day, newYear);
-  };
+  const handleMonthChange = (newMonth: number) => applySelection(newMonth, day, year);
+
+  const handleDayChange = (newDay: number) => applySelection(month, newDay, year);
+
+  const handleYearChange = (newYear: number) => applySelection(month, day, newYear);
 
   const displayText = useMemo(() => {
     if (month < 0 || day < 0 || year < 0) {
@@ -160,7 +205,13 @@ export function TouchDatePicker({
     return `${MONTHS[month]} ${day}, ${year}`;
   }, [month, day, year, placeholder]);
 
-  const monthItems = MONTHS.map((name, i) => ({ value: i, label: name }));
+  const monthItems = useMemo(() => {
+    const all = MONTHS.map((name, i) => ({ value: i, label: name }));
+    if (parsedMax && year === parsedMax.year) {
+      return all.slice(0, parsedMax.month + 1);
+    }
+    return all;
+  }, [parsedMax, year]);
   const dayItems = useMemo(() => {
     const arr = [];
     for (let d = 1; d <= maxDay; d++) {

@@ -6,12 +6,45 @@ import EditIcon from '@mui/icons-material/Edit';
 import EmailIcon from '@mui/icons-material/Email';
 import SaveIcon from '@mui/icons-material/Save';
 
-import { useCallback, useRef, useState } from 'react';
+import { createContext, use, useCallback, useMemo, useRef, useState } from 'react';
+import { useIdleTimeout } from '../../hooks/useIdleTimeout';
 import { useOrgSlug, withOrgQuery } from '../../lib/useOrgSlug';
+import { todayLocalISO } from '../../lib/utils';
 import { validateMemberEditForm } from '../../lib/validation';
+import { IdleWarning } from '../IdleWarning';
 import { KioskFlowHeader } from '../KioskFlowHeader';
 import { KioskSelect } from '../KioskSelect';
 import { TouchDatePicker } from '../TouchDatePicker';
+
+/**
+ * Parse a response body as JSON, returning null when it isn't JSON.
+ *
+ * Next.js serves HTML for 404s and unhandled 500s. Calling `res.json()` on one
+ * throws a SyntaxError whose message (`Unexpected token '<', "<!DOCTYPE "...`)
+ * then gets shown to a staff member as though it were the API's explanation.
+ */
+async function readJsonSafely(res: Response): Promise<{ error?: string; sentTo?: string } | null> {
+  try {
+    return await res.json() as { error?: string; sentTo?: string };
+  }
+  catch {
+    return null;
+  }
+}
+
+/**
+ * Idle countdown for whichever view is on screen.
+ *
+ * Every view renders through `Shell`, so the warning overlay lives there and
+ * reads the countdown from context rather than being threaded through seven
+ * call sites. This flow is the one that most needs the reset: it displays a
+ * member's profile, billing history and waivers, and leaving that up for the
+ * next person at the terminal is the whole reason the timeout exists.
+ */
+const IdleContext = createContext<{ secondsRemaining: number | null; onStay: () => void }>({
+  secondsRemaining: null,
+  onStay: () => {},
+});
 
 interface MemberAreaFlowProps {
   onComplete: () => void;
@@ -126,7 +159,47 @@ interface StaffEntry {
   maskedEmail: string;
 }
 
-export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
+/**
+ * Wrapper that owns the idle countdown and publishes it to every `Shell`.
+ *
+ * `key={sessionKey}` is the reset mechanism: bumping it remounts the whole flow
+ * with fresh state. That is deliberate rather than lazy — this component holds
+ * a member's detail, family, billing, edit form, OTP state and staff selection
+ * across a dozen useStates, and clearing them one by one would leak PII into
+ * the next person's session the first time someone added a field and forgot.
+ */
+export function MemberAreaFlow(props: MemberAreaFlowProps) {
+  const [sessionKey, setSessionKey] = useState(0);
+  const [idleSeconds, setIdleSeconds] = useState<number | null>(null);
+
+  const { reset: resetIdle } = useIdleTimeout({
+    onWarn: setIdleSeconds,
+    onTimeout: () => {
+      setIdleSeconds(null);
+      setSessionKey(k => k + 1);
+      props.onBack();
+    },
+  });
+
+  const idleValue = useMemo(
+    () => ({
+      secondsRemaining: idleSeconds,
+      onStay: () => {
+        setIdleSeconds(null);
+        resetIdle();
+      },
+    }),
+    [idleSeconds, resetIdle],
+  );
+
+  return (
+    <IdleContext value={idleValue}>
+      <MemberAreaFlowInner key={sessionKey} {...props} />
+    </IdleContext>
+  );
+}
+
+function MemberAreaFlowInner({ onBack, onAssignChildMembership }: MemberAreaFlowProps) {
   const { slug: orgSlug } = useOrgSlug();
   // Short-lived kiosk attestation token required by the staff-list endpoint.
   const attestationTokenRef = useRef<string | null>(null);
@@ -156,6 +229,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
   const [staffMode, setStaffMode] = useState<'idle' | 'pick' | 'code'>('idle');
   const [staffList, setStaffList] = useState<StaffEntry[]>([]);
   const [staffListLoading, setStaffListLoading] = useState(false);
+  const [staffLoadError, setStaffLoadError] = useState('');
   const [selectedStaffId, setSelectedStaffId] = useState('');
   const [staffMaskedEmail, setStaffMaskedEmail] = useState('');
   const [searchPhone, setSearchPhone] = useState('');
@@ -194,6 +268,9 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
 
   // Waiver email
   const [sendingWaiverId, setSendingWaiverId] = useState<string | null>(null);
+  // Success messages used to be pushed through `error`, which rendered them in
+  // red — "Waiver sent to …" looked like a failure.
+  const [notice, setNotice] = useState('');
 
   // Add family member
   const [familySearchPhone, setFamilySearchPhone] = useState('');
@@ -406,6 +483,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     setStaffMode('pick');
     setOtpError('');
     setOtpCode('');
+    setStaffLoadError('');
     setStaffListLoading(true);
     try {
       const attestation = await ensureAttestationToken();
@@ -414,11 +492,22 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orgSlug: '_kiosk', kioskAttestationToken: attestation ?? undefined }),
       });
-      const data = await res.json() as { staff?: StaffEntry[] };
+      const data = await res.json() as { staff?: StaffEntry[]; error?: string };
       setStaffList(data.staff ?? []);
+      // The route now reports WHY the roster is empty (throttled, not
+      // authorized, Clerk unreachable). Previously every one of those came back
+      // as a bare `{ staff: [] }` and rendered as "No staff available", which
+      // is why a throttled kiosk looked as though its staff had vanished.
+      if (!res.ok || data.error) {
+        setStaffLoadError(data.error ?? 'Could not load the staff list. Please try again.');
+      }
+      else {
+        setStaffLoadError('');
+      }
     }
     catch {
       setStaffList([]);
+      setStaffLoadError('Could not load the staff list. Please try again.');
     }
     setStaffListLoading(false);
   };
@@ -621,13 +710,18 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
     }
     setSendingWaiverId(waiverId);
     setError('');
+    setNotice('');
     try {
       const res = await fetch(withOrgQuery(`/api/members/${selectedMemberId}/waivers/${waiverId}/send`, orgSlug), { method: 'POST' });
-      const data = await res.json();
+      // ⚠️ Do NOT assume the body is JSON. A 404/500 from Next is an HTML error
+      // page, and `res.json()` on it throws
+      // `Unexpected token '<', "<!DOCTYPE "...` — which is the raw parser error
+      // the member-area used to show a staff member instead of a real message.
+      const data = await readJsonSafely(res);
       if (!res.ok) {
-        throw new Error(data.error ?? 'Send failed');
+        throw new Error(data?.error ?? `Send failed (${res.status})`);
       }
-      setError(`Waiver sent to ${data.sentTo}`);
+      setNotice(`Waiver sent to ${data?.sentTo ?? 'the member'}.`);
     }
     catch (err) { setError(err instanceof Error ? err.message : 'Failed to send waiver'); }
     setSendingWaiverId(null);
@@ -777,7 +871,20 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                 )
               : staffList.length === 0
                 ? (
-                    <p className="text-center text-gray-500">No staff available.</p>
+                    <div className="text-center">
+                      <p className="text-gray-500">
+                        {staffLoadError || 'No staff available.'}
+                      </p>
+                      {staffLoadError && (
+                        <button
+                          type="button"
+                          onClick={openStaffOverride}
+                          className="mt-4 min-h-14 cursor-pointer rounded-2xl border-2 border-black bg-white px-8 py-3 text-lg font-bold text-black transition-colors hover:bg-gray-100"
+                        >
+                          Try again
+                        </button>
+                      )}
+                    </div>
                   )
                 : (
                     <div className="flex flex-col gap-3">
@@ -926,20 +1033,52 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
           <div className="mb-4">
             <label htmlFor="search-phone" className="mb-1 block text-sm font-semibold text-gray-500">Phone Number</label>
             <div className="flex gap-3">
-              <input id="search-phone" type="tel" value={searchPhone} onChange={e => setSearchPhone(formatPhone(e.target.value))} placeholder="(555) 123-4567" className="flex-1 rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black focus:border-black focus:outline-none" />
-              <button type="button" onClick={handleSearchByPhone} disabled={loading || searchPhone.replace(/\D/g, '').length !== 10} className="cursor-pointer rounded-xl bg-black px-6 py-3 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">{loading ? '...' : 'Search'}</button>
+              <input
+                id="search-phone"
+                type="tel"
+                value={searchPhone}
+                onChange={(e) => {
+                  setSearchPhone(formatPhone(e.target.value));
+                  setError('');
+                }}
+                placeholder="(555) 123-4567"
+                className="flex-1 rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black focus:border-black focus:outline-none"
+              />
+              {/* Live once anything has been typed. Gating the button on a
+                  complete 10-digit number meant a short number could never
+                  reach handleSearchByPhone, so its "Please enter a 10-digit
+                  phone number" message was unreachable and the member saw a
+                  dead button with no explanation. */}
+              <button type="button" onClick={handleSearchByPhone} disabled={loading || searchPhone.trim().length === 0} className="cursor-pointer rounded-xl bg-black px-6 py-3 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">{loading ? '...' : 'Search'}</button>
             </div>
           </div>
 
           <div className="mb-6">
             <label htmlFor="search-name" className="mb-1 block text-sm font-semibold text-gray-500">Or search by name</label>
             <div className="flex gap-3">
-              <input id="search-name" type="text" value={searchName} onChange={e => setSearchName(e.target.value)} placeholder="First or last name" className="flex-1 rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black focus:border-black focus:outline-none" />
-              <button type="button" onClick={handleSearchByName} disabled={loading || searchName.trim().length < 2} className="cursor-pointer rounded-xl bg-black px-6 py-3 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">{loading ? '...' : 'Search'}</button>
+              <input
+                id="search-name"
+                type="text"
+                value={searchName}
+                onChange={(e) => {
+                  setSearchName(e.target.value);
+                  setError('');
+                }}
+                placeholder="First or last name"
+                className="flex-1 rounded-xl border-2 border-gray-200 px-4 py-3 text-lg text-black focus:border-black focus:outline-none"
+              />
+              {/* Same reasoning as the phone search: one character must be able
+                  to reach the handler so "Please enter at least 2 characters"
+                  can actually be shown. */}
+              <button type="button" onClick={handleSearchByName} disabled={loading || searchName.trim().length === 0} className="cursor-pointer rounded-xl bg-black px-6 py-3 text-lg font-bold text-white transition-all hover:scale-105 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50">{loading ? '...' : 'Search'}</button>
             </div>
           </div>
 
-          {error && <p className="mb-4 text-center text-red-500">{error}</p>}
+          {error && (
+            <p role="alert" className="mb-4 rounded-xl border-2 border-red-300 bg-red-50 p-3 text-center text-base font-semibold text-red-700">
+              {error}
+            </p>
+          )}
         </div>
       </Shell>
     );
@@ -1060,6 +1199,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
             value={newFamilyDob}
             onChange={setNewFamilyDob}
             label="Date of Birth"
+            maxDate={todayLocalISO()}
           />
 
           {/* Set current member as HOH */}
@@ -1298,6 +1438,7 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
                                   label="Date of Birth"
                                   error={editErrors.dateOfBirth}
                                   placeholder="Select date"
+                                  maxDate={todayLocalISO()}
                                 />
                               </div>
                             </div>
@@ -1614,7 +1755,18 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
             {/* ── WAIVERS TAB ── */}
             {activeTab === 'waivers' && (
               <div className="space-y-6">
-                {error && <p className="text-center text-sm text-green-600">{error}</p>}
+                {/* A failure rendered in green read as success; these are now
+                    distinct channels with matching colours. */}
+                {notice && (
+                  <p role="status" className="rounded-xl border-2 border-green-300 bg-green-50 p-3 text-center text-base font-semibold text-green-700">
+                    {notice}
+                  </p>
+                )}
+                {error && (
+                  <p role="alert" className="rounded-xl border-2 border-red-300 bg-red-50 p-3 text-center text-base font-semibold text-red-700">
+                    {error}
+                  </p>
+                )}
                 <Card title="Signed Waivers">
                   {memberDetail.waivers.length > 0
                     ? (
@@ -1795,10 +1947,12 @@ export function MemberAreaFlow({ onBack, onAssignChildMembership }: MemberAreaFl
 // ── Shared sub-components ──
 
 function Shell({ title, onBack, children }: { title: string; onBack: () => void; children: React.ReactNode }) {
+  const idle = use(IdleContext);
   return (
     <div className="flex min-h-screen flex-col bg-white">
       <KioskFlowHeader title={title} onBack={onBack} />
       <main className="flex flex-1 items-start justify-center p-4 sm:p-6 md:p-8">{children}</main>
+      <IdleWarning secondsRemaining={idle.secondsRemaining} onStay={idle.onStay} />
     </div>
   );
 }
