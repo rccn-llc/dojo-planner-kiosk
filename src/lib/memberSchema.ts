@@ -1,7 +1,7 @@
 // Drizzle schema for member-related tables.
 // Mirrors the relevant tables from dojo-planner/src/models/Schema.ts.
 
-import { boolean, index, integer, pgTable, primaryKey, real, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, numeric, pgTable, primaryKey, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // Member table
 export const member = pgTable(
@@ -9,7 +9,6 @@ export const member = pgTable(
   {
     id: text('id').primaryKey(),
     organizationId: text('organization_id').notNull(),
-    clerkUserId: text('clerk_user_id'),
     firstName: text('first_name').notNull(),
     lastName: text('last_name').notNull(),
     email: text('email').notNull(),
@@ -26,7 +25,6 @@ export const member = pgTable(
     index('member_org_idx').on(table.organizationId),
     index('member_org_status_idx').on(table.organizationId, table.status),
     index('member_org_email_idx').on(table.organizationId, table.email),
-    uniqueIndex('member_clerk_user_idx').on(table.clerkUserId),
     uniqueIndex('member_provider_customer_idx').on(table.providerCustomerId),
   ],
 );
@@ -110,10 +108,10 @@ export const membershipPlan = pgTable(
     slug: text('slug').notNull(),
     category: text('category').notNull(),
     program: text('program').notNull(),
-    price: real('price').notNull().default(0),
-    signupFee: real('signup_fee').notNull().default(0),
-    cancellationFee: real('cancellation_fee').notNull().default(0),
-    holdFeeAmount: real('hold_fee_amount').notNull().default(0),
+    price: numeric('price', { precision: 12, scale: 2, mode: 'number' }).notNull().default(0),
+    signupFee: numeric('signup_fee', { precision: 12, scale: 2, mode: 'number' }).notNull().default(0),
+    cancellationFee: numeric('cancellation_fee', { precision: 12, scale: 2, mode: 'number' }).notNull().default(0),
+    holdFeeAmount: numeric('hold_fee_amount', { precision: 12, scale: 2, mode: 'number' }).notNull().default(0),
     holdFeeFrequency: text('hold_fee_frequency'),
     holdLimitPerYear: integer('hold_limit_per_year'),
     frequency: text('frequency').notNull().default('Monthly'),
@@ -141,10 +139,10 @@ export const coupon = pgTable(
     name: text('name').notNull(),
     description: text('description'),
     discountType: text('discount_type').notNull(),
-    discountValue: real('discount_value').notNull(),
+    discountValue: numeric('discount_value', { precision: 12, scale: 2, mode: 'number' }).notNull(),
     applicableTo: text('applicable_to').notNull(),
-    minPurchaseAmount: real('min_purchase_amount'),
-    maxDiscountAmount: real('max_discount_amount'),
+    minPurchaseAmount: numeric('min_purchase_amount', { precision: 12, scale: 2, mode: 'number' }),
+    maxDiscountAmount: numeric('max_discount_amount', { precision: 12, scale: 2, mode: 'number' }),
     usageLimit: integer('usage_limit'),
     usageCount: integer('usage_count').default(0),
     perUserLimit: integer('per_user_limit').default(1),
@@ -219,10 +217,10 @@ export const signedWaiver = pgTable(
     memberId: text('member_id').notNull(),
     memberMembershipId: text('member_membership_id'),
     membershipPlanName: text('membership_plan_name'),
-    membershipPlanPrice: real('membership_plan_price'),
+    membershipPlanPrice: numeric('membership_plan_price', { precision: 12, scale: 2, mode: 'number' }),
     membershipPlanFrequency: text('membership_plan_frequency'),
     membershipPlanContractLength: text('membership_plan_contract_length'),
-    membershipPlanSignupFee: real('membership_plan_signup_fee'),
+    membershipPlanSignupFee: numeric('membership_plan_signup_fee', { precision: 12, scale: 2, mode: 'number' }),
     membershipPlanIsTrial: boolean('membership_plan_is_trial'),
     // Single signature per waiver — the signer. When a minor requires a
     // guardian, this is the GUARDIAN's signature and signedByRelationship
@@ -263,7 +261,7 @@ export const transaction = pgTable(
     memberId: text('member_id'),
     memberMembershipId: text('member_membership_id'),
     transactionType: text('transaction_type').notNull(),
-    amount: real('amount').notNull(),
+    amount: numeric('amount', { precision: 12, scale: 2, mode: 'number' }).notNull(),
     currency: text('currency').notNull().default('USD'),
     status: text('status').notNull().default('pending'),
     paymentMethod: text('payment_method'),
@@ -286,7 +284,6 @@ export const transaction = pgTable(
 export const paymentMethod = pgTable('payment_method', {
   id: text('id').primaryKey(),
   memberId: text('member_id').notNull(),
-  stripePaymentMethodId: text('stripe_payment_method_id'),
   providerPaymentMethodId: text('provider_payment_method_id'),
   type: text('type').notNull(),
   firstSix: text('first_six'), // Card BIN — first 6 digits, for the BIN(6)+last4 masked display. Null for ACH.

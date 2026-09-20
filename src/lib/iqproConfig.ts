@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { pgTable, real, text } from 'drizzle-orm/pg-core';
+import { numeric, pgTable, text } from 'drizzle-orm/pg-core';
 import { decryptSecret } from '@/lib/crypto';
 import { withOrgRetry } from '@/lib/database';
 
@@ -11,7 +11,7 @@ const organizationConfig = pgTable('organization', {
   // here. See dojo-planner's PaymentProviderConfigService.
   paymentProvider: text('payment_provider'),
   paymentProviderConfigEncrypted: text('payment_provider_config_enc'),
-  locationTaxRate: real('location_tax_rate'),
+  locationTaxRate: numeric('location_tax_rate', { precision: 5, scale: 2, mode: 'number' }),
 });
 
 /**
