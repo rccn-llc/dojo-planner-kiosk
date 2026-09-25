@@ -124,7 +124,15 @@ export async function POST(request: Request) {
         .where(
           and(
             inArray(memberMembership.memberId, memberIds),
-            inArray(memberMembership.status, ['active', 'on_hold', 'canceled']),
+            // ⚠️ Spellings must match what is actually WRITTEN: 'hold' and
+            // 'cancelled'. This filter previously used 'on_hold'/'canceled',
+            // which nothing in either repo writes — dojo-planner
+            // (MembersService, the lifecycle endpoints, seed) and this app's
+            // own PATCH members/[memberId]/membership all write 'hold' /
+            // 'cancelled'. The mismatch meant a held membership matched
+            // nothing, so `checkinOnly` below silently excluded held members
+            // from kiosk check-in.
+            inArray(memberMembership.status, ['active', 'hold', 'cancelled']),
           ),
         );
 
@@ -174,8 +182,11 @@ export async function POST(request: Request) {
       // head-of-household parent whose child holds the only membership should
       // not appear as a check-in option.
       if (checkinOnly) {
+        // A held membership still counts as "has a membership" — a member on
+        // hold is an existing member who should be able to check in, not a
+        // stranger. See the spelling note on the query above.
         const hasActiveMembership = memberships.some(
-          ms => ms.membershipStatus === 'active' || ms.membershipStatus === 'on_hold',
+          ms => ms.membershipStatus === 'active' || ms.membershipStatus === 'hold',
         );
         if (!hasActiveMembership) {
           return false;
