@@ -145,6 +145,7 @@ function decryptRequired(enc: string | null | undefined): string | null {
 }
 
 function buildConfig(
+  orgId: string,
   src: { clientId: string | null; clientSecret: string | null; gatewayId: string | null },
   dbHasAnyField: boolean,
 ): IQProConfig | null {
@@ -156,6 +157,19 @@ function buildConfig(
   const baseUrl = process.env.IQPRO_BASE_URL ?? null;
 
   if (!clientId || !clientSecret || !gatewayId || !scope || !oauthUrl || !baseUrl) {
+    // Every caller turns this null into a bare "Payment processing is not
+    // configured" 503, which cannot distinguish an org with no saved
+    // credentials from a deployment missing a platform-wide env var. Name what
+    // is absent — NAMES only, never values: this reaches the log drain.
+    const missing = [
+      !clientId && 'clientId (Payment Settings or IQPRO_CLIENT_ID)',
+      !clientSecret && 'clientSecret (Payment Settings or IQPRO_CLIENT_SECRET)',
+      !gatewayId && 'gatewayId (Payment Settings or IQPRO_GATEWAY_ID)',
+      !scope && 'IQPRO_SCOPE',
+      !oauthUrl && 'IQPRO_OAUTH_URL',
+      !baseUrl && 'IQPRO_BASE_URL',
+    ].filter(Boolean);
+    console.warn(`[iqproConfig] org ${orgId} has no usable IQPro config; missing: ${missing.join(', ')}`);
     return null;
   }
 
@@ -233,7 +247,7 @@ async function loadFromDb(orgId: string): Promise<{ config: IQProConfig | null; 
   const dbGatewayId = stored?.gatewayId ?? null;
   const dbHasAnyField = Boolean(stored);
 
-  const config = buildConfig({ clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
+  const config = buildConfig(orgId, { clientId: dbClientId, clientSecret: dbSecret, gatewayId: dbGatewayId }, dbHasAnyField);
 
   if (config && config.source === 'env') {
     console.warn(`[iqproConfig] org ${orgId} resolved to env-fallback credentials — populate Payment Settings in the main app to use this org's merchant.`);
