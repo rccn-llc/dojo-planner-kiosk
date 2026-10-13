@@ -226,6 +226,34 @@ describe('resolveIQProConfig', () => {
     expect(await mod.resolveIQProConfig('org_d')).toBeNull();
   });
 
+  it('logs WHICH inputs are missing, by name only, when it cannot build a config', async () => {
+    // Org credentials stored, but the platform-wide env vars absent — the
+    // production failure that a bare 503 could not explain.
+    setEnv({ IQPRO_CONFIG_ENCRYPTION_KEY: TEST_KEY_HEX, IQPRO_SCOPE: 'env-scope' });
+    nextRow = {
+      paymentProvider: 'iqpro',
+      configEnc: blob({ clientId: 'org-client', clientSecret: 'org-secret-value', gatewayId: 'org-gw' }),
+      locationTaxRate: 0,
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mod = await importFresh();
+
+    expect(await mod.resolveIQProConfig('org_missing')).toBeNull();
+
+    const line = warn.mock.calls.map(c => String(c[0])).find(l => l.includes('no usable IQPro config'));
+    expect(line).toBeDefined();
+    expect(line).toContain('org_missing');
+    expect(line).toContain('IQPRO_OAUTH_URL');
+    expect(line).toContain('IQPRO_BASE_URL');
+    expect(line).not.toContain('IQPRO_SCOPE');
+    expect(line).not.toContain('clientSecret');
+    // Never a credential value.
+    expect(line).not.toContain('org-secret-value');
+    expect(line).not.toContain('org-client');
+    expect(line).not.toContain('env-scope');
+    warn.mockRestore();
+  });
+
   it('caches per-org for 60s and dedupes DB reads', async () => {
     setEnv({
       IQPRO_SCOPE: 'env-scope',
