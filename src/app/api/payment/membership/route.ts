@@ -8,7 +8,7 @@ import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
-import { IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
+import { IQPRO_SUBSCRIPTION_STATUS, IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import {
   address,
@@ -813,7 +813,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
       `/api/gateway/${gatewayId}/subscription`,
       {
         customerId: providerCustomerId,
-        subscriptionStatusId: 1,
+        subscriptionStatusId: IQPRO_SUBSCRIPTION_STATUS.SCHEDULED, // 1 is DRAFT, which never bills
         name: plan.name,
         prefix: 'MBR',
         recurrence: {
