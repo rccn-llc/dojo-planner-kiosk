@@ -115,6 +115,7 @@ describe('createSquareSubscription', () => {
     cardId: 'ccof:card_1',
     amount: 149,
     startDate: new Date('2026-03-04T18:00:00Z'),
+    cadence: 'MONTHLY',
   };
 
   it('aLWAYS sends card_id — omitting it silently invoices the member instead', async () => {
@@ -128,7 +129,21 @@ describe('createSquareSubscription', () => {
     expect(path).toBe('/v2/subscriptions');
     expect(body.card_id).toBe('ccof:card_1');
     expect(body.price_override_money).toEqual({ amount: 14900, currency: 'USD' });
-    expect(body.start_date).toBe('2026-03-04');
+    // One period after the first, which the kiosk charged itself.
+    expect(body.start_date).toBe('2026-04-04');
+  });
+
+  it('starts billing one period after the first, for every cadence, clamping month ends', async () => {
+    const { firstSquareBillingDate } = await import('./squarePayments');
+    const start = new Date('2026-03-04T18:00:00Z');
+
+    expect(firstSquareBillingDate(start, 'WEEKLY')).toBe('2026-03-11');
+    expect(firstSquareBillingDate(start, 'MONTHLY')).toBe('2026-04-04');
+    expect(firstSquareBillingDate(start, 'EVERY_SIX_MONTHS')).toBe('2026-09-04');
+    expect(firstSquareBillingDate(start, 'ANNUAL')).toBe('2027-03-04');
+    expect(firstSquareBillingDate(new Date('2026-01-31T12:00:00Z'), 'MONTHLY')).toBe('2026-02-28');
+    expect(firstSquareBillingDate(new Date('2026-12-15T12:00:00Z'), 'MONTHLY')).toBe('2027-01-15');
+    expect(() => firstSquareBillingDate(start, 'DAILY')).toThrow('Unsupported Square cadence');
   });
 
   it('refuses rather than creating an invoice-billed subscription', async () => {

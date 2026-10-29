@@ -56,6 +56,8 @@ Payments are processed via direct IQPro REST API calls — **no SDK dependency**
 
 **Subscription cadence and IQPro ids:** `src/lib/iqproConstants.ts` holds IQPro's real `billingPeriodId` / `unitOfMeasureId` values (the same as dojo-planner's `libs/IQProConstants.ts`). `iqproRecurrence(frequency, startDate)` maps a plan frequency to `{ billingPeriodId, schedule, unitOfMeasureId }` and returns `null` for a non-recurring plan: Weekly → 2 + Weeks (191), Monthly → 4 + Months (120), Semi-Annual → 7 Six Months + Half year (69, both `monthsOfYear` sent, which the sandbox requires), Annual → 6 + Years (193). One-time Sale line items use Piece (138). Never inline an id. ⚠️ Before this, the membership route sent `Annual ? 6 : 4`, so **weekly and semi-annual plans were billed MONTHLY** (a semi-annual plan charged its six-month price every month). The old unit ids 1 / 3 / 4 / 6 were Acre / Alcoholic strength / Ampere / Are in IQPro's units table.
 
+**Square subscriptions start one period after the kiosk's own charge.** The membership route charges the first period (`chargeSquareCard`) and then creates the subscription; `createSquareSubscription` sets `start_date` with `firstSquareBillingDate(startDate, cadence)`. ⚠️ A `start_date` of today was deactivated immediately in the Square sandbox (it would never renew) — and had Square billed it, the member would have paid twice.
+
 **Key files:**
 - `src/lib/iqproConstants.ts` — IQPro billing-period + unit ids, `iqproRecurrence`
 - `src/lib/crypto.ts` — AES-256-GCM helpers for the encrypted client secret

@@ -576,6 +576,7 @@ async function runSquarePayment(args: {
       cardId,
       amount: baseAmount,
       startDate: now,
+      cadence,
     });
     providerSubscriptionId = sub.subscriptionId;
   }
