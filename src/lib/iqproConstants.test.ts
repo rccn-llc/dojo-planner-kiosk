@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IQPRO_BILLING_PERIOD, IQPRO_UNIT, iqproRecurrence } from './iqproConstants';
+import { IQPRO_BILLING_PERIOD, IQPRO_SUBSCRIPTION_STATUS, IQPRO_UNIT, iqproRecurrence } from './iqproConstants';
 
 const start = new Date('2026-04-15T12:00:00Z');
 
@@ -24,5 +24,8 @@ describe('iqproConstants', () => {
     for (const f of [null, undefined, '', 'None', 'one-time', 'Daily']) {
       expect(iqproRecurrence(f, start)).toBeNull();
     }
+  });
+  it('subscription statuses: 1 is DRAFT (never bills), new subscriptions are SCHEDULED', () => {
+    expect(IQPRO_SUBSCRIPTION_STATUS).toEqual({ DRAFT: 1, SCHEDULED: 2, TRIALING: 3, ACTIVE: 4, OVERDUE: 5, PAUSED: 6, CANCELLED: 7 });
   });
 });

@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
-import { IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
+import { IQPRO_SUBSCRIPTION_STATUS, IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
 import { auditEvent, member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
 import { getDatabaseForOrg, recordExternalRefs, REF_TYPE } from '@/lib/tenantDirectory';
@@ -415,7 +415,7 @@ async function createHoldFeeSubscription(
       `/api/gateway/${gatewayId}/subscription`,
       {
         customerId,
-        subscriptionStatusId: 1,
+        subscriptionStatusId: IQPRO_SUBSCRIPTION_STATUS.SCHEDULED, // 1 is DRAFT, which never bills
         name: `Hold fee — ${ctx.plan.name}`,
         prefix: 'HOLD',
         recurrence: {

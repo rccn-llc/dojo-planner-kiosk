@@ -27,6 +27,26 @@ export const IQPRO_UNIT = {
   YEARS: 193,
 } as const;
 
+/**
+ * `subscriptionStatusId`. IQPro has no constants endpoint for these; the names
+ * come from the sandbox's own read-backs and validation errors (2026-10).
+ *
+ * ⚠️ Every subscription both apps created used to send 1 believing it meant
+ * Active — it is DRAFT, which never bills. Create with SCHEDULED: IQPro
+ * validates the status against the dates and rejects ACTIVE (and TRIALING
+ * without a trial) at creation with "status expected is Scheduled"; it moves
+ * the subscription on by itself once billing starts.
+ */
+export const IQPRO_SUBSCRIPTION_STATUS = {
+  DRAFT: 1,
+  SCHEDULED: 2,
+  TRIALING: 3,
+  ACTIVE: 4,
+  OVERDUE: 5,
+  PAUSED: 6,
+  CANCELLED: 7,
+} as const;
+
 interface IQProRecurrence {
   billingPeriodId: number;
   schedule: Record<string, number[]>;
