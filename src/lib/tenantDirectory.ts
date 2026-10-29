@@ -1,4 +1,5 @@
 import type { Sql } from 'postgres';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { Pool } from 'pg';
 import postgres from 'postgres';
@@ -280,5 +281,67 @@ export async function invalidateOrgConnection(orgId: string): Promise<void> {
   if (handle) {
     handles.delete(cached.record.connectionString);
     await handle.client.end({ timeout: 5 }).catch(() => {});
+  }
+}
+
+/** Mirrors dojo-planner's REF_TYPE values; the two apps share the table. */
+export const REF_TYPE = {
+  PROVIDER_SUBSCRIPTION: 'provider_subscription',
+  PROVIDER_TRANSACTION: 'provider_transaction',
+  PROVIDER_CUSTOMER: 'provider_customer',
+} as const;
+
+export type RefType = (typeof REF_TYPE)[keyof typeof REF_TYPE];
+
+/**
+ * Record which org owns a payment-provider id, so the PLANNER's payment
+ * webhooks can route events for it.
+ *
+ * ── Why the kiosk must write these ──────────────────────────────────────────
+ *
+ * Both webhook handlers (IQPro, Square) live in dojo-planner and resolve the
+ * owning org from `tenant_external_ref` BEFORE opening any tenant database.
+ * An id with no row is refused. Subscriptions, customers and charges the kiosk
+ * created were never recorded, so a failed renewal for a member who signed up
+ * at the kiosk was silently dropped. dojo-planner's `backfillExternalRefs`
+ * covers rows created before this change.
+ *
+ * Best-effort, ON CONFLICT DO NOTHING — exactly like the planner's
+ * `recordExternalRef`: a failure here must never fail the payment that
+ * triggered it. A missing ref degrades to "this webhook cannot be routed",
+ * which the backfill can repair; a thrown error mid-charge cannot be.
+ *
+ * Locally (no separate control plane) the table lives in the one database the
+ * org already uses, so it is written through the org's handle — opening the
+ * control pool there would be a SECOND socket against pglite-server.
+ */
+export async function recordExternalRefs(
+  orgId: string,
+  refs: Array<{ refType: RefType; refId: string | null | undefined }>,
+): Promise<void> {
+  for (const { refType, refId } of refs) {
+    if (!refId) {
+      continue;
+    }
+    try {
+      if (noControlPlane()) {
+        const db = await getDatabaseForOrg(orgId);
+        await db.execute(sql`INSERT INTO tenant_external_ref (ref_type, ref_id, org_id) VALUES (${refType}, ${refId}, ${orgId}) ON CONFLICT DO NOTHING`);
+      }
+      else {
+        await getControlPool().query(
+          'INSERT INTO tenant_external_ref (ref_type, ref_id, org_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
+          [refType, refId, orgId],
+        );
+      }
+    }
+    catch (error) {
+      console.error('[TenantExternalRef] failed to record reference', {
+        refType,
+        refId,
+        orgId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
   }
 }

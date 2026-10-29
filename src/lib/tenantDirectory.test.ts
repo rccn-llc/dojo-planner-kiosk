@@ -15,8 +15,9 @@ vi.mock('pg', () => ({
 vi.mock('postgres', () => ({
   default: () => ({ end: async () => {} }),
 }));
+const executeMock = vi.fn();
 vi.mock('drizzle-orm/postgres-js', () => ({
-  drizzle: (client: unknown) => ({ __client: client }),
+  drizzle: (client: unknown) => ({ __client: client, execute: (...a: unknown[]) => executeMock(...a) }),
 }));
 
 const KEY = 'a'.repeat(64);
@@ -186,6 +187,59 @@ describe('kiosk tenant directory', () => {
 
       expect(host).toBe('ep-x-pooler.aws.neon.tech');
       expect(host).not.toContain('npg_secret_not_real');
+    });
+  });
+
+  describe('recordExternalRefs', () => {
+    it('writes to the CONTROL plane when one exists, skipping empty ids', async () => {
+      process.env.CONTROL_DATABASE_URL = 'postgres://control';
+      poolQuery.mockResolvedValue({ rows: [] });
+      const mod = await load();
+
+      await mod.recordExternalRefs('org_a', [
+        { refType: mod.REF_TYPE.PROVIDER_CUSTOMER, refId: 'cus_1' },
+        { refType: mod.REF_TYPE.PROVIDER_SUBSCRIPTION, refId: undefined },
+        { refType: mod.REF_TYPE.PROVIDER_TRANSACTION, refId: '' },
+      ]);
+
+      expect(poolQuery).toHaveBeenCalledTimes(1);
+      expect(poolQuery).toHaveBeenCalledWith(
+        expect.stringContaining('ON CONFLICT DO NOTHING'),
+        ['provider_customer', 'cus_1', 'org_a'],
+      );
+      expect(executeMock).not.toHaveBeenCalled();
+    });
+
+    it('writes through the org handle locally (no second socket against pglite-server)', async () => {
+      executeMock.mockResolvedValue(undefined);
+      const mod = await load();
+
+      await mod.recordExternalRefs('org_a', [{ refType: mod.REF_TYPE.PROVIDER_SUBSCRIPTION, refId: 'sub_1' }]);
+
+      expect(executeMock).toHaveBeenCalledTimes(1);
+      expect(poolQuery).not.toHaveBeenCalled();
+    });
+
+    it('is best-effort: a failed insert is logged, never thrown, and later refs still write', async () => {
+      process.env.CONTROL_DATABASE_URL = 'postgres://control';
+      poolQuery.mockRejectedValueOnce(new Error('control down')).mockResolvedValueOnce({ rows: [] });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const mod = await load();
+
+      await expect(mod.recordExternalRefs('org_a', [
+        { refType: mod.REF_TYPE.PROVIDER_TRANSACTION, refId: 'tx_1' },
+        { refType: mod.REF_TYPE.PROVIDER_TRANSACTION, refId: 'tx_2' },
+      ])).resolves.toBeUndefined();
+
+      expect(poolQuery).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith('[TenantExternalRef] failed to record reference', expect.objectContaining({ refId: 'tx_1', error: 'control down' }));
+
+      poolQuery.mockRejectedValueOnce('plain');
+      await mod.recordExternalRefs('org_a', [{ refType: mod.REF_TYPE.PROVIDER_TRANSACTION, refId: 'tx_3' }]);
+
+      expect(errorSpy).toHaveBeenLastCalledWith('[TenantExternalRef] failed to record reference', expect.objectContaining({ error: 'unknown' }));
+
+      errorSpy.mockRestore();
     });
   });
 });

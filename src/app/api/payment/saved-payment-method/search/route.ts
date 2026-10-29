@@ -99,6 +99,8 @@ export async function GET(request: Request) {
           // Square is card-only: it cannot store a bank account and charge it
           // later, so an ACH row here could never be charged.
           eq(paymentMethod.type, 'card'),
+          // A card the member replaced at the provider is history, not chargeable.
+          eq(paymentMethod.status, 'active'),
         ))
         .limit(10);
 
