@@ -27,7 +27,7 @@ export const IQPRO_UNIT = {
   YEARS: 193,
 } as const;
 
-export interface IQProRecurrence {
+interface IQProRecurrence {
   billingPeriodId: number;
   schedule: Record<string, number[]>;
   /** The line item's unit: one billing period. */
