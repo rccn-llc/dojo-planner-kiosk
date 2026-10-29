@@ -42,7 +42,7 @@ GET  /api/payment/saved-payment-method/search?org=<slug>&phone=... - Vaulted-cus
 
 ## Payment Processing (IQPro)
 
-Payments are processed via direct IQPro REST API calls — **no SDK dependency** at runtime. The `@dojo-planner/iqpro-client` package is listed in dependencies but its `dist/` is not built; all payment logic uses `iqproPost`/`iqproGet` helpers in `src/lib/iqpro.ts` that make authenticated calls using OAuth client credentials.
+Payments are processed via direct IQPro REST API calls — **no SDK dependency**. There is no IQPro client package (`@dojo-planner/iqpro-client` never existed); all payment logic uses `iqproPost`/`iqproGet` helpers in `src/lib/iqpro.ts` that make authenticated calls using OAuth client credentials.
 
 **Source of truth for credentials:** the main dojo-planner app writes `clientId`, `clientSecret`, and `gatewayId` into ONE AES-256-GCM encrypted blob at `organization.payment_provider_config_enc` (`{ provider, credentials }`). The kiosk decrypts it with the same `IQPRO_CONFIG_ENCRYPTION_KEY`. An org whose `organization.payment_provider` is not `iqpro` resolves to a **null config** — the kiosk has no Square implementation yet, and falling back to IQPro credentials would send the money to the wrong merchant account. That is edited in the IQPro card on dojo-planner's **Location Settings** page (`/dashboard/location-settings`) — there is no separate payment-settings route, despite what older docs claimed. The kiosk reads them via `src/lib/iqproConfig.ts` (`resolveIQProConfig(orgId)`), falling back to env vars per field. `scope`, `oauthUrl`, and `baseUrl` are always env.
 
@@ -54,7 +54,10 @@ Payments are processed via direct IQPro REST API calls — **no SDK dependency**
 
 **State tax:** Read from `organization.location_tax_rate` (edited in the main app's Location Settings) via `getOrganizationTaxRate(orgId)`. **Service fee:** a fixed platform rate — `getOrganizationServiceFeePct()` returns the `DEFAULT_SERVICE_FEE_PCT = 3.75` constant. dojo-planner hard-codes the service fee and does NOT store it per-org (there is no `organization.service_fee_rate` column — do not add it to the kiosk's `SELECT`, it will 500 the payment path). Both values are threaded into `computeFeeBreakdown` as parameters — `src/lib/iqpro.ts` stays free of DB/env reads. If per-org service fees ever become real, dojo-planner must add the column + Payment Settings UI first.
 
+**Subscription cadence and IQPro ids:** `src/lib/iqproConstants.ts` holds IQPro's real `billingPeriodId` / `unitOfMeasureId` values (the same as dojo-planner's `libs/IQProConstants.ts`). `iqproRecurrence(frequency, startDate)` maps a plan frequency to `{ billingPeriodId, schedule, unitOfMeasureId }` and returns `null` for a non-recurring plan: Weekly → 2 + Weeks (191), Monthly → 4 + Months (120), Semi-Annual → 7 Six Months + Half year (69, both `monthsOfYear` sent, which the sandbox requires), Annual → 6 + Years (193). One-time Sale line items use Piece (138). Never inline an id. ⚠️ Before this, the membership route sent `Annual ? 6 : 4`, so **weekly and semi-annual plans were billed MONTHLY** (a semi-annual plan charged its six-month price every month). The old unit ids 1 / 3 / 4 / 6 were Acre / Alcoholic strength / Ampere / Are in IQPro's units table.
+
 **Key files:**
+- `src/lib/iqproConstants.ts` — IQPro billing-period + unit ids, `iqproRecurrence`
 - `src/lib/crypto.ts` — AES-256-GCM helpers for the encrypted client secret
 - `src/lib/iqproConfig.ts` — per-org credential resolver + tax-rate lookup (60s cache)
 - `src/lib/iqpro.ts` — OAuth token management, tokenization config, ACH tokenization, API helpers (no env reads; every function takes an `IQProConfig`)
@@ -96,6 +99,12 @@ A row whose `status` is not `active` throws `TenantUnavailableError` — the rou
 ### 🔒 Local dev needs no control plane
 
 `DEFAULT_TENANT_DATABASE_URL` short-circuits **before** the cache and before any control pool is opened, and a deployment with no distinct `CONTROL_DATABASE_URL` serves every org from `DATABASE_URL`. Opening a control pool locally would be a SECOND socket against pglite-server, which accepts exactly one — that is the `read ECONNRESET` failure mode. The production guard (`NODE_ENV !== 'production'`) on the escape hatch is load-bearing and covered by a test.
+
+### Payment routing refs (`recordExternalRefs`)
+
+dojo-planner's IQPro and Square webhooks route an event to its org through `tenant_external_ref` and **refuse** an id with no row. Every kiosk path that creates a provider id must record it: the membership sign-up (`PROVIDER_CUSTOMER` + `PROVIDER_SUBSCRIPTION` + `PROVIDER_TRANSACTION`), store sales and lifecycle fee charges (`PROVIDER_TRANSACTION`). Without it, a failed renewal for a member who signed up at the kiosk is silently dropped by the planner. Best-effort and `ON CONFLICT DO NOTHING`, like the planner's `recordExternalRef`; locally (no separate control plane) it writes through the org's own handle, never a second pglite socket. The planner's `backfillExternalRefs.ts` covers rows created before this.
+
+`payment_method.status` (`'active'` | `'replaced'`) is planner-owned: a card the member replaced at the provider is history. The saved-card lookup filters `status = 'active'` so a replaced card is never charged.
 
 ### Observability
 

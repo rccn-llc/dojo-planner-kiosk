@@ -8,6 +8,7 @@ import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendMembershipConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
+import { IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import {
   address,
@@ -23,7 +24,7 @@ import {
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { computeSquareFeeBreakdown } from '@/lib/squareFees';
 import { chargeSquareCard, createSquareCustomerWithCard, createSquareSubscription, ensureSquarePlanVariation, toSquareCadence } from '@/lib/squarePayments';
-import { getDatabaseForOrg } from '@/lib/tenantDirectory';
+import { getDatabaseForOrg, recordExternalRefs, REF_TYPE } from '@/lib/tenantDirectory';
 import { generatePdfFilename, generateWaiverPdfBuffer } from '@/lib/waiverPdf';
 
 interface MembershipPaymentBody {
@@ -362,6 +363,16 @@ export async function POST(request: Request) {
           .where(eq(memberMembership.id, body.convertingTrialMembershipId));
       }
     });
+
+    // Make this member's provider ids routable for dojo-planner's payment
+    // webhooks — without these a failed renewal for a kiosk sign-up is dropped.
+    if (payment) {
+      await recordExternalRefs(orgId, [
+        { refType: REF_TYPE.PROVIDER_CUSTOMER, refId: payment.providerCustomerId },
+        { refType: REF_TYPE.PROVIDER_SUBSCRIPTION, refId: payment.providerSubscriptionId },
+        { refType: REF_TYPE.PROVIDER_TRANSACTION, refId: payment.txId },
+      ]);
+    }
 
     // ── Post-commit side effects (confirmation email) ────────────────────────
     const chargedFees = payment?.fees;
@@ -779,7 +790,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
       unitPrice: baseAmount,
       discount: discountAmount,
       freightAmount: 0,
-      unitOfMeasureId: 1,
+      unitOfMeasureId: IQPRO_UNIT.PIECE,
       localTaxPercent: 0,
       nationalTaxPercent: 0,
     },
@@ -789,15 +800,12 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
   let txId: string | undefined;
 
   if (isRecurring) {
-    const billingPeriodId = plan.frequency === 'Annual' ? 6 : 4;
-    const dayOfMonth = now.getDate();
-    const schedule: Record<string, number[]> = {
-      minutes: [0],
-      hours: [0],
-      daysOfMonth: [dayOfMonth],
-    };
-    if (plan.frequency === 'Annual') {
-      schedule.monthsOfYear = [now.getMonth() + 1];
+    // Map EVERY cadence. This used to be `Annual ? yearly : monthly`, so a
+    // Weekly plan was billed monthly and a Semi-Annual plan was billed its
+    // six-month price EVERY MONTH. Refuse rather than guess, like the Square path.
+    const recurrence = iqproRecurrence(plan.frequency, now);
+    if (!recurrence) {
+      throw new Error(`Plan frequency "${plan.frequency ?? 'none'}" cannot be billed recurringly on IQPro.`);
     }
 
     const subRes = await iqproPost<{ data?: Record<string, unknown> }>(
@@ -815,8 +823,8 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
           allowProration: false,
           trialLengthInDays: 0,
           invoiceLengthInDays: 1,
-          billingPeriodId,
-          schedule,
+          billingPeriodId: recurrence.billingPeriodId,
+          schedule: recurrence.schedule,
         },
         paymentMethod: {
           customerPaymentMethodId: paymentMethodId,
@@ -832,7 +840,7 @@ async function runPayment(args: RunPaymentArgs): Promise<PaymentResult> {
             quantity: 1,
             unitPrice: baseAmount,
             discount: 0,
-            unitOfMeasureId: plan.frequency === 'Annual' ? 4 : 3,
+            unitOfMeasureId: recurrence.unitOfMeasureId,
           },
         ],
         ...(paymentAdjustments.length > 0 && { paymentAdjustments }),

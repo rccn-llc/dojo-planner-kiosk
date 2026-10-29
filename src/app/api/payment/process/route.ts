@@ -7,13 +7,14 @@ import { resolveOrgIdFromRequest } from '@/lib/clerk';
 import { sendStoreOrderReceipt } from '@/lib/email';
 import { buildServiceFeeAdjustment, buildTaxAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, mapTransactionStatus, tokenizeAch } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, getOrganizationTaxRate, resolveIQProConfig, resolveSquareServerConfig } from '@/lib/iqproConfig';
+import { IQPRO_UNIT } from '@/lib/iqproConstants';
 import { verifyAttestationToken } from '@/lib/kioskAttestation';
 import { verifyMatchToken } from '@/lib/matchToken';
 import { member, transaction } from '@/lib/memberSchema';
 import { clientIp, rateLimit } from '@/lib/rateLimit';
 import { computeSquareFeeBreakdown } from '@/lib/squareFees';
 import { chargeSquareCard } from '@/lib/squarePayments';
-import { getDatabaseForOrg } from '@/lib/tenantDirectory';
+import { getDatabaseForOrg, recordExternalRefs, REF_TYPE } from '@/lib/tenantDirectory';
 
 export interface ProcessStoreOrderBody {
   // Buyer info
@@ -476,6 +477,8 @@ export async function POST(request: Request) {
           createdAt: now,
           updatedAt: now,
         });
+        // Routable for dojo-planner's payment webhooks (payment.updated).
+        await recordExternalRefs(orgId, [{ refType: REF_TYPE.PROVIDER_TRANSACTION, refId: charge.transactionId }]);
       }
       catch (err) {
         console.error('[payment/process] Failed to record Square store transaction:', sanitizeForLog(err instanceof Error ? err.message : String(err)));
@@ -805,7 +808,7 @@ export async function POST(request: Request) {
         unitPrice: item.price,
         discount: 0,
         freightAmount: 0,
-        unitOfMeasureId: 1,
+        unitOfMeasureId: IQPRO_UNIT.PIECE,
         // IQPro validates that line items carry tax when the remit is
         // non-exempt ("Remit.IsTaxExempt must be true when all line items
         // have zero tax"). Set localTaxPercent to the kiosk tax rate so the
@@ -896,6 +899,8 @@ export async function POST(request: Request) {
         createdAt: now,
         updatedAt: now,
       });
+      // Routable for dojo-planner's payment webhooks.
+      await recordExternalRefs(orgId, [{ refType: REF_TYPE.PROVIDER_TRANSACTION, refId: txId }]);
     }
     catch (err) {
       console.error('[payment/process] Failed to record store transaction:', sanitizeForLog(err instanceof Error ? err.message : String(err)));

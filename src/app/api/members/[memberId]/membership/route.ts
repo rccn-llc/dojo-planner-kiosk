@@ -5,9 +5,10 @@ import { NextResponse } from 'next/server';
 import { sendCancellationConfirmation } from '@/lib/email';
 import { assertTransactionApproved, buildServiceFeeAdjustment, computeFeeBreakdown, getGatewayProcessors, iqproGet, iqproPost, iqproPut } from '@/lib/iqpro';
 import { getOrganizationServiceFeePct, resolveIQProConfig } from '@/lib/iqproConfig';
+import { IQPRO_UNIT, iqproRecurrence } from '@/lib/iqproConstants';
 import { auditEvent, member, memberMembership, membershipPlan, transaction } from '@/lib/memberSchema';
 import { requireMemberAuth } from '@/lib/requireMemberAuth';
-import { getDatabaseForOrg } from '@/lib/tenantDirectory';
+import { getDatabaseForOrg, recordExternalRefs, REF_TYPE } from '@/lib/tenantDirectory';
 
 type DB = Awaited<ReturnType<typeof getDatabaseForOrg>>;
 
@@ -256,7 +257,7 @@ async function chargeOneTimeFee(args: {
           unitPrice: baseAmount,
           discount: 0,
           freightAmount: 0,
-          unitOfMeasureId: 1,
+          unitOfMeasureId: IQPRO_UNIT.PIECE,
           localTaxPercent: 0,
           nationalTaxPercent: 0,
         },
@@ -291,6 +292,8 @@ async function chargeOneTimeFee(args: {
       createdAt: now,
       updatedAt: now,
     });
+    // Routable for dojo-planner's payment webhooks.
+    await recordExternalRefs(orgId, [{ refType: REF_TYPE.PROVIDER_TRANSACTION, refId: txId }]);
 
     return { success: true, amountCharged: serverFees.amount, transactionId: txId };
   }
@@ -360,37 +363,6 @@ async function setSubscriptionAutoRenewal(
   }
 }
 
-// Build the IQPro recurrence schedule for a given hold-fee cadence.
-// Mirrors dojo-planner's IQProPaymentService.createSubscription mapping so the
-// two apps produce the same subscription shape.
-function holdFeeRecurrence(frequency: string, startDate: Date): { billingPeriodId: number; schedule: Record<string, number[]> } | null {
-  const dayOfMonth = startDate.getDate();
-  const startMonth = startDate.getMonth() + 1;
-  const schedule: Record<string, number[]> = {
-    minutes: [0],
-    hours: [0],
-    daysOfMonth: [dayOfMonth],
-  };
-  switch (frequency) {
-    case 'Weekly':
-      delete (schedule as Record<string, unknown>).daysOfMonth;
-      schedule.daysOfWeek = [startDate.getDay()];
-      return { billingPeriodId: 2, schedule };
-    case 'Monthly':
-      return { billingPeriodId: 4, schedule };
-    case 'Semi-Annual': {
-      const secondMonth = ((startMonth - 1 + 6) % 12) + 1;
-      schedule.monthsOfYear = [startMonth, secondMonth].sort((a, b) => a - b);
-      return { billingPeriodId: 6, schedule };
-    }
-    case 'Annual':
-      schedule.monthsOfYear = [startMonth];
-      return { billingPeriodId: 6, schedule };
-    default:
-      return null;
-  }
-}
-
 async function createHoldFeeSubscription(
   config: IQProConfig,
   ctx: LifecycleContext,
@@ -431,7 +403,7 @@ async function createHoldFeeSubscription(
     }
 
     const now = new Date();
-    const recurrence = holdFeeRecurrence(frequency, now);
+    const recurrence = iqproRecurrence(frequency, now);
     if (!recurrence) {
       return { success: false, error: `Unsupported hold-fee frequency: ${frequency}` };
     }
@@ -470,7 +442,7 @@ async function createHoldFeeSubscription(
             quantity: 1,
             unitPrice: feeAmount,
             discount: 0,
-            unitOfMeasureId: frequency === 'Weekly' ? 6 : frequency === 'Annual' ? 4 : 3,
+            unitOfMeasureId: recurrence.unitOfMeasureId,
           },
         ],
       },

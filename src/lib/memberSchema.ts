@@ -290,6 +290,9 @@ export const paymentMethod = pgTable('payment_method', {
   last4: text('last4'),
   accountType: text('account_type'), // ACH bank account type: 'Checking' | 'Savings'. Null for cards.
   isDefault: boolean('is_default').default(false),
+  // 'active' | 'replaced'. dojo-planner marks a card 'replaced' when the member
+  // swaps it at the payment provider; a replaced card must never be charged.
+  status: text('status').notNull().default('active'),
 }, table => [
   index('payment_method_member_idx').on(table.memberId),
 ]);
