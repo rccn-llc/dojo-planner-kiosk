@@ -309,6 +309,37 @@ export async function createSquareCustomerWithCard(
  * on a cadence, and `tax_percentage` is applied per subscription so Square
  * computes each cycle's tax itself.
  */
+/** `date` plus `months`, clamped to the target month's last day (Jan 31 + 1 → Feb 28). */
+function addMonthsClamped(date: Date, months: number): Date {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay)));
+}
+
+/**
+ * Square `start_date` for a subscription whose FIRST period the kiosk already
+ * charged (`chargeSquareCard`): one billing period after `periodStart`.
+ * Mirrors dojo-planner's `firstSquareBillingDate`.
+ *
+ * ⚠️ Square bills from `start_date`. Starting it on the day of the kiosk's own
+ * charge either bills that period twice or — what the sandbox did (2026-10) —
+ * deactivates the subscription on the spot, so it never renews. A future
+ * start is accepted as PENDING.
+ */
+export function firstSquareBillingDate(periodStart: Date, cadence: string): string {
+  const next = (() => {
+    switch (cadence) {
+      case 'WEEKLY': return new Date(periodStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+      case 'MONTHLY': return addMonthsClamped(periodStart, 1);
+      case 'EVERY_SIX_MONTHS': return addMonthsClamped(periodStart, 6);
+      case 'ANNUAL': return addMonthsClamped(periodStart, 12);
+      default: throw new Error(`Unsupported Square cadence "${cadence}".`);
+    }
+  })();
+  return next.toISOString().slice(0, 10);
+}
+
 export async function createSquareSubscription(
   config: SquareServerConfig,
   params: {
@@ -316,7 +347,10 @@ export async function createSquareSubscription(
     customerId: string;
     cardId: string;
     amount: number;
+    /** Start of the first period, which the caller has ALREADY charged. */
     startDate: Date;
+    /** The plan variation's Square cadence (`toSquareCadence`). */
+    cadence: string;
     taxPct?: number;
   },
 ): Promise<{ subscriptionId: string }> {
@@ -330,7 +364,8 @@ export async function createSquareSubscription(
     plan_variation_id: params.planVariationId,
     customer_id: params.customerId,
     card_id: params.cardId,
-    start_date: params.startDate.toISOString().slice(0, 10),
+    // The first period is already paid — see firstSquareBillingDate.
+    start_date: firstSquareBillingDate(params.startDate, params.cadence),
     price_override_money: { amount: toMinorUnits(params.amount), currency: 'USD' },
     ...(params.taxPct && params.taxPct > 0 ? { tax_percentage: String(params.taxPct) } : {}),
   });
